@@ -6,20 +6,20 @@ from src.adapters.diagnosis_adapter import (
 from src.adapters.lmstudio_client import LMStudioClient
 from src.adapters.mock_adapters import MockDiagnosisAdapter, MockOCRAdapter
 from src.adapters.ocr_adapter import (
+    GLMOCRSdkAdapter,
     ManualCorrectionOCRAdapter,
-    ZaiOCRAdapter,
     create_ocr_adapter,
 )
 
 __all__ = [
     "DiagnosisAdapter",
+    "GLMOCRSdkAdapter",
     "LMStudioClient",
     "LMStudioDiagnosisAdapter",
     "ManualCorrectionOCRAdapter",
     "MockDiagnosisAdapter",
     "MockOCRAdapter",
     "OCRAdapter",
-    "ZaiOCRAdapter",
     "create_diagnosis_adapter",
     "create_ocr_adapter",
 ]

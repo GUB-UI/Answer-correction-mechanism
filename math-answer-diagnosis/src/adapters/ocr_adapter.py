@@ -1,85 +1,64 @@
 from __future__ import annotations
 
-import mimetypes
-from enum import Enum
 from pathlib import Path
-from typing import Literal
 
 from src.adapters.base import OCRAdapter, OCRRunContext
-from src.adapters.lmstudio_client import LMStudioClient
 from src.adapters.mock_adapters import MockOCRAdapter
 from src.config import AppConfig, load_config
 from src.models import OCRResult, utc_now_iso
 from src.prompts import OCR_PROMPT
 from src.storage import Storage
-from src.utils import detect_uncertain_parts, image_to_base64, is_ocr_suspect
 
 
-class ZaiOCRMode(str, Enum):
-    LM_STUDIO = "lm_studio"
-    API = "api"
+class GLMOCRSdkAdapter(OCRAdapter):
+    """GLM-OCR 公式 SDK を Python から呼び出す Adapter。"""
 
-
-class ZaiOCRAdapter(OCRAdapter):
-    """Z.ai 系小型 OCR モデル用 Adapter（LM Studio / API 両対応の骨組み）。"""
-
-    def __init__(
-        self,
-        config: AppConfig | None = None,
-        mode: ZaiOCRMode | Literal["lm_studio", "api"] = ZaiOCRMode.LM_STUDIO,
-        lmstudio_client: LMStudioClient | None = None,
-    ) -> None:
+    def __init__(self, config: AppConfig | None = None) -> None:
         self.config = config or load_config()
-        self.mode = ZaiOCRMode(mode)
-        self.lmstudio_client = lmstudio_client or LMStudioClient(self.config)
 
     def run(self, context: OCRRunContext) -> OCRResult:
-        if self.mode == ZaiOCRMode.LM_STUDIO:
-            raw_text, raw_output = self._run_via_lm_studio(context)
-        else:
-            raw_text, raw_output = self._run_via_api(context)
-
-        uncertain_parts = detect_uncertain_parts(raw_text)
+        raw_text, raw_output = self._run_via_sdk(context)
         return OCRResult(
             ocr_id="",
             answer_id=context.answer_id,
             ocr_engine=context.ocr_engine,
             raw_text=raw_text,
             used_text=raw_text,
-            uncertain_parts=uncertain_parts,
-            ocr_suspect=is_ocr_suspect(raw_text, uncertain_parts),
+            uncertain_parts=[],
+            ocr_suspect=False,
             human_corrected=False,
             correction_note=None,
             raw_output=raw_output,
             created_at=utc_now_iso(),
         )
 
-    def _run_via_lm_studio(self, context: OCRRunContext) -> tuple[str, dict]:
-        mime = self._guess_mime(context.image_path)
-        image_data_url = f"data:{mime};base64,{image_to_base64(context.image_path)}"
-        text = self.lmstudio_client.vision_chat_completion(
-            system_prompt=OCR_PROMPT,
-            user_prompt="画像内の答案を読み取ってください。",
-            image_data_url=image_data_url,
-            model=self.config.ocr.model_name,
-        )
-        return text.strip(), {
-            "provider": "zai",
-            "mode": self.mode.value,
-            "transport": "lm_studio",
-            "model_name": self.config.ocr.model_name,
-        }
+    def _run_via_sdk(self, context: OCRRunContext) -> tuple[str, dict]:
+        try:
+            raw_text = self._invoke_sdk(context.image_path)
+            return raw_text, {
+                "provider": "glmocr_sdk",
+                "model_name": self.config.ocr.model_name,
+                "image_path": str(context.image_path),
+            }
+        except Exception as exc:
+            raise RuntimeError(f"GLM-OCR SDK OCR failed: {exc}") from exc
 
-    def _run_via_api(self, context: OCRRunContext) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "Z.ai API 経由の OCR は将来実装予定です。"
-            "現時点では mode='lm_studio' を使用してください。"
-        )
-
-    @staticmethod
-    def _guess_mime(image_path: Path) -> str:
-        mime, _ = mimetypes.guess_type(image_path.name)
-        return mime or "image/png"
+    def _invoke_sdk(self, image_path: Path) -> str:
+        try:
+            # TODO: 実際の GLM-OCR SDK の呼び出しに合わせて実装する
+            # from glmocr import parse
+            # result = parse(str(image_path), prompt=OCR_PROMPT)
+            # return str(result).strip()
+            _ = OCR_PROMPT  # SDK がプロンプト対応時に使用
+            _ = image_path
+            raise NotImplementedError(
+                "GLM-OCR SDK integration is not configured yet. "
+                "Please install the official GLM-OCR SDK and update GLMOCRSdkAdapter."
+            )
+        except NotImplementedError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"GLM-OCR SDK OCR failed: {exc}") from exc
 
 
 class ManualCorrectionOCRAdapter:
@@ -121,6 +100,6 @@ def create_ocr_adapter(
     selected = (provider or cfg.ocr.provider).lower()
     if selected == "mock":
         return MockOCRAdapter()
-    if selected in {"zai", "zai-small-ocr"}:
-        return ZaiOCRAdapter(config=cfg)
+    if selected in {"glmocr_sdk", "glm-ocr"}:
+        return GLMOCRSdkAdapter(config=cfg)
     raise ValueError(f"Unsupported OCR provider: {selected}")

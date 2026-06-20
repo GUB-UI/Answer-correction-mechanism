@@ -1,16 +1,19 @@
 runtime:
   device: "apple_silicon_mac"
-  use_lmstudio: true
+
+ocr:
+  provider: "mock"
+  model_name: "glm-ocr"
+
 lmstudio:
   base_url: "http://localhost:1234/v1"
   api_key: "lm-studio"
+
 models:
-  ocr:
-    provider: "mock"
-    model_name: "zai-small-ocr"
   diagnosis:
     provider: "mock"
     model_name: "local-diagnosis-model"
+
 safety:
   require_anonymization: true
   store_raw_images_locally: true

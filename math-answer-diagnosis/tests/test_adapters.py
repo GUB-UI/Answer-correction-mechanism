@@ -10,26 +10,23 @@ import yaml
 from src.adapters.base import DiagnosisRunContext, OCRRunContext
 from src.adapters.diagnosis_adapter import LMStudioDiagnosisAdapter, create_diagnosis_adapter
 from src.adapters.lmstudio_client import LMStudioClient
-from src.adapters.ocr_adapter import ZaiOCRAdapter, ZaiOCRMode, create_ocr_adapter
+from src.adapters.ocr_adapter import GLMOCRSdkAdapter, create_ocr_adapter
 from src.config import load_config
 from src.models import ProblemRecord, utc_now_iso
 from src.storage import Storage
 
 
-@pytest.fixture
-def project_root(tmp_path: Path) -> Path:
-    root = tmp_path / "project"
-    root.mkdir()
+def _write_test_config(root: Path) -> None:
     (root / "config.yaml").write_text(
         yaml.safe_dump(
             {
-                "runtime": {"device": "test", "use_lmstudio": True},
+                "runtime": {"device": "test"},
+                "ocr": {"provider": "mock", "model_name": "glm-ocr"},
                 "lmstudio": {
                     "base_url": "http://localhost:1234/v1",
                     "api_key": "lm-studio",
                 },
                 "models": {
-                    "ocr": {"provider": "mock", "model_name": "zai-small-ocr"},
                     "diagnosis": {
                         "provider": "mock",
                         "model_name": "local-diagnosis-model",
@@ -39,6 +36,13 @@ def project_root(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
+
+
+@pytest.fixture
+def project_root(tmp_path: Path) -> Path:
+    root = tmp_path / "project"
+    root.mkdir()
+    _write_test_config(root)
     return root
 
 
@@ -52,6 +56,12 @@ def test_load_config_reads_lmstudio_settings(project_root: Path) -> None:
     finally:
         os.environ.pop("LMSTUDIO_BASE_URL", None)
         os.environ.pop("LMSTUDIO_API_KEY", None)
+
+
+def test_load_config_reads_ocr_from_top_level(project_root: Path) -> None:
+    config = load_config(project_root)
+    assert config.ocr.provider == "mock"
+    assert config.ocr.model_name == "glm-ocr"
 
 
 def test_create_ocr_adapter_mock(project_root: Path) -> None:
@@ -70,37 +80,25 @@ def test_create_ocr_adapter_mock(project_root: Path) -> None:
     assert result.used_text == result.raw_text
 
 
-def test_zai_ocr_adapter_lmstudio_mode(project_root: Path) -> None:
+def test_glmocr_sdk_adapter_not_configured(project_root: Path) -> None:
     config = load_config(project_root)
-    client = MagicMock(spec=LMStudioClient)
-    client.vision_chat_completion.return_value = "x = 1"
-    adapter = ZaiOCRAdapter(config=config, mode=ZaiOCRMode.LM_STUDIO, lmstudio_client=client)
+    adapter = GLMOCRSdkAdapter(config=config)
     image_path = project_root / "sample.png"
     image_path.write_bytes(b"png")
-    result = adapter.run(
-        OCRRunContext(
-            answer_id="ans_001",
-            image_path=image_path,
-            ocr_engine="zai-small-ocr",
-        )
-    )
-    assert result.raw_text == "x = 1"
-    assert result.raw_output["transport"] == "lm_studio"
-
-
-def test_zai_ocr_adapter_api_mode_not_implemented(project_root: Path) -> None:
-    config = load_config(project_root)
-    adapter = ZaiOCRAdapter(config=config, mode=ZaiOCRMode.API)
-    image_path = project_root / "sample.png"
-    image_path.write_bytes(b"png")
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(RuntimeError, match="GLM-OCR SDK OCR failed"):
         adapter.run(
             OCRRunContext(
                 answer_id="ans_001",
                 image_path=image_path,
-                ocr_engine="zai-small-ocr",
+                ocr_engine="glm-ocr",
             )
         )
+
+
+def test_create_ocr_adapter_rejects_unknown_provider(project_root: Path) -> None:
+    config = load_config(project_root)
+    with pytest.raises(ValueError, match="Unsupported OCR provider"):
+        create_ocr_adapter("zai", config)
 
 
 def test_mock_diagnosis_adapter(project_root: Path) -> None:
