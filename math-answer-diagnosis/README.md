@@ -42,7 +42,7 @@ streamlit run app.py
 5. 診断実行（まずは mock）
 6. 診断結果確認・CSVエクスポート
 
-## 動作確認（Step 1〜3）
+## 動作確認（CLI）
 
 Mock Adapter を使った end-to-end スモークテスト:
 
@@ -72,6 +72,8 @@ pytest -q
 
 ```text
 math-answer-diagnosis/
+  app.py
+  pages/
   config.yaml
   .env.example
   requirements.txt
@@ -80,6 +82,7 @@ math-answer-diagnosis/
     storage.py
     config.py
     prompts.py
+    ui_common.py
     adapters/
   data/
     images/
@@ -96,17 +99,16 @@ JSONL 形式で以下を保存します。
 - `data/records/ocr_results.jsonl`
 - `data/records/diagnosis_results.jsonl`
 
-OCR では `raw_text`（OCR 生出力）と `used_text`（診断 LLM に渡すテキスト）を分けて保存します。診断結果が不自然な場合に、OCR 確認ページ（今後実装）で `used_text` を修正できます。
+OCR では `raw_text`（OCR 生出力）と `used_text`（診断 LLM に渡すテキスト）を分けて保存します。診断結果が不自然な場合に、OCR 確認ページで `used_text` を修正できます。
 
-## 今回の実装範囲（Step 1〜3）
+## 実装範囲
 
 - Pydantic データモデル
 - JSONL 保存層
 - Adapter 基底クラス
 - MockOCRAdapter / ZaiOCRAdapter（骨組み）/ ManualCorrectionOCRAdapter
 - MockDiagnosisAdapter / LMStudioDiagnosisAdapter / LMStudioClient
-
-Streamlit UI は Step 4 以降で実装予定です。
+- Streamlit UI（問題登録〜診断結果確認）
 
 ## LM Studio 設定例
 
