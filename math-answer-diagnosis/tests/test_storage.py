@@ -89,6 +89,14 @@ def test_answer_roundtrip(storage: Storage) -> None:
     assert loaded.student_anonymized_id == "student_001"
 
 
+def test_save_answer_image_uses_answer_id(storage: Storage) -> None:
+    answer_id = "ans_test001"
+    image_rel = storage.save_answer_image(answer_id, b"fake-image", extension=".png")
+    assert image_rel.endswith(f"{answer_id}.png")
+    assert "student" not in image_rel
+    assert (storage.config.project_root / image_rel).exists()
+
+
 def test_jsonl_append_only(storage: Storage) -> None:
     for index in range(2):
         storage.save_problem(
