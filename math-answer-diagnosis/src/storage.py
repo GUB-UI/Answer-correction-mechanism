@@ -53,6 +53,17 @@ class Storage:
         path.write_bytes(image_bytes)
         return str(path.relative_to(self.config.project_root))
 
+    def save_answer_image(
+        self,
+        answer_id: str,
+        image_bytes: bytes,
+        extension: str = ".png",
+    ) -> str:
+        ext = extension if extension.startswith(".") else f".{extension}"
+        path = self.config.images_dir / f"{answer_id}{ext}"
+        path.write_bytes(image_bytes)
+        return str(path.relative_to(self.config.project_root))
+
     @staticmethod
     def _append_jsonl(path: Path, payload: dict) -> None:
         with path.open("a", encoding="utf-8") as f:

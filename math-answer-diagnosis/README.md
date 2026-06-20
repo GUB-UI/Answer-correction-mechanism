@@ -26,6 +26,22 @@ cp .env.example .env
 
 `config.yaml` と `.env` で LM Studio や Adapter の設定を変更できます。URL や API キーはコードに直書きしません。
 
+## Streamlit UI
+
+```bash
+cd math-answer-diagnosis
+streamlit run app.py
+```
+
+画面フロー:
+
+1. 問題登録
+2. 答案登録
+3. OCR実行（まずは mock）
+4. OCR確認・修正（必要時のみ）
+5. 診断実行（まずは mock）
+6. 診断結果確認・CSVエクスポート
+
 ## 動作確認（Step 1〜3）
 
 Mock Adapter を使った end-to-end スモークテスト:
