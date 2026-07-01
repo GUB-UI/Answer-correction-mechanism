@@ -8,18 +8,36 @@
 
 ## 想定環境
 
-- M3 MacBook Air / Apple Silicon
+- M3 MacBook Air / Apple Silicon（または Windows）
 - Python 3.11 以上
-- LM Studio（OpenAI 互換 API）
-- Z.ai 系小型 OCR モデル（将来接続）
+- GLM-OCR 公式 SDK（OCR 用、任意）
+- LM Studio（診断 LLM 用、OpenAI 互換 API）
 - ローカル JSONL 保存
+
+## OCR 方式
+
+OCRは以下の2方式に対応しています。
+
+1. **mock**
+   外部モデルなしで動作確認するためのダミーOCRです。
+
+2. **glmocr_sdk**
+   GLM-OCR公式SDKをPythonから呼び出す方式です。
+   SDKの導入方法は公式READMEに従ってください。
+   SDK未導入でも、mock OCRでアプリ全体の動作確認は可能です。
+
+GLM-OCR SDKを使用する場合は、公式READMEに従って別途インストールしてください。
+SDK未導入の場合でも、MockOCRAdapterによりアプリ全体の動作確認は可能です。
+
+LM StudioはOCRには使用しません。
+LM Studioは診断LLMをローカル実行するために使用します。
 
 ## セットアップ
 
 ```bash
 cd math-answer-diagnosis
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .\.venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -42,6 +60,29 @@ streamlit run app.py
 5. 診断実行（まずは mock）
 6. 診断結果確認・CSVエクスポート
 
+### Windows での動作確認
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+pytest
+streamlit run app.py
+```
+
+Windows ではまず Mock OCR で以下を確認してください。
+
+- 問題登録できる
+- 答案画像を登録できる
+- Mock OCR を実行できる
+- OCR `raw_text` / `used_text` を保存できる
+- OCR 結果を修正できる
+- Mock 診断を実行できる
+- 診断結果を確認できる
+- CSV エクスポートできる
+
+GLM-OCR SDK の動作確認は必須条件ではありません。
+
 ## 動作確認（CLI）
 
 Mock Adapter を使った end-to-end スモークテスト:
@@ -50,16 +91,6 @@ Mock Adapter を使った end-to-end スモークテスト:
 cd math-answer-diagnosis
 python -m src smoke
 ```
-
-このコマンドで以下を確認できます。
-
-- 問題データの保存
-- 答案データの保存
-- Mock OCR 実行と `raw_text` / `used_text` の保存
-- OCR 結果の手動修正
-- Mock 診断実行と `possible_ocr_issue` の保存
-- JSONL の再読み込み
-- `config.yaml` / `.env` からの LM Studio 設定読み込み
 
 ## テスト
 
@@ -99,18 +130,17 @@ JSONL 形式で以下を保存します。
 - `data/records/ocr_results.jsonl`
 - `data/records/diagnosis_results.jsonl`
 
-OCR では `raw_text`（OCR 生出力）と `used_text`（診断 LLM に渡すテキスト）を分けて保存します。診断結果が不自然な場合に、OCR 確認ページで `used_text` を修正できます。
+OCR では `raw_text`（OCR 生出力）と `used_text`（診断 LLM に渡すテキスト）を分けて保存します。診断 LLM には必ず `used_text` を渡します。
 
 ## 実装範囲
 
 - Pydantic データモデル
 - JSONL 保存層
-- Adapter 基底クラス
-- MockOCRAdapter / ZaiOCRAdapter（骨組み）/ ManualCorrectionOCRAdapter
-- MockDiagnosisAdapter / LMStudioDiagnosisAdapter / LMStudioClient
+- MockOCRAdapter / GLMOCRSdkAdapter / ManualCorrectionOCRAdapter
+- MockDiagnosisAdapter / LMStudioDiagnosisAdapter
 - Streamlit UI（問題登録〜診断結果確認）
 
-## LM Studio 設定例
+## 設定例
 
 `.env`:
 
@@ -118,7 +148,9 @@ OCR では `raw_text`（OCR 生出力）と `used_text`（診断 LLM に渡す�
 LMSTUDIO_BASE_URL=http://localhost:1234/v1
 LMSTUDIO_API_KEY=lm-studio
 OCR_PROVIDER=mock
+OCR_MODEL_NAME=glm-ocr
 DIAGNOSIS_PROVIDER=mock
 ```
 
-実際の LM Studio 接続時は `DIAGNOSIS_PROVIDER=lmstudio` や `OCR_PROVIDER=zai` に切り替えます。
+実際の LM Studio 接続時は `DIAGNOSIS_PROVIDER=lmstudio` に切り替えます。
+OCR を GLM-OCR SDK で実行する場合は `OCR_PROVIDER=glmocr_sdk` に切り替えます。

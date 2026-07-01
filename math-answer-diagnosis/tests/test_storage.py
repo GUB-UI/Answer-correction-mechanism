@@ -20,13 +20,13 @@ def project_root(tmp_path: Path) -> Path:
     (root / "config.yaml").write_text(
         yaml.safe_dump(
             {
-                "runtime": {"device": "test", "use_lmstudio": True},
+                "runtime": {"device": "test"},
+                "ocr": {"provider": "mock", "model_name": "glm-ocr"},
                 "lmstudio": {
                     "base_url": "http://localhost:1234/v1",
                     "api_key": "lm-studio",
                 },
                 "models": {
-                    "ocr": {"provider": "mock", "model_name": "zai-small-ocr"},
                     "diagnosis": {
                         "provider": "mock",
                         "model_name": "local-diagnosis-model",

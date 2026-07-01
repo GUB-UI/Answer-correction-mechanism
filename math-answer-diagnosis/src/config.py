@@ -62,6 +62,15 @@ def _as_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def _resolve_ocr_section(raw: dict[str, Any]) -> dict[str, Any]:
+    ocr = raw.get("ocr")
+    if isinstance(ocr, dict) and ocr:
+        return ocr
+    models = raw.get("models", {})
+    legacy = models.get("ocr") if isinstance(models, dict) else None
+    return legacy if isinstance(legacy, dict) else {}
+
+
 def load_config(project_root: Path | None = None) -> AppConfig:
     root = (project_root or _default_project_root()).resolve()
     load_dotenv(root / ".env", override=False)
@@ -76,8 +85,8 @@ def load_config(project_root: Path | None = None) -> AppConfig:
     runtime = raw.get("runtime", {})
     lmstudio = raw.get("lmstudio", {})
     models = raw.get("models", {})
-    ocr = models.get("ocr", {})
-    diagnosis = models.get("diagnosis", {})
+    ocr = _resolve_ocr_section(raw)
+    diagnosis = models.get("diagnosis", {}) if isinstance(models, dict) else {}
     safety = raw.get("safety", {})
 
     return AppConfig(
@@ -97,7 +106,7 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             provider=_env_override("OCR_PROVIDER", str(ocr.get("provider", "mock"))),
             model_name=_env_override(
                 "OCR_MODEL_NAME",
-                str(ocr.get("model_name", "zai-small-ocr")),
+                str(ocr.get("model_name", "glm-ocr")),
             ),
         ),
         diagnosis=ModelSettings(

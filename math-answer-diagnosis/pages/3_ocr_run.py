@@ -4,7 +4,6 @@ import streamlit as st
 
 from src.adapters import create_ocr_adapter
 from src.adapters.base import OCRRunContext
-from src.models import utc_now_iso
 from src.ui_common import (
     answer_label,
     get_config,
@@ -13,6 +12,10 @@ from src.ui_common import (
     resolve_image_path,
     show_answer_image,
 )
+
+GLMOCR_SDK_ERROR_MESSAGE = """GLM-OCR SDKの実行に失敗しました。
+まずはMock OCRで動作確認してください。
+GLM-OCRを使う場合は、公式SDKのインストールとGLMOCRSdkAdapterの設定を確認してください。"""
 
 st.set_page_config(page_title="OCR実行", layout="wide")
 st.title("OCR実行")
@@ -46,9 +49,9 @@ if existing_ocr:
 
 provider = st.selectbox(
     "OCR provider",
-    options=["mock", "zai"],
+    options=["mock", "glmocr_sdk"],
     index=0,
-    help="まずは mock で動作確認してください。zai は LM Studio 接続が必要です。",
+    help="まずは mock で動作確認してください。glmocr_sdk は GLM-OCR 公式 SDK の導入が必要です。",
 )
 
 if st.button("OCRを実行", type="primary"):
@@ -58,12 +61,13 @@ if st.button("OCRを実行", type="primary"):
         if not image_path.is_file():
             raise FileNotFoundError(f"画像が見つかりません: {image_path}")
 
+        ocr_engine = config.ocr.model_name if provider == "glmocr_sdk" else "mock"
         with st.spinner("OCR実行中..."):
             result = adapter.run(
                 OCRRunContext(
                     answer_id=answer.answer_id,
                     image_path=image_path,
-                    ocr_engine=config.ocr.model_name if provider == "zai" else "mock",
+                    ocr_engine=ocr_engine,
                 )
             )
         result.ocr_id = storage.generate_id("ocr")
@@ -77,4 +81,9 @@ if st.button("OCRを実行", type="primary"):
         if result.ocr_suspect:
             st.warning("OCR結果に不明箇所または疑わしい読み取りがあります。")
     except Exception as exc:
-        st.error(f"OCR実行に失敗しました: {exc}")
+        if provider == "glmocr_sdk":
+            st.error(GLMOCR_SDK_ERROR_MESSAGE)
+            with st.expander("エラー詳細"):
+                st.code(str(exc))
+        else:
+            st.error(f"OCR実行に失敗しました: {exc}")
