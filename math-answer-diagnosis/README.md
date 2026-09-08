@@ -11,7 +11,7 @@
 - M3 MacBook Air / Apple Silicon（または Windows）
 - Python 3.11 以上
 - GLM-OCR 公式 SDK（OCR 用、任意）
-- LM Studio（診断 LLM 用、OpenAI 互換 API）
+- oMLX（診断 LLM 用、Qwen3.8-27B-oQ4e-mtp + Lightning MTP）
 - ローカル JSONL 保存
 
 ## OCR 方式
@@ -22,9 +22,8 @@ OCRは以下の2方式に対応しています。
    外部モデルなしで動作確認するためのダミーOCRです。
 
 2. **glmocr_sdk**
-   GLM-OCR公式SDKをPythonから呼び出す方式です。
-   SDKの導入方法は公式READMEに従ってください。
-   SDK未導入でも、mock OCRでアプリ全体の動作確認は可能です。
+   GLM-OCR公式SDKで日本語・文書構造を読み、数字・数式は UniMERNet Small を優先して上書きします。
+   UniMERNet は別プロセス（既定: `http://127.0.0.1:8091`）で動かします。
 
 GLM-OCR SDKを使用する場合は、公式READMEに従って別途インストールしてください。
 SDK未導入の場合でも、MockOCRAdapterによりアプリ全体の動作確認は可能です。
@@ -44,6 +43,22 @@ cp .env.example .env
 
 `config.yaml` と `.env` で LM Studio や Adapter の設定を変更できます。URL や API キーはコードに直書きしません。
 
+## 本番環境（Apple Silicon）
+
+本番は OCR を GLM-OCR SDK、診断を oMLX（Lightning MTP）に接続します。
+
+```bash
+cd math-answer-diagnosis
+bash scripts/setup_production.sh
+bash scripts/start_omlx.sh
+bash scripts/start_production.sh
+```
+
+- 診断モデル: `Qwen3.8-27B-oQ4e-mtp`（`.env` の `DIAGNOSIS_MODEL_NAME` で変更可）
+- OCR 推論: `http://localhost:8080` の mlx-vlm（`mlx-community/GLM-OCR-bf16`）
+- 数式OCR: `http://127.0.0.1:8091` の UniMERNet Small（`wanderkid/unimernet_small`）
+- アプリ: Streamlit `http://localhost:8501`
+
 ## Streamlit UI
 
 ```bash
@@ -53,11 +68,11 @@ streamlit run app.py
 
 画面フロー:
 
-1. 問題登録
-2. 答案登録
-3. OCR実行（まずは mock）
-4. OCR確認・修正（必要時のみ）
-5. 診断実行（まずは mock）
+1. セット登録（問題・模範・答案をテキスト/画像/混在で登録）
+2. または問題登録 → 答案登録を個別に行う
+3. OCR実行（答案画像、および問題・模範画像）
+4. OCR確認・修正（必要時。手書き精度の観察もここ）
+5. 診断実行
 6. 診断結果確認・CSVエクスポート
 
 ### Windows での動作確認
@@ -145,12 +160,13 @@ OCR では `raw_text`（OCR 生出力）と `used_text`（診断 LLM に渡す�
 `.env`:
 
 ```env
-LMSTUDIO_BASE_URL=http://localhost:1234/v1
-LMSTUDIO_API_KEY=lm-studio
-OCR_PROVIDER=mock
-OCR_MODEL_NAME=glm-ocr
-DIAGNOSIS_PROVIDER=mock
+OMLX_BASE_URL=http://localhost:8000/v1
+OMLX_API_KEY=omlx
+OCR_PROVIDER=glmocr_sdk
+OCR_MODEL_NAME=mlx-community/GLM-OCR-bf16
+UNIMERNET_ENABLED=true
+UNIMERNET_MODEL_NAME=wanderkid/unimernet_small
+UNIMERNET_BASE_URL=http://127.0.0.1:8091
+DIAGNOSIS_PROVIDER=omlx
+DIAGNOSIS_MODEL_NAME=Qwen3.8-27B-oQ4e-mtp
 ```
-
-実際の LM Studio 接続時は `DIAGNOSIS_PROVIDER=lmstudio` に切り替えます。
-OCR を GLM-OCR SDK で実行する場合は `OCR_PROVIDER=glmocr_sdk` に切り替えます。

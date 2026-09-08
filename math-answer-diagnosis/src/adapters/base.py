@@ -13,6 +13,9 @@ class OCRRunContext:
     answer_id: str
     image_path: Path
     ocr_engine: str
+    source_kind: str = "student_answer"
+    source_id: str = ""
+    image_rel: str = ""
 
 
 @dataclass

@@ -32,10 +32,13 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
         raw_text = self.lmstudio_client.chat_completion(
             messages=messages,
             model=context.model_name or self.config.diagnosis.model_name,
-            response_format_json=True,
+            response_format_json=False,
+            temperature=0.0,
+            max_tokens=1024,
+            disable_thinking=True,
         )
         parsed = parse_diagnosis_json(raw_text)
-        parsed["_transport"] = "lm_studio"
+        parsed["_transport"] = "omlx"
         parsed["_prompt_type"] = prompt_type
         return parsed
 
@@ -73,6 +76,6 @@ def create_diagnosis_adapter(
     selected = (provider or cfg.diagnosis.provider).lower()
     if selected == "mock":
         return MockDiagnosisAdapter()
-    if selected in {"lmstudio", "lm_studio"}:
+    if selected in {"omlx", "lmstudio", "lm_studio", "openai"}:
         return LMStudioDiagnosisAdapter(config=cfg)
     raise ValueError(f"Unsupported diagnosis provider: {selected}")

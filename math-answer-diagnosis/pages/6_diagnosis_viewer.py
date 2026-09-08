@@ -10,6 +10,7 @@ from src.ui_common import (
     diagnosis_label,
     get_storage,
     show_answer_image,
+    show_problem_images,
 )
 
 st.set_page_config(page_title="診断結果確認", layout="wide")
@@ -39,6 +40,8 @@ problem = problems.get(diagnosis.problem_id)
 
 if answer:
     show_answer_image(answer)
+if problem:
+    show_problem_images(problem)
 
 col1, col2 = st.columns(2)
 with col1:

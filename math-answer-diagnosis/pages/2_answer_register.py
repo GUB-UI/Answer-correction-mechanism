@@ -1,15 +1,21 @@
 """答案登録ページ"""
 
-from pathlib import Path
-
 import streamlit as st
 
 from src.models import AnswerRecord, utc_now_iso
+from src.ocr_runner import typed_text_as_ocr
+from src.sources import IMAGE_UPLOAD_TYPES, answer_image_paths, infer_input_kind
 from src.storage import validate_anonymized_id
-from src.ui_common import answer_label, get_storage, problem_label
+from src.ui_common import (
+    answer_label,
+    get_storage,
+    problem_label,
+    show_answer_image,
+)
 
 st.set_page_config(page_title="答案登録", layout="wide")
 st.title("答案登録")
+st.caption("答案は画像（複数枚）、テキスト、またはその両方で登録できます。")
 
 storage = get_storage()
 problems = storage.list_problems()
@@ -27,37 +33,44 @@ selected_problem_id = st.selectbox(
     format_func=lambda pid: problem_label(problem_map[pid]),
 )
 student_id = st.text_input("匿名化生徒ID", placeholder="例: student_001")
-uploaded = st.file_uploader(
-    "答案画像をアップロード",
-    type=["png", "jpg", "jpeg", "webp"],
+uploaded_files = st.file_uploader(
+    "答案画像（任意・複数枚可）",
+    type=IMAGE_UPLOAD_TYPES,
+    accept_multiple_files=True,
 )
+typed_text = st.text_area("テキスト答案（任意。デジタル提出やOCR後の手入力）", height=120)
 
 if st.button("保存", type="primary"):
     try:
-        if uploaded is None:
-            raise ValueError("答案画像をアップロードしてください。")
         anonymized_id = validate_anonymized_id(student_id)
+        files = uploaded_files or []
+        typed_value = typed_text.strip()
+        if not files and not typed_value:
+            raise ValueError("答案画像かテキスト答案のどちらかが必要です。")
 
         answer_id = storage.generate_id("ans")
-        suffix = Path(uploaded.name).suffix.lower()
-        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
-            suffix = ".png"
-
-        image_path = storage.save_answer_image(
-            answer_id,
-            uploaded.getvalue(),
-            extension=suffix,
-        )
+        image_paths = [
+            storage.save_uploaded_image(item.getvalue(), item.name) for item in files
+        ]
         answer = AnswerRecord(
             answer_id=answer_id,
             problem_id=selected_problem_id,
-            image_path=image_path,
+            image_path=image_paths[0] if image_paths else "",
+            image_paths=image_paths,
+            typed_text=typed_value or None,
+            input_kind=infer_input_kind(typed_value, image_paths),
             student_anonymized_id=anonymized_id,
             created_at=utc_now_iso(),
         )
         storage.save_answer(answer)
+        if typed_value and not image_paths:
+            typed_text_as_ocr(storage, answer_id=answer_id, typed_text=typed_value)
         st.success(f"答案を保存しました: {answer.answer_id}")
-        st.image(str(storage.config.project_root / image_path), caption=answer_id)
+        show_answer_image(answer)
+        if typed_value:
+            st.code(typed_value)
+        if image_paths:
+            st.info("画像答案は「OCR実行」でテキスト化してください。")
     except ValueError as exc:
         st.error(str(exc))
 
@@ -72,7 +85,8 @@ else:
             if problem:
                 st.write(f"**問題:** {problem.title}")
             st.write(f"**匿名化生徒ID:** {answer.student_anonymized_id}")
-            st.write(f"**画像パス:** {answer.image_path}")
-            image_path = storage.config.project_root / answer.image_path
-            if image_path.is_file():
-                st.image(str(image_path))
+            st.write(f"**入力形式:** {answer.input_kind}")
+            show_answer_image(answer)
+            if answer.typed_text:
+                st.write("**テキスト答案**")
+                st.code(answer.typed_text)

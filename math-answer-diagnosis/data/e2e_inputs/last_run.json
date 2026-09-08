@@ -1,0 +1,43 @@
+{
+  "problem_id": "prob_b1eeeed6",
+  "answer_id": "ans_e1873ce1",
+  "ocr_id": "ocr_8f183572",
+  "diagnosis_id": "diag_433b25ff",
+  "timings_sec": {
+    "problem_ocr": 14.5,
+    "student_ocr": 6.2,
+    "diagnosis": 65.6
+  },
+  "score": 6.0,
+  "max_score": 10.0,
+  "error_categories": [
+    "計算ミス"
+  ],
+  "error_locations": [
+    {
+      "line": "2行目",
+      "description": "不等式変形が不自然（$x<40$ となっているが、正しくは $8x<40$ である可能性）"
+    },
+    {
+      "line": "6行目",
+      "description": "不等号が $5 > \\frac{a+5}{3}$ となっているが、正しくは $\\frac{a+5}{3} \\leq 5$ であるべき"
+    },
+    {
+      "line": "7行目",
+      "description": "不等号が $a < 10$ となっているが、正しくは $a \\leq 10$ であるべき"
+    },
+    {
+      "line": "8行目",
+      "description": "最終答えが $7 < a < 10$ となっているが、正しくは $7 < a \\leq 10$ であるべき"
+    }
+  ],
+  "reasoning_summary": "(1)は正解だが、(2)で不等号の等号を漏らしており、範囲の境界値が誤っている。",
+  "student_feedback": "(1)は正解です。(2)は「最大の整数値が4」であることから、右辺が5以上5以下であることを意識し、不等号の等号（≦）を忘れないよう注意してください。",
+  "teacher_review_notes": "2行目の不等式変形が不自然であり、OCR誤りの可能性があります。",
+  "possible_ocr_issue": true,
+  "confidence": 0.95,
+  "transport": "omlx",
+  "student_ocr_text": "4. C. (1) $5 x-2 9 < -3 x+1 1$ 满足自然数x的值为全てのみ。\n\n$x<40,x<5$ x$ 在自然数大小间，x=4,3,2,1\n\n(2) $x < \\frac{a+5}{3}$ を消す $x$ の最大の整数値が4であったとき，定数 $a$ の値を求めよ。\n\n$4 < \\frac{a+5}{3}, a > 7.$\n\n$4 < \\frac{a+5}{3}, a > 7.$\n\n$5 > \\frac{a+5}{3}, a < 10.$ $7 < a < 10$\n\n$\\underline{7 < a < 10}$",
+  "problem_ocr_chars": 677,
+  "student_ocr_chars": 269
+}

@@ -80,7 +80,16 @@ def test_create_ocr_adapter_mock(project_root: Path) -> None:
     assert result.used_text == result.raw_text
 
 
-def test_glmocr_sdk_adapter_not_configured(project_root: Path) -> None:
+def test_glmocr_sdk_adapter_missing_sdk(
+    project_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _raise_import_error() -> None:
+        raise RuntimeError("GLM-OCR SDK is not installed.")
+
+    monkeypatch.setattr(
+        "src.adapters.ocr_adapter._import_glmocr",
+        _raise_import_error,
+    )
     config = load_config(project_root)
     adapter = GLMOCRSdkAdapter(config=config)
     image_path = project_root / "sample.png"
@@ -93,6 +102,45 @@ def test_glmocr_sdk_adapter_not_configured(project_root: Path) -> None:
                 ocr_engine="glm-ocr",
             )
         )
+
+
+def test_glmocr_sdk_adapter_extracts_markdown(
+    project_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeResult:
+        markdown_result = "x = -2, -3"
+
+        def to_dict(self) -> dict:
+            return {"markdown_result": self.markdown_result}
+
+    class FakeParser:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def parse(self, *args: object, **kwargs: object) -> FakeResult:
+            return FakeResult()
+
+    monkeypatch.setattr(
+        "src.adapters.ocr_adapter._import_glmocr",
+        lambda: lambda **kwargs: FakeParser(),
+    )
+    config = load_config(project_root)
+    adapter = GLMOCRSdkAdapter(config=config)
+    image_path = project_root / "sample.png"
+    image_path.write_bytes(b"png")
+    result = adapter.run(
+        OCRRunContext(
+            answer_id="ans_001",
+            image_path=image_path,
+            ocr_engine="glm-ocr",
+        )
+    )
+    assert result.raw_text == "x = -2, -3"
+    assert result.used_text == result.raw_text
+    assert result.raw_output["provider"] == "glmocr_sdk"
 
 
 def test_create_ocr_adapter_rejects_unknown_provider(project_root: Path) -> None:
