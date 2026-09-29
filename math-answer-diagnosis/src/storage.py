@@ -15,6 +15,7 @@ from src.models import (
     OCRResult,
     ProblemRecord,
 )
+from src.sources import suffix_for_upload
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -136,6 +137,33 @@ class Storage:
 
     def get_ocr_results_for_answer(self, answer_id: str) -> list[OCRResult]:
         return [r for r in self.list_ocr_results() if r.answer_id == answer_id]
+
+    def update_problem(self, problem: ProblemRecord) -> ProblemRecord:
+        rows = self._read_jsonl(self._record_path("problems"))
+        updated = False
+        for index, row in enumerate(rows):
+            if row.get("problem_id") == problem.problem_id:
+                rows[index] = problem.model_dump()
+                updated = True
+                break
+        if not updated:
+            raise KeyError(f"Problem not found: {problem.problem_id}")
+        self._write_jsonl(self._record_path("problems"), rows)
+        return problem
+
+    def get_ocr_results_for_source(
+        self,
+        source_kind: str,
+        source_id: str,
+    ) -> list[OCRResult]:
+        return [
+            result
+            for result in self.list_ocr_results()
+            if result.source_kind == source_kind and result.source_id == source_id
+        ]
+
+    def save_uploaded_image(self, image_bytes: bytes, filename: str) -> str:
+        return self.save_image(image_bytes, extension=suffix_for_upload(filename))
 
     def update_ocr_result(self, ocr_result: OCRResult) -> OCRResult:
         rows = self._read_jsonl(self._record_path("ocr_results"))

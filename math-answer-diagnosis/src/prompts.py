@@ -15,7 +15,8 @@ OCRに誤読が含まれる可能性があります。
 答案内容に不自然な点がある場合は、OCR誤りの可能性として teacher_review_notes に記録してください。
 問題文、模範解答、採点基準、OCR結果をもとに、採点・誤り分類・フィードバックを作成してください。
 AI診断は教師確認前の下書きであり、最終判断ではありません。
-出力は必ずJSON形式にしてください。"""
+思考過程や前置きは出さず、JSONオブジェクトのみを返してください。
+reasoning_summary / student_feedback / teacher_review_notes は各1文にしてください。"""
 
 DIAGNOSIS_OUTPUT_SCHEMA = """{
   "score": 3,

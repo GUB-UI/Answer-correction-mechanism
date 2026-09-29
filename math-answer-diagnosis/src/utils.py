@@ -14,7 +14,17 @@ def extract_json_object(text: str) -> dict[str, Any]:
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", stripped)
     if fence:
         stripped = fence.group(1).strip()
-    return json.loads(stripped)
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        parsed = json.loads(stripped[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("JSON object expected")
+    return parsed
 
 
 def image_to_base64(image_path: Path) -> str:

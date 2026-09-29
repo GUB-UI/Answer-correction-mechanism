@@ -1,18 +1,23 @@
 runtime:
   device: "apple_silicon_mac"
+  use_omlx: true
 
 ocr:
-  provider: "mock"
-  model_name: "glm-ocr"
+  provider: "glmocr_sdk"
+  model_name: "mlx-community/GLM-OCR-bf16"
+  formula:
+    enabled: true
+    model_name: "wanderkid/unimernet_small"
+    base_url: "http://127.0.0.1:8091"
 
-lmstudio:
-  base_url: "http://localhost:1234/v1"
-  api_key: "lm-studio"
+omlx:
+  base_url: "http://localhost:8000/v1"
+  api_key: "omlx"
 
 models:
   diagnosis:
-    provider: "mock"
-    model_name: "local-diagnosis-model"
+    provider: "omlx"
+    model_name: "Qwen3.8-27B-oQ4e-mtp"
 
 safety:
   require_anonymization: true

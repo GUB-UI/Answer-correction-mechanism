@@ -172,6 +172,63 @@ def test_mock_ocr_saves_raw_and_used_text(storage: Storage, project_root: Path) 
     assert loaded.raw_text == loaded.used_text
 
 
+def test_update_problem_rewrites_jsonl(storage: Storage) -> None:
+    problem = ProblemRecord(
+        problem_id="prob_upd",
+        title="title",
+        problem_text="",
+        correct_answer="",
+        rubric="rubric",
+        unit="unit",
+        difficulty="basic",
+        created_at=utc_now_iso(),
+        combined_image_paths=["data/images/x.png"],
+    )
+    storage.save_problem(problem)
+    updated = problem.model_copy(update={"problem_text": "filled"})
+    storage.update_problem(updated)
+    loaded = storage.get_problem("prob_upd")
+    assert loaded is not None
+    assert loaded.problem_text == "filled"
+
+
+def test_typed_text_as_ocr(storage: Storage) -> None:
+    from src.ocr_runner import typed_text_as_ocr
+
+    result = typed_text_as_ocr(
+        storage,
+        answer_id="ans_typed",
+        typed_text="x = 1, 2, 3, 4",
+    )
+    loaded = storage.get_ocr_result(result.ocr_id)
+    assert loaded is not None
+    assert loaded.ocr_engine == "typed_text"
+    assert loaded.source_kind == "student_answer"
+    assert loaded.used_text == "x = 1, 2, 3, 4"
+
+
+def test_run_ocr_for_multiple_images(storage: Storage) -> None:
+    from src.adapters import create_ocr_adapter
+    from src.ocr_runner import run_ocr_for_images
+
+    rels = [
+        storage.save_image(b"one", extension=".png"),
+        storage.save_image(b"two", extension=".png"),
+    ]
+    adapter = create_ocr_adapter("mock", storage.config)
+    result = run_ocr_for_images(
+        adapter,
+        storage,
+        source_kind="student_answer",
+        source_id="ans_multi",
+        image_paths=rels,
+        engine="mock",
+    )
+    assert "## 画像1" in result.used_text
+    assert "## 画像2" in result.used_text
+    assert result.image_paths == rels
+
+
 def test_manual_correction_updates_used_text(storage: Storage) -> None:
     ocr = OCRResult(
         ocr_id=storage.generate_id("ocr"),

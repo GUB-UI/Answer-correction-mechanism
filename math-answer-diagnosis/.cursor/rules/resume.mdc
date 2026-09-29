@@ -1,0 +1,14 @@
+---
+description: 高校数学答案診断アプリの本番構成と再開時の前提
+alwaysApply: true
+---
+
+# math-answer-diagnosis
+
+再開時は先に `CONTINUE.md` を読む。診断は oMLX（Qwen3.8-27B-oQ4e-mtp）、OCR は GLM-OCR + UniMERNet Small。LM Studio は使わない。
+
+- アプリ `.venv` に `unimernet` を入れない（transformers が下がり PP-DocLayout が壊れる）
+- UniMERNet は `.venv-unimernet` + `:8091`。`pyarrow<17`
+- 数字・数式は UniMERNet、日本語交じり文は GLM。`bbox_2d` は 0-1000
+- 32GB なので GGUF Qwen と oMLX 27B を同時に載せない
+- 起動: `bash scripts/start_production.sh`

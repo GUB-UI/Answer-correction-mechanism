@@ -58,5 +58,22 @@ def test_diagnosis_result_possible_ocr_issue() -> None:
     assert result.possible_ocr_issue is True
 
 
+def test_problem_record_loads_legacy_json() -> None:
+    problem = ProblemRecord.model_validate(
+        {
+            "problem_id": "prob_legacy",
+            "title": "title",
+            "problem_text": "text",
+            "correct_answer": "answer",
+            "rubric": "rubric",
+            "unit": "unit",
+            "difficulty": "basic",
+            "created_at": utc_now_iso(),
+        }
+    )
+    assert problem.problem_image_paths == []
+    assert problem.problem_input_kind == "text"
+
+
 def test_error_categories_contains_expected_items() -> None:
     assert "計算ミス" in ERROR_CATEGORIES

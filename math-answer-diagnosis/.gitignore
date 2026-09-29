@@ -6,6 +6,15 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-mlx/
+.venv-unimernet/
 venv/
+.mlx-vlm.log
+.mlx-vlm.pid
+.omlx.log
+.omlx.pid
+.unimernet.log
+.unimernet.pid
+data/models/
 .DS_Store
 .streamlit/

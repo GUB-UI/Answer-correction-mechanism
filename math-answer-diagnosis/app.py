@@ -26,7 +26,8 @@ st.subheader("現在の設定")
 setting_col1, setting_col2 = st.columns(2)
 setting_col1.info(
     f"**OCR provider:** `{config.ocr.provider}`  \n"
-    f"**OCR model:** `{config.ocr.model_name}`"
+    f"**OCR model:** `{config.ocr.model_name}`  \n"
+    f"**数式:** `{'UniMERNet Small' if config.formula.enabled else 'off'}`"
 )
 setting_col2.info(
     f"**診断 provider:** `{config.diagnosis.provider}`  \n"
@@ -36,10 +37,10 @@ setting_col2.info(
 st.subheader("使い方")
 st.markdown(
     """
-1. **問題登録** — 問題文・模範解答・採点基準を登録
-2. **答案登録** — 答案画像と匿名化生徒IDを登録
-3. **OCR実行** — 答案画像を読み取り、`raw_text` / `used_text` を保存
-4. **OCR確認・修正** — 診断結果が不自然な場合に OCR を確認・修正
+1. **セット登録** — 問題・模範・答案をテキスト/画像/混在でまとめて登録（推奨）
+2. **問題登録 / 答案登録** — 個別に追加・補完する場合
+3. **OCR実行** — 答案画像、および問題・模範の画像をテキスト化
+4. **OCR確認・修正** — 手書きの誤読が疑われる場合に `used_text` を直す
 5. **診断実行** — `used_text` をもとに採点・フィードバックを生成
 6. **診断結果確認** — 結果の確認と CSV エクスポート
 """

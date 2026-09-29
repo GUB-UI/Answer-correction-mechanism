@@ -6,25 +6,34 @@ from src.adapters import create_diagnosis_adapter
 from src.adapters.base import DiagnosisRunContext
 from src.models import utc_now_iso
 from src.prompts import DIAGNOSIS_PROMPTS
+from src.sources import student_ocr_results
 from src.ui_common import (
     get_config,
     get_storage,
     ocr_label,
     problem_label,
+    provider_index,
     show_answer_image,
+    show_problem_images,
 )
+
+DIAGNOSIS_PROVIDERS = ["mock", "omlx"]
 
 st.set_page_config(page_title="診断実行", layout="wide")
 st.title("診断実行")
 
 storage = get_storage()
 config = get_config()
-ocr_results = storage.list_ocr_results()
+ocr_results = [
+    item
+    for item in student_ocr_results(storage.list_ocr_results())
+    if item.answer_id in {a.answer_id for a in storage.list_answers()}
+]
 answers = {a.answer_id: a for a in storage.list_answers()}
 problems = {p.problem_id: p for p in storage.list_problems()}
 
 if not ocr_results:
-    st.warning("先に OCR を実行してください。")
+    st.warning("先に答案の OCR（またはテキスト答案の登録）を実行してください。")
     st.stop()
 
 ocr_map = {o.ocr_id: o for o in ocr_results}
@@ -46,6 +55,7 @@ if problem is None:
     st.stop()
 
 show_answer_image(answer)
+show_problem_images(problem)
 
 st.subheader("問題情報")
 st.write(f"**問題:** {problem_label(problem)}")
@@ -63,9 +73,9 @@ if ocr.human_corrected:
 
 provider = st.selectbox(
     "診断 provider",
-    options=["mock", "lmstudio"],
-    index=0,
-    help="まずは mock で動作確認してください。lmstudio は LM Studio 接続が必要です。",
+    options=DIAGNOSIS_PROVIDERS,
+    index=provider_index(DIAGNOSIS_PROVIDERS, config.diagnosis.provider),
+    help="本番は omlx（Qwen3.8-27B-oQ4e-mtp + Lightning MTP）です。障害時のみ mock に切り替えてください。",
 )
 prompt_type = st.selectbox(
     "prompt_type",

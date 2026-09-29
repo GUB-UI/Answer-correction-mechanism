@@ -32,6 +32,9 @@ class MockOCRAdapter(OCRAdapter):
             correction_note=None,
             raw_output={"provider": "mock", "image_path": str(context.image_path)},
             created_at=utc_now_iso(),
+            source_kind=context.source_kind,
+            source_id=context.source_id or context.answer_id,
+            image_paths=[context.image_rel] if context.image_rel else [],
         )
 
 

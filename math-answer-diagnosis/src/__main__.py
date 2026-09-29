@@ -28,7 +28,7 @@ def cmd_smoke(_: argparse.Namespace) -> int:
     storage = Storage(config)
 
     print("=== config ===")
-    print(f"LM Studio URL: {config.lmstudio.base_url}")
+    print(f"oMLX URL: {config.lmstudio.base_url}")
     print(f"OCR provider: {config.ocr.provider} ({config.ocr.model_name})")
     print(
         f"Diagnosis provider: {config.diagnosis.provider} "

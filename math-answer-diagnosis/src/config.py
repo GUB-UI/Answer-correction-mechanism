@@ -22,11 +22,19 @@ class ModelSettings:
 
 
 @dataclass(frozen=True)
+class FormulaOCRSettings:
+    enabled: bool
+    model_name: str
+    base_url: str
+
+
+@dataclass(frozen=True)
 class AppConfig:
     runtime_device: str
     use_lmstudio: bool
     lmstudio: LMStudioSettings
     ocr: ModelSettings
+    formula: FormulaOCRSettings
     diagnosis: ModelSettings
     require_anonymization: bool
     store_raw_images_locally: bool
@@ -83,23 +91,34 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             raw = loaded if isinstance(loaded, dict) else {}
 
     runtime = raw.get("runtime", {})
-    lmstudio = raw.get("lmstudio", {})
+    llm_api = raw.get("omlx") if isinstance(raw.get("omlx"), dict) else {}
+    if not llm_api:
+        llm_api = raw.get("lmstudio", {}) if isinstance(raw.get("lmstudio"), dict) else {}
     models = raw.get("models", {})
     ocr = _resolve_ocr_section(raw)
+    formula = ocr.get("formula", {}) if isinstance(ocr.get("formula"), dict) else {}
     diagnosis = models.get("diagnosis", {}) if isinstance(models, dict) else {}
     safety = raw.get("safety", {})
 
     return AppConfig(
         runtime_device=str(runtime.get("device", "apple_silicon_mac")),
-        use_lmstudio=_as_bool(runtime.get("use_lmstudio"), True),
+        use_lmstudio=_as_bool(runtime.get("use_omlx"), True)
+        if "use_omlx" in runtime
+        else _as_bool(runtime.get("use_lmstudio"), True),
         lmstudio=LMStudioSettings(
             base_url=_env_override(
-                "LMSTUDIO_BASE_URL",
-                str(lmstudio.get("base_url", "http://localhost:1234/v1")),
+                "OMLX_BASE_URL",
+                _env_override(
+                    "LMSTUDIO_BASE_URL",
+                    str(llm_api.get("base_url", "http://localhost:8000/v1")),
+                ),
             ),
             api_key=_env_override(
-                "LMSTUDIO_API_KEY",
-                str(lmstudio.get("api_key", "lm-studio")),
+                "OMLX_API_KEY",
+                _env_override(
+                    "LMSTUDIO_API_KEY",
+                    str(llm_api.get("api_key", "omlx")),
+                ),
             ),
         ),
         ocr=ModelSettings(
@@ -107,6 +126,23 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             model_name=_env_override(
                 "OCR_MODEL_NAME",
                 str(ocr.get("model_name", "glm-ocr")),
+            ),
+        ),
+        formula=FormulaOCRSettings(
+            enabled=_as_bool(
+                _env_override(
+                    "UNIMERNET_ENABLED",
+                    str(formula.get("enabled", True)),
+                ),
+                True,
+            ),
+            model_name=_env_override(
+                "UNIMERNET_MODEL_NAME",
+                str(formula.get("model_name", "wanderkid/unimernet_small")),
+            ),
+            base_url=_env_override(
+                "UNIMERNET_BASE_URL",
+                str(formula.get("base_url", "http://127.0.0.1:8091")),
             ),
         ),
         diagnosis=ModelSettings(
