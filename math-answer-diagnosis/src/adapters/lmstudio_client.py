@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from openai import OpenAI
@@ -19,7 +20,8 @@ class LMStudioClient:
         self._client = OpenAI(
             base_url=config.lmstudio.base_url,
             api_key=config.lmstudio.api_key,
-            timeout=180.0,
+            # Colab の 27B 4bit は1件数分かかることがあるため既定を長めにする。
+            timeout=float(os.environ.get("LLM_REQUEST_TIMEOUT_SEC", "600")),
         )
 
     def chat_completion(

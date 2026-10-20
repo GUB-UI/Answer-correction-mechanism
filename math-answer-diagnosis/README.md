@@ -170,3 +170,43 @@ UNIMERNET_BASE_URL=http://127.0.0.1:8091
 DIAGNOSIS_PROVIDER=omlx
 DIAGNOSIS_MODEL_NAME=Qwen3.8-27B-oQ4e-mtp
 ```
+
+## Google Colab（CUDA）
+
+Mac の oMLX / mlx-vlm はそのまま使えます。Colab では同じアプリが、GPU 上の別サーバーに接続します。モデルは同時に載せず、**GLM-OCR → UniMERNet → 診断LLM** の順に1つずつ起動します。
+
+手順の全体は `notebooks/colab_answer_correction.ipynb` です。変更の一覧は [`docs/CHANGES_COLAB.md`](../docs/CHANGES_COLAB.md) です。
+
+```bash
+cd math-answer-diagnosis
+bash scripts/colab_setup.sh
+export APP_CONFIG_FILE=config.colab.yaml
+export APP_DATA_DIR=/content/drive/MyDrive/answer-correction   # セッションが終わっても残す場所
+export HF_HOME="${APP_DATA_DIR}/hf-cache"                     # 重みの再ダウンロードを避ける
+python3 -m src gpu-profile --write-env .env
+bash scripts/start_streamlit_tunnel.sh                        # 表示された https URL を開く
+```
+
+公開 URL になるので、`.env` に `APP_PASSWORD` を入れてください。
+
+### 診断モデル（Qwen3.8-27B の 4bit）
+
+呼んでいる「Qwen3.8-27B 4bit」は Hugging Face 上の次のモデルです。`LLM_MODEL_ID` で差し替えできます。
+
+| GPU | 使うモデル | 量子化 |
+| --- | --- | --- |
+| A100 40GB など 40GB 級 | `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`（約 22GB） | 保存時から 4bit |
+| L4 など 24GB 級 | `Qwen/Qwen3.8-27B` | 読み込み時に NF4 |
+| T4 16GB | `Qwen/Qwen3.5-9B`（27B は載らない） | 読み込み時に NF4 |
+
+T4 の結果は 27B の結果と混ぜないでください。`gpu-profile` が `DIAGNOSIS_MODEL_NAME` を分けて書きます。llama.cpp の GGUF を使う場合は `LLM_SERVER_COMMAND` に、その OpenAI 互換サーバーの起動コマンドを書けます。
+
+### 答案の一括処理と教師採点との比較
+
+```bash
+python3 -m src batch --problem-id prob_xxxxxxxx
+python3 -m src import-teacher teacher.csv --apply-allocation
+python3 -m src compare --recheck --out comparison.csv
+```
+
+画面からも同じ操作ができます（「教師採点との比較」）。CSV は1行が生徒×設問で、テンプレートは画面から落とせます。差が満点の 20% 以上（`COMPARE_RATIO_THRESHOLD`）の項目を不一致として記録し、再チェックします。再チェックは新しい診断として保存し、元の採点は残します。既定の `blind` は教師の点数をモデルに見せません。

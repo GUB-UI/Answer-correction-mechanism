@@ -27,6 +27,7 @@ class DiagnosisRunContext:
     used_text: str
     model_name: str
     prompt_type: str
+    extra_instructions: str = ""
 
 
 class OCRAdapter(ABC):

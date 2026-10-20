@@ -17,7 +17,7 @@ from src.sources import (
     split_problem_and_solution,
 )
 from src.storage import validate_anonymized_id
-from src.ui_common import get_config, get_storage, provider_index, show_images
+from src.ui_common import require_password, get_config, get_storage, provider_index, show_images
 
 OCR_PROVIDERS = ["mock", "glmocr_sdk"]
 PROBLEM_SOURCE_OPTIONS = {
@@ -45,6 +45,7 @@ def _save_uploads(storage, files) -> list[str]:
 
 
 st.set_page_config(page_title="セット登録", layout="wide")
+require_password()
 st.title("セット登録")
 st.caption(
     "問題文・模範解答・答案は、テキスト・画像・混在のどれでも登録できます。"

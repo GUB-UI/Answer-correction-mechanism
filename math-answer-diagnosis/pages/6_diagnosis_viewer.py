@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src.ui_common import (
+    require_password,
     diagnosis_label,
     get_storage,
     show_answer_image,
@@ -14,6 +15,7 @@ from src.ui_common import (
 )
 
 st.set_page_config(page_title="診断結果確認", layout="wide")
+require_password()
 st.title("診断結果確認")
 
 storage = get_storage()
@@ -74,6 +76,9 @@ else:
     st.warning("対応する OCR 結果が見つかりません。")
 
 st.subheader("診断結果")
+if diagnosis.question_scores:
+    st.write("**設問ごとの得点**")
+    st.dataframe(diagnosis.question_scores, use_container_width=True)
 st.write("**誤り分類:**", ", ".join(diagnosis.error_categories) or "なし")
 st.write("**reasoning_summary**")
 st.text(diagnosis.reasoning_summary)

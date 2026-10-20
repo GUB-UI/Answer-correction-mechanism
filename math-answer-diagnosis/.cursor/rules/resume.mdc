@@ -12,3 +12,4 @@ alwaysApply: true
 - 数字・数式は UniMERNet、日本語交じり文は GLM。`bbox_2d` は 0-1000
 - 32GB なので GGUF Qwen と oMLX 27B を同時に載せない
 - 起動: `bash scripts/start_production.sh`
+- Colab（CUDA）は `notebooks/colab_answer_correction.ipynb`。Mac の oMLX 経路は残してある

@@ -4,12 +4,12 @@ from typing import Any
 
 from src.adapters.base import OCRAdapter, OCRRunContext
 from src.models import OCRResult, utc_now_iso
-from src.sources import resolve_stored_path
 from src.storage import Storage
 
 GLMOCR_SDK_ERROR_MESSAGE = """GLM-OCR SDKの実行に失敗しました。
-mlx-vlm サーバー（既定: http://localhost:8080）が起動していることと、
-公式SDKのインストールを確認してください。"""
+OCRサーバー（既定: http://127.0.0.1:8080。Mac は mlx-vlm、Colab は scripts/glmocr_server.py）が
+起動していることと、公式SDKのインストールを確認してください。
+Colab（SERVICE_MODE=managed）ではサーバーは自動起動されます。ログは .run/ 以下を確認してください。"""
 
 
 def run_ocr_for_images(
@@ -30,7 +30,7 @@ def run_ocr_for_images(
     answer_id = source_id if source_kind == "student_answer" else ""
 
     for index, rel in enumerate(image_paths, start=1):
-        image_path = resolve_stored_path(storage.config.project_root, rel)
+        image_path = storage.config.resolve_path(rel)
         if not image_path.is_file():
             raise FileNotFoundError(f"画像が見つかりません: {image_path}")
         part = adapter.run(

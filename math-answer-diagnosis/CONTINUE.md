@@ -31,6 +31,10 @@ UniMERNet だけ: `bash scripts/start_unimernet.sh` → `http://127.0.0.1:8091/h
 
 数式置換の判定: レイアウトが formula 系、または日本語がほぼ無い計算行だけ UniMERNet。日本語交じりブロックは GLM のまま。`bbox_2d` は 0–1000 正規化。
 
+## Colab（2026-10 追加）
+
+CUDA では `config.colab.yaml` と `notebooks/colab_answer_correction.ipynb` を使う。診断は `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`（A100）または `Qwen/Qwen3.8-27B` を読み込み時 NF4（L4）。T4 は 27B が載らないので `Qwen/Qwen3.5-9B`。Mac の oMLX 経路は `SERVICE_MODE=external`（既定）のまま。詳細は `docs/CHANGES_COLAB.md`。
+
 ## 次にやること
 
 1. Streamlit で答案 `ans_e1873ce1` を再 OCR し、OCR 確認画面の「GLM → UniMERNet」置換を見る。

@@ -1,0 +1,49 @@
+# Google Colab（CUDA）向け。Mac の config.yaml は変更しない。
+# ノートブックは APP_CONFIG_FILE=config.colab.yaml を設定してこれを読む。
+# GPU ごとのモデル差（A100 / L4 / T4）は `python -m src gpu-profile --write-env .env`
+# が .env に書き、ここより優先される。
+runtime:
+  device: colab_gpu
+  use_omlx: true
+
+ocr:
+  provider: glmocr_sdk
+  model_name: zai-org/GLM-OCR
+  api:
+    host: 127.0.0.1
+    port: 8080
+    layout_device: cuda
+  formula:
+    enabled: true
+    model_name: wanderkid/unimernet_small
+    base_url: http://127.0.0.1:8091
+
+omlx:
+  base_url: http://127.0.0.1:8000/v1
+  api_key: local
+
+models:
+  diagnosis:
+    provider: colab_cuda
+    model_name: Qwen3.8-27B-bnb4
+
+services:
+  mode: managed
+  exclusive_gpu: true
+  startup_timeout_sec: 1800
+  glm_ocr:
+    model_id: zai-org/GLM-OCR
+  llm:
+    port: 8000
+    model_id: unsloth/Qwen3.8-27B-unsloth-bnb-4bit
+    quantization: bnb4
+    max_new_tokens: 2048
+
+comparison:
+  ratio_threshold: 0.2
+  abs_threshold:
+  recheck_mode: blind
+
+safety:
+  require_anonymization: true
+  store_raw_images_locally: true

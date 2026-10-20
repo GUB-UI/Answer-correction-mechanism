@@ -13,3 +13,8 @@
 - The tool is a client that POSTs to `{base_url}/chat/completions` (default `http://localhost:1234/v1`). The cloud VM has **no GPU-backed LLM / LM Studio**, so the default run cannot reach a real backend.
 - To exercise the pipeline end-to-end without LM Studio, run any OpenAI-compatible mock that handles `POST /v1/chat/completions` on port 1234 and point the CLI at it (`--base-url http://127.0.0.1:1234/v1`). The pipeline calls OCR first (request contains an `image_url` content part) and grading second (request asks for a JSON object); a mock can branch on the presence of an `image_url` part to return OCR text vs. a JSON grade object.
 - All config is via CLI flags or env vars (`LM_STUDIO_BASE_URL`, `LM_STUDIO_OCR_MODEL`, `LM_STUDIO_LLM_MODEL`, `LM_STUDIO_IMAGE_URL_FORMAT`, `LM_STUDIO_MAX_IMAGE_EDGE`). There is no `.env` file. Request timeout is hardcoded to 600s.
+
+### math-answer-diagnosis (Streamlit app, including the Colab path)
+- Tests live in `math-answer-diagnosis/tests`. Run `python3 -m pytest -q` from that directory. Deps are `math-answer-diagnosis/requirements.txt` (streamlit, pandas, pydantic, openai, pytest, pillow, pyyaml, python-dotenv).
+- Colab/CUDA code (`scripts/llm_server.py`, `scripts/glmocr_server.py`, `SERVICE_MODE=managed`) needs an NVIDIA GPU and the model weights. This cloud VM has no GPU, so do not treat a failed GPU load as a code failure. CPU smoke tests may use `Qwen/Qwen3.5-0.8B` with `--quantization none` only as a wiring check; that result is not a 27B grade.
+- Default `SERVICE_MODE` is `external`, so the Mac/oMLX path and the mock tests do not start model servers.

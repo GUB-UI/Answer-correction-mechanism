@@ -57,16 +57,103 @@ def _extract_markdown(result: Any) -> tuple[str, dict[str, Any]]:
     return markdown.strip(), raw
 
 
+def refine_markdown_with_unimernet(
+    image_path: Path,
+    markdown: str,
+    parsed: dict[str, Any],
+    client: UniMERNetClient,
+) -> tuple[str, list[dict[str, Any]]]:
+    """GLM-OCR のレイアウト結果のうち数式・数字領域を UniMERNet で読み直す。"""
+    if not client.health():
+        return markdown, [{"skipped": "unimernet_unavailable"}]
+
+    from copy import deepcopy
+
+    from PIL import Image
+
+    source = parsed.get("json_result")
+    pages = _as_pages(source)
+    if not pages:
+        return markdown, []
+
+    image = Image.open(image_path).convert("RGB")
+    replacements: list[dict[str, Any]] = []
+    updated_pages: list[list[dict[str, Any]]] = []
+    for page in pages:
+        updated_page: list[dict[str, Any]] = []
+        for block in page:
+            block = deepcopy(block)
+            if region_prefers_unimernet(block):
+                crop = crop_region(image, block_bbox(block))
+                if crop is not None:
+                    # 再実行時は GLM の元テキストを基準にする。
+                    glm_content = str(block.get("glm_content") or block.get("content") or "")
+                    block["content"] = glm_content
+                    try:
+                        latex = client.predict_image(crop)
+                        if not latex_is_plausible(latex):
+                            replacements.append(
+                                {
+                                    "label": block.get("label"),
+                                    "native_label": block.get("native_label"),
+                                    "glm": glm_content,
+                                    "skipped": "unimernet_implausible",
+                                    "unimernet_raw": latex,
+                                }
+                            )
+                        else:
+                            block["content"] = merge_region_content(block, latex)
+                            block["glm_content"] = glm_content
+                            replacements.append(
+                                {
+                                    "label": block.get("label"),
+                                    "native_label": block.get("native_label"),
+                                    "glm": glm_content,
+                                    "unimernet": latex,
+                                }
+                            )
+                    except Exception as exc:
+                        replacements.append(
+                            {
+                                "label": block.get("label"),
+                                "error": str(exc),
+                            }
+                        )
+            updated_page.append(block)
+        updated_pages.append(updated_page)
+    if any("unimernet" in item for item in replacements):
+        parsed["json_result"] = updated_pages
+        parsed.setdefault("glm_markdown_result", markdown)
+        markdown = rebuild_markdown(updated_pages)
+    return markdown, replacements
+
+
+def _ensure_service(config: AppConfig, name: str) -> None:
+    from src.runtime.services import get_service_manager
+
+    get_service_manager(config).ensure(name)
+
+
 class GLMOCRSdkAdapter(OCRAdapter):
-    """GLM-OCR + UniMERNet Small。日本語・文書は GLM、数字・数式は UniMERNet を優先する。"""
+    """GLM-OCR + UniMERNet Small。日本語・文書は GLM、数字・数式は UniMERNet を優先する。
+
+    apply_formula=False にすると GLM-OCR だけを実行する（一括実行で GPU を
+    GLM-OCR → UniMERNet の順に切り替えるため）。数式の置換は
+    ``refine_ocr_result_with_unimernet`` で後から行える。
+    """
 
     def __init__(
         self,
         config: AppConfig | None = None,
         formula_client: UniMERNetClient | None = None,
+        *,
+        apply_formula: bool | None = None,
     ) -> None:
         self.config = config or load_config()
         self.formula_client = formula_client
+        self.apply_formula = (
+            self.config.formula.enabled if apply_formula is None else apply_formula
+        )
 
     def run(self, context: OCRRunContext) -> OCRResult:
         raw_text, raw_output = self._run_via_sdk(context)
@@ -93,9 +180,10 @@ class GLMOCRSdkAdapter(OCRAdapter):
 
     def _run_via_sdk(self, context: OCRRunContext) -> tuple[str, dict[str, Any]]:
         try:
+            _ensure_service(self.config, "glm_ocr")
             raw_text, parsed = self._invoke_sdk(context.image_path)
             replacements: list[dict[str, Any]] = []
-            if self.config.formula.enabled:
+            if self.apply_formula:
                 raw_text, replacements = self._prefer_unimernet_math(
                     context.image_path,
                     raw_text,
@@ -108,6 +196,7 @@ class GLMOCRSdkAdapter(OCRAdapter):
                 "image_path": str(context.image_path),
                 "result": parsed,
                 "formula_replacements": replacements,
+                "formula_applied": bool(self.apply_formula),
             }
             return raw_text, raw_output
         except Exception as exc:
@@ -119,7 +208,9 @@ class GLMOCRSdkAdapter(OCRAdapter):
         kwargs: dict[str, Any] = {
             "mode": "selfhosted",
             "model": self.config.ocr.model_name,
-            "layout_device": "cpu",
+            "layout_device": self.config.ocr_api.layout_device,
+            "ocr_api_host": self.config.ocr_api.host,
+            "ocr_api_port": self.config.ocr_api.port,
         }
         if config_path.is_file():
             kwargs["config_path"] = str(config_path)
@@ -136,66 +227,72 @@ class GLMOCRSdkAdapter(OCRAdapter):
         markdown: str,
         parsed: dict[str, Any],
     ) -> tuple[str, list[dict[str, Any]]]:
+        _ensure_service(self.config, "unimernet")
         client = self.formula_client or UniMERNetClient(self.config.formula.base_url)
-        if not client.health():
-            return markdown, [{"skipped": "unimernet_unavailable"}]
+        return refine_markdown_with_unimernet(image_path, markdown, parsed, client)
 
-        from copy import deepcopy
 
-        from PIL import Image
+def refine_ocr_result_with_unimernet(
+    ocr_result: OCRResult,
+    config: AppConfig,
+    client: UniMERNetClient | None = None,
+) -> OCRResult:
+    """保存済み GLM-OCR 結果に UniMERNet の数式置換を後から適用した新しい OCRResult を返す。
 
-        pages = _as_pages(parsed.get("json_result"))
-        if not pages:
-            return markdown, []
+    人が修正済み（human_corrected）の used_text は上書きしない。
+    """
+    _ensure_service(config, "unimernet")
+    formula_client = client or UniMERNetClient(config.formula.base_url)
+    raw_output = dict(ocr_result.raw_output or {})
+    pages = raw_output.get("pages")
+    page_outputs: list[dict[str, Any]] = (
+        [dict(page) for page in pages if isinstance(page, dict)]
+        if isinstance(pages, list)
+        else [raw_output]
+    )
+    texts: list[str] = []
+    any_replaced = False
+    for page in page_outputs:
+        parsed = page.get("result") if isinstance(page.get("result"), dict) else {}
+        image_value = page.get("image_path")
+        if not parsed or not image_value:
+            continue
+        image_path = config.resolve_path(str(image_value))
+        base_markdown = str(
+            parsed.get("glm_markdown_result") or parsed.get("markdown_result") or ""
+        )
+        markdown, replacements = refine_markdown_with_unimernet(
+            image_path, base_markdown, parsed, formula_client
+        )
+        page["result"] = parsed
+        page["formula_replacements"] = replacements
+        page["formula_applied"] = True
+        any_replaced = any_replaced or any("unimernet" in item for item in replacements)
+        texts.append(markdown)
 
-        image = Image.open(image_path).convert("RGB")
-        replacements: list[dict[str, Any]] = []
-        updated_pages: list[list[dict[str, Any]]] = []
-        for page in pages:
-            updated_page: list[dict[str, Any]] = []
-            for block in page:
-                block = deepcopy(block)
-                if region_prefers_unimernet(block):
-                    crop = crop_region(image, block_bbox(block))
-                    if crop is not None:
-                        try:
-                            latex = client.predict_image(crop)
-                            glm_content = str(block.get("content") or "")
-                            if not latex_is_plausible(latex):
-                                replacements.append(
-                                    {
-                                        "label": block.get("label"),
-                                        "native_label": block.get("native_label"),
-                                        "glm": glm_content,
-                                        "skipped": "unimernet_implausible",
-                                        "unimernet_raw": latex,
-                                    }
-                                )
-                            else:
-                                block["content"] = merge_region_content(block, latex)
-                                block["glm_content"] = glm_content
-                                replacements.append(
-                                    {
-                                        "label": block.get("label"),
-                                        "native_label": block.get("native_label"),
-                                        "glm": glm_content,
-                                        "unimernet": latex,
-                                    }
-                                )
-                        except Exception as exc:
-                            replacements.append(
-                                {
-                                    "label": block.get("label"),
-                                    "error": str(exc),
-                                }
-                            )
-                updated_page.append(block)
-            updated_pages.append(updated_page)
-        if any("unimernet" in item for item in replacements):
-            parsed["json_result"] = updated_pages
-            parsed["glm_markdown_result"] = markdown
-            markdown = rebuild_markdown(updated_pages)
-        return markdown, replacements
+    if not texts:
+        return ocr_result
+    if len(texts) > 1:
+        combined = "\n\n".join(
+            f"## 画像{index}\n{text}" for index, text in enumerate(texts, start=1)
+        ).strip()
+    else:
+        combined = texts[0].strip()
+    if isinstance(pages, list):
+        raw_output["pages"] = page_outputs
+    else:
+        raw_output = page_outputs[0]
+    engine = ocr_result.ocr_engine
+    if any_replaced and "unimernet" not in engine:
+        engine = f"{engine}+unimernet_small"
+    return ocr_result.model_copy(
+        update={
+            "raw_text": combined,
+            "used_text": ocr_result.used_text if ocr_result.human_corrected else combined,
+            "raw_output": raw_output,
+            "ocr_engine": engine,
+        }
+    )
 
 
 class ManualCorrectionOCRAdapter:

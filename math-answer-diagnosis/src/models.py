@@ -45,6 +45,8 @@ class ProblemRecord(BaseModel):
     combined_image_paths: list[str] = Field(default_factory=list)
     problem_ocr_ids: list[str] = Field(default_factory=list)
     model_ocr_ids: list[str] = Field(default_factory=list)
+    # 設問ごとの配点 [{"question": "(1)", "max_score": 5}]。教師採点の取り込みでも設定できる。
+    score_allocation: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnswerRecord(BaseModel):
@@ -113,7 +115,50 @@ class DiagnosisResult(BaseModel):
     confidence: float
     raw_output: dict[str, Any] = Field(default_factory=dict)
     created_at: str
+    # [{"question": "(1)", "score": 3, "max_score": 5, "reason": "..."}]
+    question_scores: list[dict[str, Any]] = Field(default_factory=list)
 
+
+class TeacherGradeRecord(BaseModel):
+    """教師による採点結果（設問単位）。question が空なら答案全体の合計点。"""
+
+    teacher_grade_id: str
+    student_anonymized_id: str
+    problem_id: str
+    question: str = ""
+    teacher_score: float
+    max_score: float | None = None
+    teacher_comment: str = ""
+    grader: str = ""
+    source_file: str = ""
+    imported_at: str
+
+
+class GradeDiscrepancy(BaseModel):
+    """教師採点とシステム採点の差が閾値を超えた項目のログ。"""
+
+    discrepancy_id: str
+    comparison_key: str
+    student_anonymized_id: str
+    problem_id: str
+    question: str = ""
+    teacher_grade_id: str
+    answer_id: str
+    diagnosis_id: str
+    ocr_id: str = ""
+    teacher_score: float
+    system_score: float
+    max_score: float | None = None
+    diff: float
+    ratio_diff: float | None = None
+    possible_ocr_issue: bool = False
+    ocr_human_corrected: bool = False
+    system_reasoning: str = ""
+    teacher_comment: str = ""
+    status: str = "open"
+    recheck: dict[str, Any] | None = None
+    detected_at: str
+    updated_at: str = ""
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()

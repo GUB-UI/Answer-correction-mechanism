@@ -1,0 +1,9 @@
+# Colab の GPU 版 PyTorch はランタイムに入っているので、ここでは入れ直さない。
+# torch が 2.10 未満だと glmocr[selfhosted] が引き上げることがある。
+-r requirements.txt
+transformers>=5.3.0
+accelerate>=1.0
+bitsandbytes>=0.45
+sentencepiece
+huggingface_hub
+glmocr[selfhosted]

@@ -11,6 +11,7 @@ from src.sources import (
     split_problem_and_solution,
 )
 from src.ui_common import (
+    require_password,
     answer_label,
     get_config,
     get_storage,
@@ -23,6 +24,7 @@ from src.ui_common import (
 OCR_PROVIDERS = ["mock", "glmocr_sdk"]
 
 st.set_page_config(page_title="OCR実行", layout="wide")
+require_password()
 st.title("OCR実行")
 st.caption("答案画像だけでなく、問題文・模範解答の画像もここでテキスト化できます。数字・数式は UniMERNet Small を優先します。")
 
@@ -35,7 +37,7 @@ provider = st.selectbox(
     "OCR provider",
     options=OCR_PROVIDERS,
     index=provider_index(OCR_PROVIDERS, config.ocr.provider),
-    help="本番は glmocr_sdk（日本語は GLM-OCR、数字・数式は UniMERNet Small）。障害時のみ mock。",
+    help="Mac も Colab も glmocr_sdk。Colab では GPU 上の scripts/glmocr_server.py に接続します。障害時のみ mock。",
 )
 ocr_engine = config.ocr.model_name if provider == "glmocr_sdk" else "mock"
 

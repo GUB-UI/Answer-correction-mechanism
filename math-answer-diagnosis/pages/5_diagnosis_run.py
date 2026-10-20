@@ -8,6 +8,7 @@ from src.models import utc_now_iso
 from src.prompts import DIAGNOSIS_PROMPTS
 from src.sources import student_ocr_results
 from src.ui_common import (
+    require_password,
     get_config,
     get_storage,
     ocr_label,
@@ -17,9 +18,10 @@ from src.ui_common import (
     show_problem_images,
 )
 
-DIAGNOSIS_PROVIDERS = ["mock", "omlx"]
+DIAGNOSIS_PROVIDERS = ["mock", "omlx", "colab_cuda"]
 
 st.set_page_config(page_title="診断実行", layout="wide")
+require_password()
 st.title("診断実行")
 
 storage = get_storage()
@@ -75,7 +77,7 @@ provider = st.selectbox(
     "診断 provider",
     options=DIAGNOSIS_PROVIDERS,
     index=provider_index(DIAGNOSIS_PROVIDERS, config.diagnosis.provider),
-    help="本番は omlx（Qwen3.8-27B-oQ4e-mtp + Lightning MTP）です。障害時のみ mock に切り替えてください。",
+    help="Mac は omlx（Qwen3.8-27B MLX）。Colab は colab_cuda（Qwen3.8-27B 4bit / CUDA）。障害時のみ mock。",
 )
 prompt_type = st.selectbox(
     "prompt_type",

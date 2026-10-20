@@ -8,6 +8,53 @@ from src.models import DiagnosisResult, utc_now_iso
 from src.utils import extract_json_object
 
 
+def _to_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_question_scores(value: Any) -> list[dict[str, Any]]:
+    """LLM 出力の question_scores を {question, score, max_score, reason} の配列に整える。"""
+    if isinstance(value, dict):
+        value = [
+            {"question": key, **(item if isinstance(item, dict) else {"score": item})}
+            for key, item in value.items()
+        ]
+    if not isinstance(value, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        score = _to_float(item.get("score"))
+        if score is None:
+            continue
+        question = str(item.get("question") or item.get("label") or "").strip()
+        if not question:
+            continue
+        items.append(
+            {
+                "question": question,
+                "score": score,
+                "max_score": _to_float(item.get("max_score")),
+                "reason": str(item.get("reason") or ""),
+            }
+        )
+    return items
+
+
+def format_score_allocation(allocation: list[dict[str, Any]]) -> str:
+    lines = []
+    for item in allocation:
+        question = str(item.get("question") or "").strip()
+        max_score = _to_float(item.get("max_score"))
+        if question and max_score is not None:
+            lines.append(f"{question}: {max_score:g}点")
+    return "\n".join(lines)
+
+
 def build_diagnosis_result(
     context: DiagnosisRunContext,
     raw_output: dict[str, Any],
@@ -34,6 +81,7 @@ def build_diagnosis_result(
         confidence=float(raw_output.get("confidence", 0.0)),
         raw_output=raw_output,
         created_at=created_at or utc_now_iso(),
+        question_scores=normalize_question_scores(raw_output.get("question_scores")),
     )
 
 

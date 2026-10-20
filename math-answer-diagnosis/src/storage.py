@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -12,8 +13,10 @@ from src.config import AppConfig, load_config
 from src.models import (
     AnswerRecord,
     DiagnosisResult,
+    GradeDiscrepancy,
     OCRResult,
     ProblemRecord,
+    TeacherGradeRecord,
 )
 from src.sources import suffix_for_upload
 
@@ -24,6 +27,8 @@ RECORD_FILES = {
     "answers": "answers.jsonl",
     "ocr_results": "ocr_results.jsonl",
     "diagnosis_results": "diagnosis_results.jsonl",
+    "teacher_grades": "teacher_grades.jsonl",
+    "grade_discrepancies": "grade_discrepancies.jsonl",
 }
 
 
@@ -52,7 +57,7 @@ class Storage:
         image_id = self.generate_id("img")
         path = self.config.images_dir / f"{image_id}{ext}"
         path.write_bytes(image_bytes)
-        return str(path.relative_to(self.config.project_root))
+        return self.config.to_stored_path(path)
 
     def save_answer_image(
         self,
@@ -63,7 +68,7 @@ class Storage:
         ext = extension if extension.startswith(".") else f".{extension}"
         path = self.config.images_dir / f"{answer_id}{ext}"
         path.write_bytes(image_bytes)
-        return str(path.relative_to(self.config.project_root))
+        return self.config.to_stored_path(path)
 
     @staticmethod
     def _append_jsonl(path: Path, payload: dict) -> None:
@@ -85,9 +90,14 @@ class Storage:
 
     @staticmethod
     def _write_jsonl(path: Path, rows: list[dict]) -> None:
-        with path.open("w", encoding="utf-8") as f:
+        # Colab のセッション切断や Drive 同期中に途中までの書き込みが残らないよう置換で書く。
+        tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
             for row in rows:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
 
     def _load_models(self, record_type: str, model_cls: type[T]) -> list[T]:
         rows = self._read_jsonl(self._record_path(record_type))
@@ -201,6 +211,57 @@ class Storage:
         return [
             r for r in self.list_diagnosis_results() if r.answer_id == answer_id
         ]
+
+    def _upsert(self, record_type: str, key_field: str, model: BaseModel) -> None:
+        path = self._record_path(record_type)
+        rows = self._read_jsonl(path)
+        payload = model.model_dump()
+        for index, row in enumerate(rows):
+            if row.get(key_field) == payload[key_field]:
+                rows[index] = payload
+                self._write_jsonl(path, rows)
+                return
+        self._append_jsonl(path, payload)
+
+    def save_teacher_grades(
+        self,
+        grades: list[TeacherGradeRecord],
+        *,
+        replace_existing: bool = True,
+    ) -> list[TeacherGradeRecord]:
+        """教師採点を保存する。replace_existing なら同じ (生徒, 問題, 設問) の旧データを置き換える。"""
+        path = self._record_path("teacher_grades")
+        rows = self._read_jsonl(path)
+        if replace_existing:
+            from src.teacher_compare import normalize_question_label
+
+            new_keys = {
+                (g.student_anonymized_id, g.problem_id, normalize_question_label(g.question))
+                for g in grades
+            }
+            rows = [
+                row
+                for row in rows
+                if (
+                    row.get("student_anonymized_id"),
+                    row.get("problem_id"),
+                    normalize_question_label(str(row.get("question", ""))),
+                )
+                not in new_keys
+            ]
+        rows.extend(g.model_dump() for g in grades)
+        self._write_jsonl(path, rows)
+        return grades
+
+    def list_teacher_grades(self) -> list[TeacherGradeRecord]:
+        return self._load_models("teacher_grades", TeacherGradeRecord)
+
+    def save_discrepancy(self, discrepancy: GradeDiscrepancy) -> GradeDiscrepancy:
+        self._upsert("grade_discrepancies", "discrepancy_id", discrepancy)
+        return discrepancy
+
+    def list_discrepancies(self) -> list[GradeDiscrepancy]:
+        return self._load_models("grade_discrepancies", GradeDiscrepancy)
 
 
 def validate_anonymized_id(student_id: str) -> str:

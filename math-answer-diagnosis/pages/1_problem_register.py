@@ -4,9 +4,10 @@ import streamlit as st
 
 from src.models import DEFAULT_RUBRIC, ProblemRecord, utc_now_iso
 from src.sources import IMAGE_UPLOAD_TYPES, infer_input_kind
-from src.ui_common import get_storage, show_problem_images
+from src.ui_common import require_password, get_storage, show_problem_images
 
 st.set_page_config(page_title="問題登録", layout="wide")
+require_password()
 st.title("問題登録")
 st.caption("テキストだけ、画像だけ、または混在で登録できます。画像の読み取りは「OCR実行」でも行えます。")
 

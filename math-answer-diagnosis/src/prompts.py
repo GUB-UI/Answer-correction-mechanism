@@ -16,7 +16,9 @@ OCRに誤読が含まれる可能性があります。
 問題文、模範解答、採点基準、OCR結果をもとに、採点・誤り分類・フィードバックを作成してください。
 AI診断は教師確認前の下書きであり、最終判断ではありません。
 思考過程や前置きは出さず、JSONオブジェクトのみを返してください。
-reasoning_summary / student_feedback / teacher_review_notes は各1文にしてください。"""
+reasoning_summary / student_feedback / teacher_review_notes は各1文にしてください。
+設問が複数ある場合（(1)(2) など）は question_scores に設問ごとの得点を入れ、score はその合計にしてください。
+配点が与えられている場合は、その配点を max_score として使ってください。"""
 
 DIAGNOSIS_OUTPUT_SCHEMA = """{
   "score": 3,
@@ -32,7 +34,11 @@ DIAGNOSIS_OUTPUT_SCHEMA = """{
   "student_feedback": "方針はよいので、符号と式変形を一行ずつ確認しましょう。",
   "teacher_review_notes": "2行目の符号が不自然なため、OCR誤りの可能性があります。",
   "possible_ocr_issue": true,
-  "confidence": 0.68
+  "confidence": 0.68,
+  "question_scores": [
+    {"question": "(1)", "score": 2, "max_score": 2, "reason": "正しく解けている"},
+    {"question": "(2)", "score": 1, "max_score": 3, "reason": "2行目に計算ミス"}
+  ]
 }"""
 
 DIAGNOSIS_PROMPTS: dict[str, str] = {
@@ -61,6 +67,16 @@ DIAGNOSIS_PROMPTS: dict[str, str] = {
         "教師確認が必要な点を teacher_review_notes に重点的に記録してください。\n"
         f"出力形式:\n{DIAGNOSIS_OUTPUT_SCHEMA}"
     ),
+    "recheck": (
+        f"{DIAGNOSIS_COMMON_INSTRUCTION}\n"
+        "これは再チェックです。前回のAI採点は教師採点と大きく食い違いました。\n"
+        "前回の結果を鵜呑みにせず、途中式を1行ずつ検算し、採点基準と配点に照らして改めて採点してください。\n"
+        "食い違いの原因が OCR の誤読らしい場合は possible_ocr_issue を true にし、"
+        "どの行が疑わしいかを teacher_review_notes に書いてください。"
+        "OCR結果を推測で書き換えて採点してはいけません。\n"
+        f"出力形式:\n{DIAGNOSIS_OUTPUT_SCHEMA}"
+    ),
 }
 
+RECHECK_PROMPT_TYPE = "recheck"
 DEFAULT_DIAGNOSIS_PROMPT_TYPE = "basic_scoring"
