@@ -24,9 +24,11 @@ if ! python3 -m uv --version >/dev/null 2>&1; then
   python3 -m pip install -q uv
 fi
 UNIMERNET_VENV="${ROOT}/.venv-unimernet"
-if [[ ! -x "${UNIMERNET_VENV}/bin/python" ]]; then
-  rm -rf "${UNIMERNET_VENV}"
-  python3 -m uv venv --python 3.12 "${UNIMERNET_VENV}"
+# ディレクトリが既にあると uv venv は置き換え確認で入力待ちになる。Colab ではそこで止まる。
+if [[ -x "${UNIMERNET_VENV}/bin/python" ]]; then
+  python3 -m uv venv --allow-existing --python 3.12 "${UNIMERNET_VENV}"
+else
+  python3 -m uv venv --clear --force --python 3.12 "${UNIMERNET_VENV}"
 fi
 UV_PIP=(python3 -m uv pip install --python "${UNIMERNET_VENV}/bin/python")
 if [[ "${UNIMERNET_TORCH:-cpu}" == "cuda" ]]; then
