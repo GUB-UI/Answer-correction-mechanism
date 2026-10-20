@@ -1,47 +1,35 @@
-"""高校数学答案 OCR・診断LLMパイプライン — ホーム"""
+"""Local answer-correction workspace with task-oriented navigation."""
+from pathlib import Path
 
 import streamlit as st
 
-from src.ui_common import get_config, get_storage
+from src.ui_theme import apply_theme
 
-st.set_page_config(page_title="高校数学答案診断", layout="wide")
-st.title("高校数学答案 OCR・診断LLMパイプライン")
-st.caption("研究用MVP — 問題登録から診断結果確認まで")
+st.set_page_config(page_title="答案ワークスペース", page_icon="✦", layout="wide")
+apply_theme()
 
-storage = get_storage()
-config = get_config()
-
-problems = storage.list_problems()
-answers = storage.list_answers()
-ocr_results = storage.list_ocr_results()
-diagnosis_results = storage.list_diagnosis_results()
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("登録問題数", len(problems))
-col2.metric("登録答案数", len(answers))
-col3.metric("OCR結果数", len(ocr_results))
-col4.metric("診断結果数", len(diagnosis_results))
-
-st.subheader("現在の設定")
-setting_col1, setting_col2 = st.columns(2)
-setting_col1.info(
-    f"**OCR provider:** `{config.ocr.provider}`  \n"
-    f"**OCR model:** `{config.ocr.model_name}`  \n"
-    f"**数式:** `{'UniMERNet Small' if config.formula.enabled else 'off'}`"
-)
-setting_col2.info(
-    f"**診断 provider:** `{config.diagnosis.provider}`  \n"
-    f"**診断 model:** `{config.diagnosis.model_name}`"
-)
-
-st.subheader("使い方")
-st.markdown(
-    """
-1. **セット登録** — 問題・模範・答案をテキスト/画像/混在でまとめて登録（推奨）
-2. **問題登録 / 答案登録** — 個別に追加・補完する場合
-3. **OCR実行** — 答案画像、および問題・模範の画像をテキスト化
-4. **OCR確認・修正** — 手書きの誤読が疑われる場合に `used_text` を直す
-5. **診断実行** — `used_text` をもとに採点・フィードバックを生成
-6. **診断結果確認** — 結果の確認と CSV エクスポート
-"""
-)
+ROOT = Path(__file__).resolve().parent
+sections = {
+    "資料の管理": [
+        st.Page(ROOT / "pages/0_set_register.py", title="資料を登録", icon=":material/add_circle:", default=True),
+        st.Page(ROOT / "pages/1_problem_register.py", title="問題ライブラリ", icon=":material/library_books:"),
+        st.Page(ROOT / "pages/2_answer_register.py", title="生徒の解答", icon=":material/edit_document:"),
+    ],
+    "確認・診断": [
+        st.Page(ROOT / "pages/3_ocr_run.py", title="画像の読み取り", icon=":material/document_scanner:"),
+        st.Page(ROOT / "pages/4_ocr_review.py", title="読み取りを確認", icon=":material/fact_check:"),
+        st.Page(ROOT / "pages/5_diagnosis_run.py", title="答案を診断", icon=":material/psychology:"),
+        st.Page(ROOT / "pages/6_diagnosis_viewer.py", title="診断結果", icon=":material/insert_chart:"),
+    ],
+}
+navigation = st.navigation(sections, position="hidden")
+with st.sidebar:
+    st.html('<div class="ac-brand"><span class="ac-brand-mark">✦</span><strong>答案ワークスペース</strong></div>'
+            '<p class="ac-brand-sub">ANSWER CORRECTION</p>')
+    for label, pages in sections.items():
+        st.html(f'<div class="ac-nav-section">{label}</div>')
+        for page in pages:
+            st.page_link(page)
+    st.html('<div class="ac-local-note"><span>◈ ローカルAIを使用</span><br>'
+            '資料の整理から、学びの振り返りまで。</div>')
+navigation.run()

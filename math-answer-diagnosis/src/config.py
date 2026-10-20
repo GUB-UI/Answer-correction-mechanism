@@ -39,6 +39,7 @@ class AppConfig:
     require_anonymization: bool
     store_raw_images_locally: bool
     project_root: Path
+    tagging_model_name: str = ""
 
     @property
     def data_dir(self) -> Path:
@@ -164,6 +165,10 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             True,
         ),
         project_root=root,
+        tagging_model_name=_env_override(
+            "TAGGING_MODEL_NAME",
+            _env_override("DIAGNOSIS_MODEL_NAME", str(diagnosis.get("model_name", "local-diagnosis-model"))),
+        ),
     )
 
 
