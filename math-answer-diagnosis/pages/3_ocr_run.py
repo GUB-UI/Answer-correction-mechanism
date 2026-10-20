@@ -81,7 +81,9 @@ with tab_answer:
                 "再実行すると新しい結果が追加されます。"
             )
 
-        if st.button("答案OCRを実行", type="primary"):
+        if answer.tagging_metadata:
+            st.info("この答案は自動タグ付けで資料から抽出済みです。内容の修正は「OCR確認・修正」、画像からの再解析は「セット登録」で行ってください。")
+        if st.button("答案OCRを実行", type="primary", disabled=bool(answer.tagging_metadata)):
             try:
                 result = _run_ocr(
                     "student_answer",
@@ -123,7 +125,9 @@ with tab_problem:
             "空のテキストだけ埋める（既存テキストは上書きしない）",
             value=True,
         )
-        if st.button("問題・模範OCRを実行", type="primary"):
+        if problem.tagging_metadata:
+            st.info("この問題は自動タグ付けで資料から抽出済みです。問題と解答を分離して再解析する場合は「セット登録」を使ってください。")
+        if st.button("問題・模範OCRを実行", type="primary", disabled=bool(problem.tagging_metadata)):
             try:
                 updated = problem
                 for source_kind, paths in problem_ocr_targets(problem):

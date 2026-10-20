@@ -17,6 +17,7 @@ ERROR_CATEGORIES = [
 
 INPUT_KINDS = ("text", "image", "mixed")
 OCR_SOURCE_KINDS = (
+    "intake_document",
     "student_answer",
     "problem",
     "model_answer",
@@ -45,6 +46,7 @@ class ProblemRecord(BaseModel):
     combined_image_paths: list[str] = Field(default_factory=list)
     problem_ocr_ids: list[str] = Field(default_factory=list)
     model_ocr_ids: list[str] = Field(default_factory=list)
+    tagging_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerRecord(BaseModel):
@@ -56,6 +58,7 @@ class AnswerRecord(BaseModel):
     image_paths: list[str] = Field(default_factory=list)
     typed_text: str | None = None
     input_kind: str = "image"
+    tagging_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def sync_image_paths(self) -> AnswerRecord:
