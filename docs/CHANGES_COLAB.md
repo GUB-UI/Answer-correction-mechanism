@@ -112,6 +112,27 @@ commit `656259d` の CLI 実行で分かったことと、このブランチで�
 
 A100 40GB では Qwen 27B の 4bit が約 20GiB、ピーク 22.3GB、答案1件あたり約 45〜50 秒だった。
 
+## 追記: 手書き OCR を Xiaomi-OCR-0 にし、A100 掃引の5件を直した
+
+A100 掃引（commit `3618410`、UniMERNet オンは本文が壊れ、オフでも GLM の読みは採点に足りない）のあと。呼称「xiaomi ocr 0」に一致する Hugging Face のモデルは `SeerRay-Lab/Xiaomi-OCR-0`（Apache-2.0、Qwen3.5-0.8B ベース、2026-09 公開）。MiMo-VL は別の汎用 VLM なので使っていない。この環境に GPU は無く、手書き答案での精度は測っていない。
+
+公式の文書プロンプトは英語で、本文を Markdown、数式を LaTeX、表を OTSL にする。採点は Markdown を読むので、プロンプトは日本語にし、表は Markdown、数式は LaTeX、日本語を中国語に翻訳しない、と指定した。手書きは公式どおりページ全体を渡し、領域では切らない。0.8B は Qwen 27B 4bit（約 20〜22GB）と同時には載せず、これまでどおりプロセスを1つずつ切り替える。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `scripts/xiaomi_ocr_server.py` | `SeerRay-Lab/Xiaomi-OCR-0` の OpenAI 互換サーバー。ページ全体を greedy で読む。拡大は `XIAOMI_OCR_MIN_EDGE` が無い限りしない。 |
+| `src/runtime/colab_env.py`、`config.colab.yaml` | Colab の既定を `OCR_PROVIDER=xiaomi_ocr`、`OCR_MODEL_NAME=SeerRay-Lab/Xiaomi-OCR-0`、`UNIMERNET_ENABLED=false` にした。GLM-OCR は `glmocr_sdk` のまま残す。 |
+| `src/config.py`、`src/runtime/services.py` | `xiaomi_ocr` サービスを追加。`exclusive_gpu` では他の GPU プロセスを止めてから起動する。ポートは GLM と同じ 8081（使用中なら次の空き）。 |
+| `src/adapters/ocr_adapter.py`、`src/prompts.py` | `XiaomiOCRAdapter`。日本語プロンプトで Markdown / LaTeX を受け取る。 |
+| `src/batch_pipeline.py`、`pages/3_ocr_run.py`、`src/__main__.py` | 一括処理・画面・`services` から Xiaomi を選べるようにした。 |
+| `requirements-colab.txt` | transformers の下限を 5.17 にした。Xiaomi は `Qwen3_5ForConditionalGeneration` が要る。torch は入れ直さない。 |
+| `src/adapters/formula_merge.py` | 複数行や縦に長い領域は UniMERNet に渡さない。出力が元の式より長すぎる、短い、新しいギリシャ文字、複数行の array なら捨てて元の OCR を残す。 |
+| `src/adapters/ocr_adapter.py` の `refine_ocr_result_with_unimernet` | 置換後に `formula_summary` を数え直す。以前は `replaced: 0` のままだった。 |
+| `src/adapters/ocr_quality.py`、`src/ocr_runner.py` | 中国語の定型（最小值、当且仅当、解得 など）、同じ行の繰り返し、UniMERNet との大きな不一致で `ocr_suspect` を立てる。画像をまとめるときにフラグを消さない。 |
+| `src/adapters/diagnosis_helpers.py`、`src/prompts.py`、`src/models.py` | `question_scores` が空なら配点から行を作る。満点なら各設問を満点、途中点なら配点比。`possible_ocr_issue` で合計が 0 かつ設問点も無いときは 0 点で確定せず、`review_status=needs_teacher_review`。設問に部分点があるのに合計が 0 のときは部分点の合計を使う。 |
+
+GLM-OCR に戻す環境変数は `OCR_PROVIDER=glmocr_sdk` と `OCR_MODEL_NAME=zai-org/GLM-OCR`。UniMERNet を試すときは `UNIMERNET_ENABLED=true`。
+
 ## 実機で確認していないこと
 
 A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み込みと採点時間まで確認した。次は未確認。
@@ -121,3 +142,4 @@ A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み�
 - Google Drive への書き込み
 - UniMERNet が手書きの数式を実際に良く読めるか
 - `GLMOCR_MIN_EDGE` などを変えたときの読み取り品質
+- `SeerRay-Lab/Xiaomi-OCR-0` を A100 に載せたときの VRAM と、この手書き答案での読み取り精度

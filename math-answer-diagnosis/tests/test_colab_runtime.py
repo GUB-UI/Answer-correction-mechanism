@@ -21,7 +21,9 @@ def test_colab_env_replaces_mac_dotenv_values(tmp_path: Path) -> None:
     )
     update_env_file(path, COLAB_ENV)
     text = path.read_text(encoding="utf-8")
-    assert "OCR_MODEL_NAME=zai-org/GLM-OCR" in text
+    assert "OCR_PROVIDER=xiaomi_ocr" in text
+    assert "OCR_MODEL_NAME=SeerRay-Lab/Xiaomi-OCR-0" in text
+    assert "UNIMERNET_ENABLED=false" in text
     assert "DIAGNOSIS_PROVIDER=colab_cuda" in text
     assert "OCR_API_PORT=8081" in text
     assert "mlx-community" not in text
@@ -71,6 +73,109 @@ def test_question_scores_drop_total_and_unknown_ids() -> None:
     assert normalize_question_scores([{"question": "全体", "score": 3}]) == []
     kept = normalize_question_scores([{"question": "(2)", "score": 1, "max_score": 3}])
     assert kept[0]["question"] == "(2)"
+
+
+def test_ocr_suspect_flags_garbage() -> None:
+    from src.adapters.ocr_quality import assess_ocr_text
+
+    assert "chinese_in_japanese" in assess_ocr_text("よって 最小值 は $x=1$ である。当且仅当。")
+    repeated = "x<5であるから次へ\n" * 3
+    assert "repeated_lines" in assess_ocr_text(repeated)
+    reasons = assess_ocr_text(
+        "x<5",
+        replacements=[{"glm": "x<5", "skipped": "unimernet_diverged", "unimernet_raw": r"\beta"}],
+    )
+    assert "unimernet_disagreement" in reasons
+    assert assess_ocr_text("よって $x<5$ である。") == []
+
+
+def test_empty_question_scores_follow_allocation() -> None:
+    from src.adapters.base import DiagnosisRunContext
+    from src.adapters.diagnosis_helpers import build_diagnosis_result
+    from src.models import ProblemRecord, utc_now_iso
+
+    problem = ProblemRecord(
+        problem_id="prob",
+        title="t",
+        created_at=utc_now_iso(),
+        score_allocation=[
+            {"question": "(1)", "max_score": 4},
+            {"question": "(2)", "max_score": 6},
+        ],
+    )
+    context = DiagnosisRunContext(
+        answer_id="ans",
+        problem_id="prob",
+        ocr_id="ocr",
+        problem=problem,
+        used_text="x=1",
+        model_name="mock",
+        prompt_type="basic_scoring",
+    )
+    full = build_diagnosis_result(
+        context,
+        {"score": 10, "max_score": 10, "question_scores": [], "possible_ocr_issue": False},
+        "diag",
+    )
+    assert [item["score"] for item in full.question_scores] == [4.0, 6.0]
+    held = build_diagnosis_result(
+        context,
+        {
+            "score": 0,
+            "max_score": 10,
+            "question_scores": [],
+            "possible_ocr_issue": True,
+            "teacher_review_notes": "",
+        },
+        "diag2",
+    )
+    assert held.review_status == "needs_teacher_review"
+    assert all(item["score"] is None for item in held.question_scores)
+    assert "要教師確認" in held.teacher_review_notes
+    partial = build_diagnosis_result(
+        context,
+        {
+            "score": 0,
+            "max_score": 10,
+            "possible_ocr_issue": True,
+            "question_scores": [
+                {"question": "(1)", "score": 2, "max_score": 4, "reason": "途中まで正しい"},
+                {"question": "(2)", "score": 3, "max_score": 6, "reason": "x>=2 は正しい"},
+            ],
+        },
+        "diag3",
+    )
+    assert partial.score == 5
+    assert partial.review_status == "needs_teacher_review"
+
+
+def test_xiaomi_adapter_sends_japanese_prompt(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import XiaomiOCRAdapter, create_ocr_adapter
+    from src.adapters.base import OCRRunContext
+    from src.config import load_config
+    from tests.test_adapters import _write_test_config
+
+    root = tmp_path / "project"
+    root.mkdir()
+    _write_test_config(root)
+    image = root / "sample.png"
+    Image.new("RGB", (20, 10), "white").save(image)
+    seen: dict[str, object] = {}
+
+    def complete(messages: list) -> str:
+        seen["messages"] = messages
+        return "よって $x<5$"
+
+    config = load_config(root)
+    adapter = XiaomiOCRAdapter(config, complete=complete)
+    result = adapter.run(
+        OCRRunContext(answer_id="ans", image_path=image, ocr_engine="SeerRay-Lab/Xiaomi-OCR-0")
+    )
+    assert result.raw_text == "よって $x<5$"
+    assert result.ocr_suspect is False
+    prompt = seen["messages"][0]["content"][1]["text"]
+    assert "Markdown" in prompt and "LaTeX" in prompt and "中国語に翻訳しない" in prompt
+    assert create_ocr_adapter("xiaomi_ocr", config).__class__.__name__ == "XiaomiOCRAdapter"
 
 
 def test_resize_for_ocr_is_opt_in() -> None:

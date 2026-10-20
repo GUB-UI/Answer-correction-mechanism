@@ -307,7 +307,9 @@ def main(argv: list[str] | None = None) -> int:
 
     services = subparsers.add_parser("services", help="GPU モデルサーバーの状態確認・起動・停止")
     services.add_argument("action", choices=["status", "start", "stop"])
-    services.add_argument("name", nargs="?", choices=["glm_ocr", "unimernet", "llm"])
+    services.add_argument(
+        "name", nargs="?", choices=["xiaomi_ocr", "glm_ocr", "unimernet", "llm"]
+    )
 
     batch = subparsers.add_parser("batch", help="OCR → UniMERNet → 診断LLM を一括で逐次実行")
     batch.add_argument("--answers", nargs="*", default=None)

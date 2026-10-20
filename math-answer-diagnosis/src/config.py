@@ -48,6 +48,12 @@ class GLMOCRServiceSettings:
 
 
 @dataclass(frozen=True)
+class XiaomiOCRServiceSettings:
+    model_id: str = "SeerRay-Lab/Xiaomi-OCR-0"
+    command: str = ""
+
+
+@dataclass(frozen=True)
 class UniMERNetServiceSettings:
     python: str = ""
     model_dir: str = ""
@@ -70,6 +76,7 @@ class ServiceSettings:
     run_dir: str = ""
     startup_timeout_sec: float = 1800.0
     glm_ocr: GLMOCRServiceSettings = field(default_factory=GLMOCRServiceSettings)
+    xiaomi_ocr: XiaomiOCRServiceSettings = field(default_factory=XiaomiOCRServiceSettings)
     unimernet: UniMERNetServiceSettings = field(default_factory=UniMERNetServiceSettings)
     llm: LLMServiceSettings = field(default_factory=LLMServiceSettings)
 
@@ -185,6 +192,7 @@ def _config_path(root: Path) -> Path:
 def _load_services(raw: dict[str, Any]) -> ServiceSettings:
     services = _section(raw, "services")
     glm = _section(services, "glm_ocr")
+    xiaomi = _section(services, "xiaomi_ocr")
     unimernet = _section(services, "unimernet")
     llm = _section(services, "llm")
     mode = _env_override("SERVICE_MODE", str(services.get("mode", "external"))).lower()
@@ -208,6 +216,15 @@ def _load_services(raw: dict[str, Any]) -> ServiceSettings:
                 "GLMOCR_SERVER_MODEL_ID", str(glm.get("model_id", "zai-org/GLM-OCR"))
             ),
             command=_env_override("GLMOCR_SERVER_COMMAND", str(glm.get("command", "") or "")),
+        ),
+        xiaomi_ocr=XiaomiOCRServiceSettings(
+            model_id=_env_override(
+                "XIAOMI_OCR_MODEL_ID",
+                str(xiaomi.get("model_id", "SeerRay-Lab/Xiaomi-OCR-0")),
+            ),
+            command=_env_override(
+                "XIAOMI_OCR_SERVER_COMMAND", str(xiaomi.get("command", "") or "")
+            ),
         ),
         unimernet=UniMERNetServiceSettings(
             python=_env_override("UNIMERNET_PYTHON", str(unimernet.get("python", "") or "")),

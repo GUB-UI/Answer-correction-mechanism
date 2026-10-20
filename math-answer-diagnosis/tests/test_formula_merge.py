@@ -68,8 +68,25 @@ def test_crop_region_normalizes_glm_0_1000() -> None:
 
 
 def test_latex_is_plausible() -> None:
+    from src.adapters.formula_merge import latex_diverges_from_base
+
     assert latex_is_plausible("5x-29 < -3x+11")
     assert not latex_is_plausible("次の不等式")
+    assert not latex_diverges_from_base("5x-29 < -3x+11", "$$5 x-2 9 < -3 x+11$$")
+    garbage = r"\begin{array}{l}\beta \varepsilon\end{array}\\ \beta \varepsilon \\ \beta"
+    assert latex_diverges_from_base(garbage, "5x-29 < -3x+11")
+
+
+def test_multiline_region_is_not_sent_whole() -> None:
+    block = {
+        "label": "text",
+        "content": "x+1=2\n\nx=1\n\nよって 1\n\nx=0",
+        "bbox_2d": [19, 83, 926, 932],
+    }
+    assert not region_prefers_unimernet(block)
+    assert not region_prefers_unimernet(
+        {"label": "formula", "content": "a=1\n\nb=2\n\nc=3"}
+    )
 
 
 def test_rebuild_markdown_keeps_order() -> None:
@@ -108,7 +125,7 @@ def test_glmocr_prefers_unimernet_on_math_region(tmp_path: Path) -> None:
                             "label": "formula",
                             "native_label": "display_formula",
                             "content": "$$5 x-2 9 < -3 x+11$$",
-                            "bbox_2d": [0, 200, 1000, 1000],
+                            "bbox_2d": [0, 200, 1000, 280],
                         },
                     ]
                 ],
@@ -158,7 +175,7 @@ def test_japanese_line_replaces_only_the_math_span(tmp_path: Path) -> None:
                     "index": 0,
                     "label": "text",
                     "content": "よって $5 x - 2 9$ である。",
-                    "bbox_2d": [0, 0, 1000, 1000],
+                    "bbox_2d": [0, 100, 1000, 180],
                 }
             ]
         ],
@@ -217,3 +234,118 @@ def test_missing_layout_is_recorded(tmp_path: Path) -> None:
 
     _, replacements = refine_markdown_with_unimernet(image_path, "x=1", {}, FakeFormula())
     assert replacements == [{"skipped": "no_layout_regions"}]
+
+
+def test_multiline_block_keeps_base_ocr(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import refine_markdown_with_unimernet
+
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (200, 400), "white").save(image_path)
+    content = "x+1=2\n\nx=1\n\nよって 1"
+    parsed = {
+        "json_result": [
+            [
+                {
+                    "index": 0,
+                    "label": "text",
+                    "content": content,
+                    "bbox_2d": [19, 83, 926, 932],
+                }
+            ]
+        ]
+    }
+
+    class FakeFormula:
+        def health(self) -> bool:
+            return True
+
+        def predict_image(self, image: Image.Image) -> str:
+            raise AssertionError("multi-line block must not be cropped whole")
+
+    markdown, replacements = refine_markdown_with_unimernet(
+        image_path, content, parsed, FakeFormula()
+    )
+    assert markdown == content
+    assert replacements[0]["skipped"] == "no_formula_regions"
+
+
+def test_diverging_unimernet_is_rejected(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import refine_markdown_with_unimernet
+
+    image_path = tmp_path / "line.png"
+    Image.new("RGB", (200, 40), "white").save(image_path)
+    content = "$$5 x-2 9 < -3 x+11$$"
+    parsed = {
+        "json_result": [
+            [
+                {
+                    "index": 0,
+                    "label": "formula",
+                    "content": content,
+                    "bbox_2d": [0, 0, 1000, 80],
+                }
+            ]
+        ]
+    }
+
+    class FakeFormula:
+        def health(self) -> bool:
+            return True
+
+        def predict_image(self, image: Image.Image) -> str:
+            return r"\begin{array}{l}\beta \varepsilon\end{array}\\ \beta \\ \varepsilon"
+
+    markdown, replacements = refine_markdown_with_unimernet(
+        image_path, content, parsed, FakeFormula()
+    )
+    assert markdown == content
+    assert replacements[0]["skipped"] == "unimernet_diverged"
+
+
+def test_refine_recomputes_formula_summary(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import refine_ocr_result_with_unimernet
+    from src.models import OCRResult, utc_now_iso
+
+    root = tmp_path / "project"
+    root.mkdir()
+    _write_test_config(root)
+    image = root / "data" / "images" / "a.png"
+    image.parent.mkdir(parents=True)
+    Image.new("RGB", (200, 40), "white").save(image)
+    config = load_config(root)
+    ocr = OCRResult(
+        ocr_id="ocr1",
+        answer_id="ans",
+        ocr_engine="glm",
+        raw_text="$$5 x-2 9$$",
+        used_text="$$5 x-2 9$$",
+        created_at=utc_now_iso(),
+        raw_output={
+            "formula_summary": {"replaced": 0, "skipped": []},
+            "image_path": "data/images/a.png",
+            "result": {
+                "markdown_result": "$$5 x-2 9$$",
+                "json_result": [
+                    [
+                        {
+                            "index": 0,
+                            "label": "formula",
+                            "content": "$$5 x-2 9$$",
+                            "bbox_2d": [0, 0, 1000, 80],
+                        }
+                    ]
+                ],
+            },
+        },
+    )
+
+    class FakeFormula:
+        def health(self) -> bool:
+            return True
+
+        def predict_image(self, image: Image.Image) -> str:
+            return "5x-29"
+
+    updated = refine_ocr_result_with_unimernet(ocr, config, client=FakeFormula())
+    assert updated.raw_output["formula_summary"]["replaced"] == 1
+    assert "5x-29" in updated.used_text

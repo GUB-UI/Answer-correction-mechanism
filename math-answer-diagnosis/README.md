@@ -229,7 +229,7 @@ DIAGNOSIS_MODEL_NAME=Qwen3.8-27B-oQ4e-mtp
 
 ## Google Colab（CUDA）
 
-Mac の oMLX / mlx-vlm はそのまま使えます。Colab では同じアプリが、GPU 上の別サーバーに接続します。モデルは同時に載せず、**GLM-OCR → UniMERNet → 診断LLM** の順に1つずつ起動します。
+Mac の oMLX / mlx-vlm はそのまま使えます。Colab では同じアプリが、GPU 上の別サーバーに接続します。モデルは同時に載せず、**Xiaomi-OCR-0（代替は GLM-OCR）→ 診断LLM** の順に1つずつ起動します。UniMERNet は `UNIMERNET_ENABLED=false` が既定です。
 
 起動後の画面は「資料を登録」です。自動タグ付けも診断と同じ OpenAI 互換サーバーを使います。Colab では画像の読み取りが終わってから診断 LLM を起動します。`TAGGING_MODEL_NAME` は空のままにし、載せる重みは `LLM_MODEL_ID` の1つだけにします。教師採点はサイドバーの「教師採点との比較」です。
 
@@ -247,9 +247,25 @@ bash scripts/start_streamlit_tunnel.sh                        # 表示された 
 
 公開 URL になるので、`.env` に `APP_PASSWORD` を入れてください。
 
-`scripts/colab_setup.sh` と `gpu-profile --write-env` は、Mac 用の `.env` を上書きして `OCR_MODEL_NAME=zai-org/GLM-OCR` と `DIAGNOSIS_PROVIDER=colab_cuda` にします。環境変数は `config.colab.yaml` より優先されるためです。GLM-OCR の待受は 8081 です（Colab の 8080 は別プロセスが使います）。使用中なら次の空きポートにずらします。事前量子化の 27B はチェックポイントの計算 dtype（float16）で読みます。
+`scripts/colab_setup.sh` と `gpu-profile --write-env` は、Mac 用の `.env` を上書きして `OCR_PROVIDER=xiaomi_ocr`、`OCR_MODEL_NAME=SeerRay-Lab/Xiaomi-OCR-0`、`UNIMERNET_ENABLED=false`、`DIAGNOSIS_PROVIDER=colab_cuda` にします。環境変数は `config.colab.yaml` より優先されるためです。OCR サーバーの待受は 8081 です（Colab の 8080 は別プロセスが使います）。使用中なら次の空きポートにずらします。事前量子化の 27B はチェックポイントの計算 dtype（float16）で読みます。
 
-手書きノート写真の GLM-OCR は、そのままでは式や文字が崩れることがあります。`GLMOCR_MIN_EDGE` / `GLMOCR_MAX_EDGE` / `GLMOCR_PROMPT_SUFFIX` で拡大とプロンプトの追加を試せますが、これで読めるようになるとは限りません。UniMERNet をかけても文が変わらないときは、OCR 結果の `formula_summary` を見てください。`raw_text` と `used_text` は、人手修正前は同じ文字列です。
+手書きはページ全体を Xiaomi-OCR-0 に渡します。GLM-OCR に戻すときは `OCR_PROVIDER=glmocr_sdk` と `OCR_MODEL_NAME=zai-org/GLM-OCR` です。`GLMOCR_MIN_EDGE` / `GLMOCR_MAX_EDGE` / `GLMOCR_PROMPT_SUFFIX` は GLM 用で、品質は保証しません。UniMERNet をオンにしたときは `formula_summary` を見てください。`raw_text` と `used_text` は、人手修正前は同じ文字列です。
+
+Colab で使う環境変数:
+
+```env
+APP_CONFIG_FILE=config.colab.yaml
+OCR_PROVIDER=xiaomi_ocr
+OCR_MODEL_NAME=SeerRay-Lab/Xiaomi-OCR-0
+XIAOMI_OCR_MODEL_ID=SeerRay-Lab/Xiaomi-OCR-0
+OCR_API_HOST=127.0.0.1
+OCR_API_PORT=8081
+UNIMERNET_ENABLED=false
+DIAGNOSIS_PROVIDER=colab_cuda
+SERVICE_MODE=managed
+```
+
+GLM-OCR に戻すときだけ `OCR_PROVIDER=glmocr_sdk` と `OCR_MODEL_NAME=zai-org/GLM-OCR` にします。UniMERNet を試すときは `UNIMERNET_ENABLED=true` です。
 
 ### 診断モデル（Qwen3.8-27B の 4bit）
 

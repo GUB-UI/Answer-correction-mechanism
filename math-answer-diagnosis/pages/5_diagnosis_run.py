@@ -122,7 +122,9 @@ if st.button("診断を実行", type="primary"):
         st.text(diagnosis.student_feedback)
         st.write("**teacher_review_notes**")
         st.text(diagnosis.teacher_review_notes)
-        if diagnosis.possible_ocr_issue:
+        if diagnosis.review_status == "needs_teacher_review":
+            st.warning("要教師確認（needs_teacher_review）。この得点は確定ではありません。")
+        elif diagnosis.possible_ocr_issue:
             st.warning("possible_ocr_issue: true — OCR誤りの可能性があります。")
         st.json(diagnosis.model_dump())
     except Exception as exc:

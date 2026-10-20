@@ -7,20 +7,21 @@ runtime:
   use_omlx: true
 
 ocr:
-  provider: glmocr_sdk
-  model_name: zai-org/GLM-OCR
+  # 手書きの主 OCR。GLM-OCR に戻すときは provider を glmocr_sdk、model を zai-org/GLM-OCR にする。
+  provider: xiaomi_ocr
+  model_name: SeerRay-Lab/Xiaomi-OCR-0
   api:
     host: 127.0.0.1
     # Colab VM の 8080 は node が使用中。空いていなければ起動時に次のポートへずらす。
     port: 8081
     layout_device: cuda
-    # 手書きノートの写真は既定のままでは読みが崩れることがある。
-    # 短辺を拡大する、長辺を抑える、プロンプトを足す、は実験用。品質は保証しない。
+    # GLM-OCR に戻したときの実験用。Xiaomi の拡大は XIAOMI_OCR_MIN_EDGE（既定オフ）。
     min_edge: 0
     max_edge: 0
     prompt_suffix: ""
   formula:
-    enabled: true
+    # A100 の掃引では複数行を UniMERNet に渡すと本文が壊れた。既定はオフ。
+    enabled: false
     model_name: wanderkid/unimernet_small
     base_url: http://127.0.0.1:8091
 
@@ -39,6 +40,8 @@ services:
   startup_timeout_sec: 1800
   glm_ocr:
     model_id: zai-org/GLM-OCR
+  xiaomi_ocr:
+    model_id: SeerRay-Lab/Xiaomi-OCR-0
   llm:
     port: 8000
     model_id: unsloth/Qwen3.8-27B-unsloth-bnb-4bit

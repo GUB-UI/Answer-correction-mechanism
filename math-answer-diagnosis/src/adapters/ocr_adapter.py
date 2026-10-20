@@ -6,8 +6,9 @@ from typing import Any
 from src.adapters.base import OCRAdapter, OCRRunContext
 from src.adapters.formula_merge import (
     block_bbox,
+    comparison_base,
     crop_region,
-    latex_is_plausible,
+    latex_diverges_from_base,
     merge_region_content,
     rebuild_markdown,
     region_math_span,
@@ -15,6 +16,7 @@ from src.adapters.formula_merge import (
     replace_math_spans,
     _as_pages,
 )
+from src.adapters.ocr_quality import assess_ocr_text
 from src.adapters.mock_adapters import MockOCRAdapter
 from src.adapters.unimernet_client import UniMERNetClient
 from src.config import AppConfig, load_config
@@ -113,13 +115,14 @@ def refine_markdown_with_unimernet(
                     block["content"] = glm_content
                     try:
                         latex = client.predict_image(crop)
-                        if not latex_is_plausible(latex):
+                        base_text = comparison_base(glm_content, span_only=span_only)
+                        if latex_diverges_from_base(latex, base_text):
                             replacements.append(
                                 {
                                     "label": block.get("label"),
                                     "native_label": block.get("native_label"),
                                     "glm": glm_content,
-                                    "skipped": "unimernet_implausible",
+                                    "skipped": "unimernet_diverged",
                                     "unimernet_raw": latex,
                                 }
                             )
@@ -195,6 +198,8 @@ class GLMOCRSdkAdapter(OCRAdapter):
         replacements = raw_output.get("formula_replacements") or []
         if any("unimernet" in item for item in replacements if isinstance(item, dict)):
             engine = f"{engine}+unimernet_small"
+        reasons = assess_ocr_text(raw_text, replacements=replacements)
+        raw_output = {**raw_output, "ocr_suspect_reasons": reasons}
         return OCRResult(
             ocr_id="",
             answer_id=context.answer_id,
@@ -202,7 +207,7 @@ class GLMOCRSdkAdapter(OCRAdapter):
             raw_text=raw_text,
             used_text=raw_text,
             uncertain_parts=[],
-            ocr_suspect=False,
+            ocr_suspect=bool(reasons),
             human_corrected=False,
             correction_note=None,
             raw_output=raw_output,
@@ -290,6 +295,7 @@ def refine_ocr_result_with_unimernet(
     )
     texts: list[str] = []
     any_replaced = False
+    collected: list[dict[str, Any]] = []
     for page in page_outputs:
         parsed = page.get("result") if isinstance(page.get("result"), dict) else {}
         image_value = page.get("image_path")
@@ -302,10 +308,13 @@ def refine_ocr_result_with_unimernet(
         markdown, replacements = refine_markdown_with_unimernet(
             image_path, base_markdown, parsed, formula_client
         )
+        summary = _formula_summary(replacements)
         page["result"] = parsed
         page["formula_replacements"] = replacements
+        page["formula_summary"] = summary
         page["formula_applied"] = True
-        any_replaced = any_replaced or any("unimernet" in item for item in replacements)
+        collected.extend(replacements)
+        any_replaced = any_replaced or summary["replaced"] > 0
         texts.append(markdown)
 
     if not texts:
@@ -316,10 +325,16 @@ def refine_ocr_result_with_unimernet(
         ).strip()
     else:
         combined = texts[0].strip()
+    summary = _formula_summary(collected)
     if isinstance(pages, list):
         raw_output["pages"] = page_outputs
+        raw_output["formula_summary"] = summary
+        raw_output["formula_replacements"] = collected
     else:
         raw_output = page_outputs[0]
+        raw_output["formula_summary"] = summary
+    reasons = assess_ocr_text(combined, replacements=collected)
+    raw_output["ocr_suspect_reasons"] = reasons
     engine = ocr_result.ocr_engine
     if any_replaced and "unimernet" not in engine:
         engine = f"{engine}+unimernet_small"
@@ -329,6 +344,7 @@ def refine_ocr_result_with_unimernet(
             "used_text": ocr_result.used_text if ocr_result.human_corrected else combined,
             "raw_output": raw_output,
             "ocr_engine": engine,
+            "ocr_suspect": ocr_result.ocr_suspect if ocr_result.human_corrected else bool(reasons),
         }
     )
 
@@ -364,6 +380,121 @@ class ManualCorrectionOCRAdapter:
         return self.storage.update_ocr_result(updated)
 
 
+def _post_chat_completion(url: str, payload: dict[str, Any], timeout: float = 600.0) -> str:
+    import json
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    body = json.dumps(payload).encode("utf-8")
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Xiaomi OCR HTTP {exc.code}: {detail}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"Xiaomi OCR request failed: {exc}") from exc
+    choices = parsed.get("choices") if isinstance(parsed, dict) else None
+    if not choices:
+        raise RuntimeError(f"Xiaomi OCR returned no choices: {parsed}")
+    message = choices[0].get("message") or {}
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("Xiaomi OCR returned empty text")
+    return content.strip()
+
+
+class XiaomiOCRAdapter(OCRAdapter):
+    """ページ全体を Xiaomi-OCR-0 で Markdown / LaTeX にする。
+
+    手書きは領域切り出しをしない（公式の推奨はページ全体）。
+    UniMERNet はここでは呼ばない。Colab の既定は UNIMERNET_ENABLED=false。
+    GLM-OCR は provider を glmocr_sdk に戻すと使える。
+    """
+
+    def __init__(
+        self,
+        config: AppConfig | None = None,
+        complete: Any | None = None,
+    ) -> None:
+        self.config = config or load_config()
+        # complete(messages) -> str。テストはサーバーを起動しない。
+        self.complete = complete
+
+    def run(self, context: OCRRunContext) -> OCRResult:
+        from src.prompts import XIAOMI_OCR_PROMPT
+        from src.utils import image_to_base64
+
+        suffix = self.config.ocr_api.prompt_suffix.strip()
+        prompt = XIAOMI_OCR_PROMPT if not suffix else f"{XIAOMI_OCR_PROMPT}\n{suffix}"
+        encoded = image_to_base64(context.image_path)
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{encoded}"},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        try:
+            raw_text = self._complete(messages)
+        except Exception as exc:
+            raise RuntimeError(f"Xiaomi OCR failed: {exc}") from exc
+        reasons = assess_ocr_text(raw_text)
+        raw_output = {
+            "provider": "xiaomi_ocr",
+            "model_name": self.config.ocr.model_name,
+            "image_path": str(context.image_path),
+            "prompt": prompt,
+            "ocr_suspect_reasons": reasons,
+            "formula_applied": False,
+            "formula_summary": {"replaced": 0, "skipped": ["unimernet_disabled"]},
+        }
+        return OCRResult(
+            ocr_id="",
+            answer_id=context.answer_id,
+            ocr_engine=context.ocr_engine,
+            raw_text=raw_text,
+            used_text=raw_text,
+            uncertain_parts=[],
+            ocr_suspect=bool(reasons),
+            human_corrected=False,
+            correction_note=None,
+            raw_output=raw_output,
+            created_at=utc_now_iso(),
+            source_kind=context.source_kind,
+            source_id=context.source_id or context.answer_id,
+            image_paths=[context.image_rel] if context.image_rel else [],
+        )
+
+    def _complete(self, messages: list[dict[str, Any]]) -> str:
+        if self.complete is not None:
+            return str(self.complete(messages)).strip()
+        from src.runtime.ports import assigned_port
+        from src.runtime.services import XIAOMI_OCR
+
+        _ensure_service(self.config, XIAOMI_OCR)
+        port = assigned_port(XIAOMI_OCR, self.config.ocr_api.port)
+        url = f"http://{self.config.ocr_api.host}:{port}/v1/chat/completions"
+        payload = {
+            "model": self.config.ocr.model_name,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": 4096,
+        }
+        return _post_chat_completion(url, payload)
+
+
 def create_ocr_adapter(
     provider: str | None = None,
     config: AppConfig | None = None,
@@ -372,6 +503,8 @@ def create_ocr_adapter(
     selected = (provider or cfg.ocr.provider).lower()
     if selected == "mock":
         return MockOCRAdapter()
+    if selected in {"xiaomi_ocr", "xiaomi-ocr"}:
+        return XiaomiOCRAdapter(config=cfg)
     if selected in {"glmocr_sdk", "glm-ocr"}:
         return GLMOCRSdkAdapter(config=cfg)
     raise ValueError(f"Unsupported OCR provider: {selected}")

@@ -9,6 +9,16 @@ OCR_PROMPT = """この画像は高校数学の手書き答案です。
 
 出力はMarkdownで、行ごとに整理してください。"""
 
+# Xiaomi-OCR-0 の公式例は英語で、本文を Markdown、数式を LaTeX、表を OTSL にする。
+# 採点側は Markdown を読むので、表は Markdown の表にし、日本語は翻訳しない。
+XIAOMI_OCR_PROMPT = """この画像は高校数学の手書き答案です。ページ全体を、読み順に Markdown で書き起こしてください。
+数式は LaTeX にしてください。行の中の式は $...$、独立した式は $$...$$ です。
+表は Markdown の表にしてください。
+日本語はそのまま書き、中国語に翻訳しないでください。
+ヘッダーとフッターは無視してください。
+採点、解説、誤りの指摘はしないでください。
+読めない箇所は [不明] と書いてください。"""
+
 DIAGNOSIS_COMMON_INSTRUCTION = """あなたは高校数学答案の診断補助AIです。
 以下はOCRによって読み取られた答案です。
 OCRに誤読が含まれる可能性があります。
@@ -20,7 +30,10 @@ reasoning_summary / student_feedback / teacher_review_notes は各1文にして�
 設問が複数ある場合（(1)(2) など）は question_scores に設問ごとの得点を入れ、score はその合計にしてください。
 question には設問番号だけを書いてください。(1) や 2 などです。
 答案全体を question が「全体」「合計」「total」の要素にしてはいけません。全体の点は score と max_score です。
-配点が与えられている場合は、その設問番号と max_score だけを使い、配点に無い設問は足さないでください。"""
+配点が与えられている場合は、その設問を question_scores にすべて書き、配点に無い設問は足さないでください。空の配列にしてはいけません。
+possible_ocr_issue が true のときも、答案全体を 0 点にしてはいけません。
+配点の設問ごとに、読める手順が正しければ部分点を付け、読めない行だけを減点してください。
+そのときは review_status を needs_teacher_review にしてください。この得点は教師確認前の下書きです。"""
 
 DIAGNOSIS_OUTPUT_SCHEMA = """{
   "score": 3,
@@ -36,6 +49,7 @@ DIAGNOSIS_OUTPUT_SCHEMA = """{
   "student_feedback": "方針はよいので、符号と式変形を一行ずつ確認しましょう。",
   "teacher_review_notes": "2行目の符号が不自然なため、OCR誤りの可能性があります。",
   "possible_ocr_issue": true,
+  "review_status": "needs_teacher_review",
   "confidence": 0.68,
   "question_scores": [
     {"question": "(1)", "score": 2, "max_score": 2, "reason": "正しく解けている"},

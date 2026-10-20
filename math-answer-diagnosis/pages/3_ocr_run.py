@@ -21,12 +21,16 @@ from src.ui_common import (
     show_problem_images,
 )
 
-OCR_PROVIDERS = ["mock", "glmocr_sdk"]
+OCR_PROVIDERS = ["mock", "xiaomi_ocr", "glmocr_sdk"]
 
 st.set_page_config(page_title="OCR実行", layout="wide")
 require_password()
 st.title("OCR実行")
-st.caption("答案画像だけでなく、問題文・模範解答の画像もここでテキスト化できます。数字・数式は UniMERNet Small を優先します。")
+st.caption(
+    "答案・問題・模範の画像をテキスト化します。"
+    "Colab の既定は Xiaomi-OCR-0（ページ全体、Markdown / LaTeX）。"
+    "GLM-OCR は glmocr_sdk。UniMERNet は UNIMERNET_ENABLED が true のときだけです。"
+)
 
 storage = get_storage()
 config = get_config()
@@ -37,9 +41,9 @@ provider = st.selectbox(
     "OCR provider",
     options=OCR_PROVIDERS,
     index=provider_index(OCR_PROVIDERS, config.ocr.provider),
-    help="Mac も Colab も glmocr_sdk。Colab では GPU 上の scripts/glmocr_server.py に接続します。障害時のみ mock。",
+    help="Colab の手書きは xiaomi_ocr。Mac の既定と、Colab の代替は glmocr_sdk。障害時のみ mock。",
 )
-ocr_engine = config.ocr.model_name if provider == "glmocr_sdk" else "mock"
+ocr_engine = config.ocr.model_name if provider in {"glmocr_sdk", "xiaomi_ocr"} else "mock"
 
 tab_answer, tab_problem = st.tabs(["答案OCR", "問題・模範OCR"])
 

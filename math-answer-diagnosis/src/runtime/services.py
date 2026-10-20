@@ -37,9 +37,10 @@ from urllib.request import urlopen
 from src.config import AppConfig
 
 GLM_OCR = "glm_ocr"
+XIAOMI_OCR = "xiaomi_ocr"
 UNIMERNET = "unimernet"
 LLM = "llm"
-SERVICE_ORDER = (GLM_OCR, UNIMERNET, LLM)
+SERVICE_ORDER = (XIAOMI_OCR, GLM_OCR, UNIMERNET, LLM)
 
 
 @dataclass
@@ -332,6 +333,23 @@ def build_service_specs(
         "GLMOCR_PROMPT_SUFFIX": config.ocr_api.prompt_suffix,
     }
 
+    xiaomi_port = config.ocr_api.port
+    if bind_free_port:
+        xiaomi_port = assign_listen_port(XIAOMI_OCR, xiaomi_port, config.ocr_api.host)
+    if services.xiaomi_ocr.command:
+        xiaomi_command = shlex.split(services.xiaomi_ocr.command)
+    else:
+        xiaomi_command = [
+            python,
+            str(scripts / "xiaomi_ocr_server.py"),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(xiaomi_port),
+            "--model",
+            services.xiaomi_ocr.model_id,
+        ]
+
     unimernet_port = _port_from_url(config.formula.base_url, 8091)
     unimernet_env = {"UNIMERNET_PORT": str(unimernet_port)}
     if services.unimernet.model_dir:
@@ -365,6 +383,13 @@ def build_service_specs(
         ]
 
     return {
+        XIAOMI_OCR: ServiceSpec(
+            name=XIAOMI_OCR,
+            command=xiaomi_command,
+            port=xiaomi_port,
+            startup_timeout_sec=timeout,
+            cwd=root,
+        ),
         GLM_OCR: ServiceSpec(
             name=GLM_OCR,
             command=glm_command,

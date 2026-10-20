@@ -115,6 +115,8 @@ class DiagnosisResult(BaseModel):
     student_feedback: str
     teacher_review_notes: str
     possible_ocr_issue: bool
+    # possible_ocr_issue のとき "needs_teacher_review"。0 点は確定の採点ではない。
+    review_status: str = ""
     confidence: float
     raw_output: dict[str, Any] = Field(default_factory=dict)
     created_at: str

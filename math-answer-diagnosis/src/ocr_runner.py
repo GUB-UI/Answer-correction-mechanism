@@ -27,6 +27,7 @@ def run_ocr_for_images(
     page_texts: list[str] = []
     page_raw: list[dict[str, Any]] = []
     engine_names: list[str] = []
+    suspect_reasons: list[str] = []
     answer_id = source_id if source_kind == "student_answer" else ""
 
     for index, rel in enumerate(image_paths, start=1):
@@ -47,6 +48,8 @@ def run_ocr_for_images(
         page_texts.append(label)
         page_raw.append(part.raw_output)
         engine_names.append(part.ocr_engine)
+        if part.ocr_suspect:
+            suspect_reasons.extend(part.raw_output.get("ocr_suspect_reasons") or ["ocr_suspect"])
 
     combined = "\n\n".join(page_texts).strip()
     result = OCRResult(
@@ -56,13 +59,14 @@ def run_ocr_for_images(
         raw_text=combined,
         used_text=combined,
         uncertain_parts=[],
-        ocr_suspect=False,
+        ocr_suspect=bool(suspect_reasons),
         human_corrected=False,
         correction_note=None,
         raw_output={
             "source_kind": source_kind,
             "source_id": source_id,
             "pages": page_raw,
+            "ocr_suspect_reasons": suspect_reasons,
         },
         created_at=utc_now_iso(),
         source_kind=source_kind,

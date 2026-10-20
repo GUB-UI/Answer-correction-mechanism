@@ -14,11 +14,15 @@ from typing import Any
 from src.adapters import create_diagnosis_adapter
 from src.adapters.base import DiagnosisRunContext
 from src.adapters.mock_adapters import MockOCRAdapter
-from src.adapters.ocr_adapter import GLMOCRSdkAdapter, refine_ocr_result_with_unimernet
+from src.adapters.ocr_adapter import (
+    GLMOCRSdkAdapter,
+    XiaomiOCRAdapter,
+    refine_ocr_result_with_unimernet,
+)
 from src.config import AppConfig
 from src.models import AnswerRecord, OCRResult, utc_now_iso
 from src.ocr_runner import run_ocr_for_images
-from src.runtime.services import GLM_OCR, LLM, UNIMERNET, ServiceManager, get_service_manager
+from src.runtime.services import GLM_OCR, LLM, UNIMERNET, XIAOMI_OCR, ServiceManager, get_service_manager
 from src.sources import answer_image_paths, student_ocr_results
 from src.storage import Storage
 
@@ -99,6 +103,7 @@ def run_batch(
     }
     report = BatchReport(items=list(items.values()))
     use_glm = opts.ocr_provider in {"glmocr_sdk", "glm-ocr"}
+    use_xiaomi = opts.ocr_provider in {"xiaomi_ocr", "xiaomi-ocr"}
 
     # フェーズ1: OCR（GLM-OCR のみ。数式置換は次のフェーズ）
     started = time.monotonic()
@@ -113,12 +118,19 @@ def run_batch(
         else:
             items[answer.answer_id].errors.append("OCR対象の画像も既存OCRもありません")
     if to_ocr:
-        if use_glm:
+        if use_xiaomi:
+            manager.ensure(XIAOMI_OCR)
+        elif use_glm:
             manager.ensure(GLM_OCR)
-        adapter = ocr_adapter or (
-            GLMOCRSdkAdapter(config, apply_formula=False) if use_glm else MockOCRAdapter()
-        )
-        engine = config.ocr.model_name if use_glm else "mock"
+        if ocr_adapter is not None:
+            adapter = ocr_adapter
+        elif use_xiaomi:
+            adapter = XiaomiOCRAdapter(config)
+        elif use_glm:
+            adapter = GLMOCRSdkAdapter(config, apply_formula=False)
+        else:
+            adapter = MockOCRAdapter()
+        engine = config.ocr.model_name if (use_glm or use_xiaomi) else "mock"
         for index, answer in enumerate(to_ocr, start=1):
             notify("ocr", index, len(to_ocr), answer.answer_id)
             try:
