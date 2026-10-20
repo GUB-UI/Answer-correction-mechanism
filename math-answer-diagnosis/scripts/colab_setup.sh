@@ -18,23 +18,24 @@ fi
 mkdir -p "${ROOT}/.run"
 
 # UniMERNet は transformers==4.42.4 固定なので、GLM-OCR / Qwen（transformers 5 系）と混ぜない。
+# Colab の Python には ensurepip が無く、python3 -m venv は途中で失敗する。
+# 失敗した環境には pip も入らない。uv は仮想環境の pip を使わずにパッケージを入れる。
+if ! python3 -m uv --version >/dev/null 2>&1; then
+  python3 -m pip install -q uv
+fi
 UNIMERNET_VENV="${ROOT}/.venv-unimernet"
 if [[ ! -x "${UNIMERNET_VENV}/bin/python" ]]; then
-  if ! python3 -m venv "${UNIMERNET_VENV}"; then
-    python3 -m pip install -q uv
-    uv venv --python 3.12 "${UNIMERNET_VENV}"
-  fi
+  rm -rf "${UNIMERNET_VENV}"
+  python3 -m uv venv --python 3.12 "${UNIMERNET_VENV}"
 fi
-"${UNIMERNET_VENV}/bin/python" -m pip install -q -U pip
+UV_PIP=(python3 -m uv pip install --python "${UNIMERNET_VENV}/bin/python")
 if [[ "${UNIMERNET_TORCH:-cpu}" == "cuda" ]]; then
-  "${UNIMERNET_VENV}/bin/python" -m pip install -q torch torchvision \
-    --index-url https://download.pytorch.org/whl/cu124
+  "${UV_PIP[@]}" torch torchvision --index-url https://download.pytorch.org/whl/cu124
 else
   # 数式領域は小さいので既定は CPU。GPU 版 torch の版ずれを避ける。
-  "${UNIMERNET_VENV}/bin/python" -m pip install -q torch torchvision \
-    --index-url https://download.pytorch.org/whl/cpu
+  "${UV_PIP[@]}" torch torchvision --index-url https://download.pytorch.org/whl/cpu
 fi
-"${UNIMERNET_VENV}/bin/python" -m pip install -q unimernet huggingface_hub pillow "pyarrow<17"
+"${UV_PIP[@]}" unimernet huggingface_hub pillow "pyarrow<17"
 
 MODEL_DIR="${UNIMERNET_MODEL_DIR:-${ROOT}/data/models/unimernet_small}"
 if [[ -n "${APP_DATA_DIR:-}" && -z "${UNIMERNET_MODEL_DIR:-}" ]]; then
