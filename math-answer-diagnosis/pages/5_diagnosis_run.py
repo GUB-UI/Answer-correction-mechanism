@@ -68,6 +68,13 @@ st.text(problem.correct_answer)
 st.write("**採点基準**")
 st.text(problem.rubric)
 
+if not problem.problem_text.strip() or not problem.correct_answer.strip():
+    st.warning(
+        "問題文または模範解答が未登録です。「資料を登録」で不足する資料を追加し、"
+        f"共通タグ {problem.problem_id} への紐付けを確認してください。"
+    )
+    st.stop()
+
 st.subheader("OCR used_text（診断入力）")
 st.code(ocr.used_text)
 if ocr.human_corrected:

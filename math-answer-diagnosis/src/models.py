@@ -17,6 +17,7 @@ ERROR_CATEGORIES = [
 
 INPUT_KINDS = ("text", "image", "mixed")
 OCR_SOURCE_KINDS = (
+    "intake_document",
     "student_answer",
     "problem",
     "model_answer",
@@ -47,6 +48,7 @@ class ProblemRecord(BaseModel):
     model_ocr_ids: list[str] = Field(default_factory=list)
     # 設問ごとの配点 [{"question": "(1)", "max_score": 5}]。教師採点の取り込みでも設定できる。
     score_allocation: list[dict[str, Any]] = Field(default_factory=list)
+    tagging_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerRecord(BaseModel):
@@ -58,6 +60,7 @@ class AnswerRecord(BaseModel):
     image_paths: list[str] = Field(default_factory=list)
     typed_text: str | None = None
     input_kind: str = "image"
+    tagging_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def sync_image_paths(self) -> AnswerRecord:

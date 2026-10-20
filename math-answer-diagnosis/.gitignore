@@ -17,5 +17,6 @@ venv/
 .unimernet.pid
 data/models/
 .DS_Store
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 .run/

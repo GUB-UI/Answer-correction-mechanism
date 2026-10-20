@@ -8,6 +8,7 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 IMAGE_UPLOAD_TYPES = ["png", "jpg", "jpeg", "webp"]
 
 SOURCE_KIND_LABELS = {
+    "intake_document": "入力資料（分類前）",
     "student_answer": "答案",
     "problem": "問題文",
     "model_answer": "模範解答",

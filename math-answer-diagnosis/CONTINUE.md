@@ -33,7 +33,7 @@ UniMERNet だけ: `bash scripts/start_unimernet.sh` → `http://127.0.0.1:8091/h
 
 ## Colab（2026-10 追加）
 
-CUDA では `config.colab.yaml` と `notebooks/colab_answer_correction.ipynb` を使う。診断は `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`（A100）または `Qwen/Qwen3.8-27B` を読み込み時 NF4（L4）。T4 は 27B が載らないので `Qwen/Qwen3.5-9B`。Mac の oMLX 経路は `SERVICE_MODE=external`（既定）のまま。詳細は `docs/CHANGES_COLAB.md`。
+CUDA では `config.colab.yaml` と `notebooks/colab_answer_correction.ipynb` を使う。診断は `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`（A100）または `Qwen/Qwen3.8-27B` を読み込み時 NF4（L4）。T4 は 27B が載らないので `Qwen/Qwen3.5-9B`。資料の自動タグ付けも同じ診断 LLM を、OCR のあとで1つだけ載せる。Mac の oMLX 経路は `SERVICE_MODE=external`（既定）のまま。詳細は `docs/CHANGES_COLAB.md`。
 
 ## 次にやること
 

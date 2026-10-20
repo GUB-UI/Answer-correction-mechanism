@@ -93,6 +93,7 @@ class AppConfig:
     services: ServiceSettings = field(default_factory=ServiceSettings)
     comparison: ComparisonSettings = field(default_factory=ComparisonSettings)
     app_password: str = ""
+    tagging_model_name: str = ""
 
     @property
     def data_dir(self) -> Path:
@@ -343,6 +344,10 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             ),
         ),
         app_password=_env_override("APP_PASSWORD", ""),
+        tagging_model_name=_env_override(
+            "TAGGING_MODEL_NAME",
+            _env_override("DIAGNOSIS_MODEL_NAME", str(diagnosis.get("model_name", "local-diagnosis-model"))),
+        ),
     )
 
 
