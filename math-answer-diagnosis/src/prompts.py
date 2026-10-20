@@ -18,7 +18,9 @@ AI診断は教師確認前の下書きであり、最終判断ではありませ
 思考過程や前置きは出さず、JSONオブジェクトのみを返してください。
 reasoning_summary / student_feedback / teacher_review_notes は各1文にしてください。
 設問が複数ある場合（(1)(2) など）は question_scores に設問ごとの得点を入れ、score はその合計にしてください。
-配点が与えられている場合は、その配点を max_score として使ってください。"""
+question には設問番号だけを書いてください。(1) や 2 などです。
+答案全体を question が「全体」「合計」「total」の要素にしてはいけません。全体の点は score と max_score です。
+配点が与えられている場合は、その設問番号と max_score だけを使い、配点に無い設問は足さないでください。"""
 
 DIAGNOSIS_OUTPUT_SCHEMA = """{
   "score": 3,

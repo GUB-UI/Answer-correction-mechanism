@@ -299,7 +299,9 @@ def _port_from_url(url: str, default: int) -> int:
     return parsed.port or default
 
 
-def build_service_specs(config: AppConfig) -> dict[str, ServiceSpec]:
+def build_service_specs(
+    config: AppConfig, *, bind_free_port: bool = False
+) -> dict[str, ServiceSpec]:
     root = config.project_root
     scripts = root / "scripts"
     services = config.services
@@ -307,6 +309,10 @@ def build_service_specs(config: AppConfig) -> dict[str, ServiceSpec]:
     python = sys.executable
 
     glm_port = config.ocr_api.port
+    if bind_free_port:
+        from src.runtime.ports import assign_listen_port
+
+        glm_port = assign_listen_port(GLM_OCR, glm_port, config.ocr_api.host)
     if services.glm_ocr.command:
         glm_command = shlex.split(services.glm_ocr.command)
     else:
@@ -320,6 +326,11 @@ def build_service_specs(config: AppConfig) -> dict[str, ServiceSpec]:
             "--model",
             services.glm_ocr.model_id,
         ]
+    glm_env = {
+        "GLMOCR_MIN_EDGE": str(config.ocr_api.min_edge),
+        "GLMOCR_MAX_EDGE": str(config.ocr_api.max_edge),
+        "GLMOCR_PROMPT_SUFFIX": config.ocr_api.prompt_suffix,
+    }
 
     unimernet_port = _port_from_url(config.formula.base_url, 8091)
     unimernet_env = {"UNIMERNET_PORT": str(unimernet_port)}
@@ -359,6 +370,7 @@ def build_service_specs(config: AppConfig) -> dict[str, ServiceSpec]:
             command=glm_command,
             port=glm_port,
             startup_timeout_sec=timeout,
+            env=glm_env,
             cwd=root,
         ),
         UNIMERNET: ServiceSpec(
@@ -381,7 +393,7 @@ def build_service_specs(config: AppConfig) -> dict[str, ServiceSpec]:
 
 def build_service_manager(config: AppConfig) -> ServiceManager:
     return ServiceManager(
-        build_service_specs(config),
+        build_service_specs(config, bind_free_port=config.services.mode == "managed"),
         config.run_dir,
         mode=config.services.mode,
         exclusive_gpu=config.services.exclusive_gpu,

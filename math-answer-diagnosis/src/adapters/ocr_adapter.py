@@ -10,7 +10,9 @@ from src.adapters.formula_merge import (
     latex_is_plausible,
     merge_region_content,
     rebuild_markdown,
+    region_math_span,
     region_prefers_unimernet,
+    replace_math_spans,
     _as_pages,
 )
 from src.adapters.mock_adapters import MockOCRAdapter
@@ -18,6 +20,12 @@ from src.adapters.unimernet_client import UniMERNetClient
 from src.config import AppConfig, load_config
 from src.models import OCRResult, utc_now_iso
 from src.storage import Storage
+
+
+def _formula_summary(replacements: list[dict[str, Any]]) -> dict[str, Any]:
+    replaced = sum(1 for item in replacements if "unimernet" in item and "skipped" not in item)
+    skipped = [str(item.get("skipped")) for item in replacements if item.get("skipped")]
+    return {"replaced": replaced, "skipped": skipped}
 
 
 def _import_glmocr() -> Any:
@@ -71,21 +79,35 @@ def refine_markdown_with_unimernet(
 
     from PIL import Image
 
+    parsed.setdefault("glm_markdown_result", markdown)
     source = parsed.get("json_result")
     pages = _as_pages(source)
     if not pages:
-        return markdown, []
+        # レイアウトが無いと切り出しできない。raw_text と used_text は同じ GLM 文のまま。
+        return markdown, [{"skipped": "no_layout_regions"}]
 
     image = Image.open(image_path).convert("RGB")
     replacements: list[dict[str, Any]] = []
     updated_pages: list[list[dict[str, Any]]] = []
+    considered = False
     for page in pages:
         updated_page: list[dict[str, Any]] = []
         for block in page:
             block = deepcopy(block)
-            if region_prefers_unimernet(block):
+            whole = region_prefers_unimernet(block)
+            span_only = region_math_span(block)
+            if whole or span_only:
+                considered = True
                 crop = crop_region(image, block_bbox(block))
-                if crop is not None:
+                if crop is None:
+                    replacements.append(
+                        {
+                            "label": block.get("label"),
+                            "native_label": block.get("native_label"),
+                            "skipped": "no_bbox",
+                        }
+                    )
+                else:
                     # 再実行時は GLM の元テキストを基準にする。
                     glm_content = str(block.get("glm_content") or block.get("content") or "")
                     block["content"] = glm_content
@@ -102,7 +124,10 @@ def refine_markdown_with_unimernet(
                                 }
                             )
                         else:
-                            block["content"] = merge_region_content(block, latex)
+                            if span_only:
+                                block["content"] = replace_math_spans(glm_content, latex)
+                            else:
+                                block["content"] = merge_region_content(block, latex)
                             block["glm_content"] = glm_content
                             replacements.append(
                                 {
@@ -110,6 +135,7 @@ def refine_markdown_with_unimernet(
                                     "native_label": block.get("native_label"),
                                     "glm": glm_content,
                                     "unimernet": latex,
+                                    "span_only": span_only,
                                 }
                             )
                     except Exception as exc:
@@ -121,9 +147,17 @@ def refine_markdown_with_unimernet(
                         )
             updated_page.append(block)
         updated_pages.append(updated_page)
+    if not considered:
+        labels = sorted(
+            {
+                str(block.get("native_label") or block.get("label") or "")
+                for page in pages
+                for block in page
+            }
+        )
+        return markdown, [{"skipped": "no_formula_regions", "labels": labels}]
     if any("unimernet" in item for item in replacements):
         parsed["json_result"] = updated_pages
-        parsed.setdefault("glm_markdown_result", markdown)
         markdown = rebuild_markdown(updated_pages)
     return markdown, replacements
 
@@ -195,7 +229,9 @@ class GLMOCRSdkAdapter(OCRAdapter):
                 "formula_model": self.config.formula.model_name,
                 "image_path": str(context.image_path),
                 "result": parsed,
+                "glm_markdown": parsed.get("glm_markdown_result"),
                 "formula_replacements": replacements,
+                "formula_summary": _formula_summary(replacements),
                 "formula_applied": bool(self.apply_formula),
             }
             return raw_text, raw_output
@@ -205,12 +241,14 @@ class GLMOCRSdkAdapter(OCRAdapter):
     def _invoke_sdk(self, image_path: Path) -> tuple[str, dict[str, Any]]:
         GlmOcr = _import_glmocr()
         config_path = self.config.project_root / "glmocr.config.yaml"
+        from src.runtime.ports import assigned_port
+
         kwargs: dict[str, Any] = {
             "mode": "selfhosted",
             "model": self.config.ocr.model_name,
             "layout_device": self.config.ocr_api.layout_device,
             "ocr_api_host": self.config.ocr_api.host,
-            "ocr_api_port": self.config.ocr_api.port,
+            "ocr_api_port": assigned_port("glm_ocr", self.config.ocr_api.port),
         }
         if config_path.is_file():
             kwargs["config_path"] = str(config_path)

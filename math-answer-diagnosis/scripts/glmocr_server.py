@@ -5,7 +5,7 @@ Mac では mlx-vlm（:8080）が担っていた役割を置き換える。GLM-OC
 （selfhosted モード）は PP-DocLayoutV3 でレイアウト解析した領域ごとに
 ``POST /chat/completions`` を送ってくるので、それに応答する。
 
-    python scripts/glmocr_server.py --port 8080 --model zai-org/GLM-OCR
+    python scripts/glmocr_server.py --port 8081 --model zai-org/GLM-OCR
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from _openai_compat import (  # noqa: E402
     content_text,
@@ -26,6 +27,7 @@ from _openai_compat import (  # noqa: E402
     pick_dtype,
     serve,
 )
+from src.runtime.ocr_image import resize_for_ocr  # noqa: E402
 
 
 class GlmOcrBackend:
@@ -69,14 +71,31 @@ class GlmOcrBackend:
             role = message.get("role", "user")
             content = message.get("content")
             parts: list[dict[str, Any]] = [
-                {"type": "image", "image": decode_image_url(url)} for url in image_urls(content)
+                {"type": "image", "image": self._prepare_image(decode_image_url(url))}
+                for url in image_urls(content)
             ]
             text = content_text(content)
+            suffix = os.environ.get("GLMOCR_PROMPT_SUFFIX", "").strip()
+            if text and suffix:
+                text = f"{text}\n{suffix}"
+            elif suffix and not text:
+                text = suffix
             if text:
                 parts.append({"type": "text", "text": text})
             if parts:
                 messages.append({"role": role, "content": parts})
         return messages
+
+    @staticmethod
+    def _prepare_image(image: Any) -> Any:
+        try:
+            min_edge = int(os.environ.get("GLMOCR_MIN_EDGE") or 0)
+            max_edge = int(os.environ.get("GLMOCR_MAX_EDGE") or 0)
+        except ValueError:
+            return image
+        if min_edge <= 0 and max_edge <= 0:
+            return image
+        return resize_for_ocr(image, min_edge=min_edge, max_edge=max_edge)
 
     def generate(self, request: dict[str, Any]) -> tuple[str, dict[str, int]]:
         import torch
@@ -118,7 +137,7 @@ class GlmOcrBackend:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--model", default="zai-org/GLM-OCR")
     parser.add_argument("--device", default="auto", help="auto / cuda / cpu")
     parser.add_argument("--dtype", default="auto", help="auto / bfloat16 / float16 / float32")

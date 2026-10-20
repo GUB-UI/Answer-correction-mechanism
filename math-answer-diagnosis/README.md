@@ -247,6 +247,10 @@ bash scripts/start_streamlit_tunnel.sh                        # 表示された 
 
 公開 URL になるので、`.env` に `APP_PASSWORD` を入れてください。
 
+`scripts/colab_setup.sh` と `gpu-profile --write-env` は、Mac 用の `.env` を上書きして `OCR_MODEL_NAME=zai-org/GLM-OCR` と `DIAGNOSIS_PROVIDER=colab_cuda` にします。環境変数は `config.colab.yaml` より優先されるためです。GLM-OCR の待受は 8081 です（Colab の 8080 は別プロセスが使います）。使用中なら次の空きポートにずらします。事前量子化の 27B はチェックポイントの計算 dtype（float16）で読みます。
+
+手書きノート写真の GLM-OCR は、そのままでは式や文字が崩れることがあります。`GLMOCR_MIN_EDGE` / `GLMOCR_MAX_EDGE` / `GLMOCR_PROMPT_SUFFIX` で拡大とプロンプトの追加を試せますが、これで読めるようになるとは限りません。UniMERNet をかけても文が変わらないときは、OCR 結果の `formula_summary` を見てください。`raw_text` と `used_text` は、人手修正前は同じ文字列です。
+
 ### 診断モデル（Qwen3.8-27B の 4bit）
 
 呼んでいる「Qwen3.8-27B 4bit」は Hugging Face 上の次のモデルです。`LLM_MODEL_ID` で差し替えできます。

@@ -52,8 +52,22 @@ snapshot_download(repo_id="wanderkid/unimernet_small", local_dir="${MODEL_DIR}")
 PY
 fi
 
+# .env.example は Mac 用。コピーしただけでは OCR と診断が mlx / omlx のままになる。
 if [[ ! -f "${ROOT}/.env" ]]; then
   cp "${ROOT}/.env.example" "${ROOT}/.env"
+fi
+python3 - <<'PY'
+from pathlib import Path
+from src.runtime.colab_env import COLAB_ENV
+from src.runtime.envfile import update_env_file
+
+update_env_file(Path(".env"), COLAB_ENV)
+print("Colab .env:", ", ".join(f"{key}={value}" for key, value in COLAB_ENV.items()))
+PY
+
+# Qwen の線形注意カーネル。wheel が無い環境ではコンパイルせず、無くても起動する。
+if ! python3 -m pip install -q --only-binary=:all: flash-linear-attention causal-conv1d; then
+  echo "flash-linear-attention / causal-conv1d の wheel はありません。Qwen はフォールバックで動きます。"
 fi
 
 echo

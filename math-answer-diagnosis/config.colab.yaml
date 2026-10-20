@@ -11,8 +11,14 @@ ocr:
   model_name: zai-org/GLM-OCR
   api:
     host: 127.0.0.1
-    port: 8080
+    # Colab VM の 8080 は node が使用中。空いていなければ起動時に次のポートへずらす。
+    port: 8081
     layout_device: cuda
+    # 手書きノートの写真は既定のままでは読みが崩れることがある。
+    # 短辺を拡大する、長辺を抑える、プロンプトを足す、は実験用。品質は保証しない。
+    min_edge: 0
+    max_edge: 0
+    prompt_suffix: ""
   formula:
     enabled: true
     model_name: wanderkid/unimernet_small

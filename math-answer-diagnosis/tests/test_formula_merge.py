@@ -140,3 +140,80 @@ def test_glmocr_prefers_unimernet_on_math_region(tmp_path: Path) -> None:
     assert "自然数を求めよ" in result.used_text
     assert result.ocr_engine.endswith("+unimernet_small")
     assert result.raw_output["formula_replacements"][0]["unimernet"] == "5x-29 < -3x+11"
+    assert result.raw_output["formula_summary"]["replaced"] == 1
+    assert result.raw_output["glm_markdown"]
+    assert "5 x-2 9" in result.raw_output["glm_markdown"]
+
+
+def test_japanese_line_replaces_only_the_math_span(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import refine_markdown_with_unimernet
+
+    image_path = tmp_path / "line.png"
+    Image.new("RGB", (80, 40), "white").save(image_path)
+    parsed = {
+        "markdown_result": "よって $5 x - 2 9$ である。",
+        "json_result": [
+            [
+                {
+                    "index": 0,
+                    "label": "text",
+                    "content": "よって $5 x - 2 9$ である。",
+                    "bbox_2d": [0, 0, 1000, 1000],
+                }
+            ]
+        ],
+    }
+
+    class FakeFormula:
+        def health(self) -> bool:
+            return True
+
+        def predict_image(self, image: Image.Image) -> str:
+            return "5x-29"
+
+    markdown, replacements = refine_markdown_with_unimernet(
+        image_path, parsed["markdown_result"], parsed, FakeFormula()
+    )
+    assert "よって" in markdown and "である" in markdown
+    assert "5x-29" in markdown
+    assert replacements[0]["span_only"] is True
+
+
+def test_layout_without_formula_regions_is_recorded(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import refine_markdown_with_unimernet
+
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (40, 40), "white").save(image_path)
+    parsed = {
+        "json_result": [[{"label": "text", "content": "次の不等式を解け。", "bbox_2d": [0, 0, 10, 10]}]]
+    }
+
+    class FakeFormula:
+        def health(self) -> bool:
+            return True
+
+        def predict_image(self, image: Image.Image) -> str:
+            raise AssertionError("no formula region")
+
+    markdown, replacements = refine_markdown_with_unimernet(
+        image_path, "次の不等式を解け。", parsed, FakeFormula()
+    )
+    assert markdown == "次の不等式を解け。"
+    assert replacements[0]["skipped"] == "no_formula_regions"
+
+
+def test_missing_layout_is_recorded(tmp_path: Path) -> None:
+    from src.adapters.ocr_adapter import refine_markdown_with_unimernet
+
+    image_path = tmp_path / "page.png"
+    Image.new("RGB", (40, 40), "white").save(image_path)
+
+    class FakeFormula:
+        def health(self) -> bool:
+            return True
+
+        def predict_image(self, image: Image.Image) -> str:
+            raise AssertionError("no layout")
+
+    _, replacements = refine_markdown_with_unimernet(image_path, "x=1", {}, FakeFormula())
+    assert replacements == [{"skipped": "no_layout_regions"}]

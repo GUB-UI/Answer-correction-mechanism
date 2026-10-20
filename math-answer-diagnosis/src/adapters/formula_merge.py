@@ -52,12 +52,19 @@ def looks_math_dominant(content: str) -> bool:
 
 
 def region_prefers_unimernet(block: dict[str, Any]) -> bool:
-    """数式・数字領域は UniMERNet。日本語交じりの文は GLM を残す。"""
+    """数式・数字領域はブロックごと UniMERNet。日本語交じりの文は GLM を残す。"""
     label = str(block.get("native_label") or block.get("label") or "").lower()
     content = str(block.get("content") or "")
     if label in FORMULA_LABELS or "formula" in label:
         return True
     return looks_math_dominant(content)
+
+
+def region_math_span(block: dict[str, Any]) -> bool:
+    """日本語交じりでも $...$ がある行は、その数式だけ読み直す対象。"""
+    if region_prefers_unimernet(block):
+        return False
+    return bool(MATH_SPAN_RE.search(str(block.get("content") or ""))) and bool(block_bbox(block))
 
 
 def block_bbox(block: dict[str, Any]) -> Any:

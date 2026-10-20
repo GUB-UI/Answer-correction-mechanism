@@ -95,11 +95,29 @@ A100 でノートの clone セルを実行すると、既定ブランチ `2026-0
 
 `src/intake.py` は、呼び出し側がクライアントを渡さないとき、会話の前に診断 LLM を起動する。Colab の `exclusive_gpu` では、その前の GLM-OCR を卸してから Qwen を載せる。テストがクライアントを渡すとき、および Mac の `external` ではサーバーを起動しない。タグ付けのモデル名は診断モデルと同じにする。サーバーは要求された名前を無視して、起動時の `LLM_MODEL_ID` で答える。
 
+## 追記: A100 で答案まで流したときに出た不具合
+
+commit `656259d` の CLI 実行で分かったことと、このブランチでの直し。
+
+| 現象 | 直し |
+| --- | --- |
+| `colab_setup.sh` が `.env.example` をコピーし、`OCR_MODEL_NAME=mlx-community/GLM-OCR-bf16` と `DIAGNOSIS_PROVIDER=omlx` が `config.colab.yaml` を上書きした。読み込まれた設定は `glmocr_sdk` / mlx / `omlx` だった。 | セットアップ、`gpu-profile --write-env`、ノートの `.env` 更新が `zai-org/GLM-OCR` と `colab_cuda` を書く。 |
+| GLM-OCR の既定 8080 は Colab の node が使用中で `Errno 98`。8081 なら起動した。 | Colab の既定を 8081 にした。managed 起動時にそのポートが使用中なら、次の空きへずらして SDK も同じポートを見る。 |
+| `unsloth/Qwen3.8-27B-unsloth-bnb-4bit` を bfloat16 で読むと、チェックポイントの計算は float16、`lm_head` は非量子化で、全リクエストが HTTP 500（`Half != BFloat16`）。`--dtype float16` では動いた。 | 事前量子化モデルは、指定が auto のときチェックポイントの compute dtype を使う。無ければ float16。オンロードの NF4（公式 27B）は従来どおり GPU の dtype。 |
+| 3件とも `raw_text == used_text` で UniMERNet の効果が見えなかった。 | 人手修正前は二つの欄は同じ文字列にする実装だった。効果は `formula_summary` と `glm_markdown` で見る。レイアウトに数式領域が無い、領域自体が無い、も `skipped` に残す。日本語交じりの行は文全体を置き換えず、`$...$` だけ読み直す。 |
+| `question_scores` の question が設問番号ではなく「全体」になることがあった。 | 「全体」「合計」は捨てる。配点があるときはその設問 ID に揃うものだけ残す。プロンプトでも全体を設問にしないよう書いた。 |
+| Qwen 起動時に flash-linear-attention のフォールバック警告。 | `colab_setup.sh` は wheel があるときだけ `flash-linear-attention` と `causal-conv1d` を入れる。wheel が無ければセットアップは止めない。この環境では未導入のまま進む。 |
+
+手書きの数学ノート写真では、GLM-OCR が崩れた LaTeX や中国語（例: 最小值）、`x=-1` を `-17''` のように読むことがあった。原因を一つのプロンプト修正で直したとは言えない。拡大・縮小とプロンプトの追加は `GLMOCR_MIN_EDGE`、`GLMOCR_MAX_EDGE`、`GLMOCR_PROMPT_SUFFIX` で試せる。既定はオフ。
+
+A100 40GB では Qwen 27B の 4bit が約 20GiB、ピーク 22.3GB、答案1件あたり約 45〜50 秒だった。
+
 ## 実機で確認していないこと
 
-A100 ではセットアップ、GPU 判定、トンネル表示まで確認した。次は未確認。
+A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み込みと採点時間まで確認した。次は未確認。
 
-- A100 / L4 / T4 での 27B 4bit と GLM-OCR の実際の読み込み、VRAM 使用量、生成速度
+- 今回の dtype・ポート・`.env` 修正を入れたあとの再実行
+- L4 / T4 での読み込み
 - Google Drive への書き込み
-- UniMERNet の数式認識そのもの
-- bitsandbytes の NF4 が、その Colab の CUDA 版 torch で動くこと
+- UniMERNet が手書きの数式を実際に良く読めるか
+- `GLMOCR_MIN_EDGE` などを変えたときの読み取り品質

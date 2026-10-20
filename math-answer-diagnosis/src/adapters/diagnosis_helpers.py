@@ -15,8 +15,17 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def normalize_question_scores(value: Any) -> list[dict[str, Any]]:
-    """LLM 出力の question_scores を {question, score, max_score, reason} の配列に整える。"""
+def normalize_question_scores(
+    value: Any,
+    allocation: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """LLM 出力の question_scores を設問 ID の配列に整える。
+
+    「全体」「合計」は答案合計であり設問 ID ではないので捨てる。
+    配点があるときは、その設問 ID に正規化できるものだけ残す。
+    """
+    from src.teacher_compare import normalize_question_label
+
     if isinstance(value, dict):
         value = [
             {"question": key, **(item if isinstance(item, dict) else {"score": item})}
@@ -24,6 +33,12 @@ def normalize_question_scores(value: Any) -> list[dict[str, Any]]:
         ]
     if not isinstance(value, list):
         return []
+    canonical: dict[str, str] = {}
+    for item in allocation or []:
+        question = str(item.get("question") or "").strip()
+        key = normalize_question_label(question)
+        if key:
+            canonical.setdefault(key, question)
     items: list[dict[str, Any]] = []
     for item in value:
         if not isinstance(item, dict):
@@ -32,8 +47,13 @@ def normalize_question_scores(value: Any) -> list[dict[str, Any]]:
         if score is None:
             continue
         question = str(item.get("question") or item.get("label") or "").strip()
-        if not question:
+        key = normalize_question_label(question)
+        if not key:
             continue
+        if canonical:
+            if key not in canonical:
+                continue
+            question = canonical[key]
         items.append(
             {
                 "question": question,
@@ -81,7 +101,10 @@ def build_diagnosis_result(
         confidence=float(raw_output.get("confidence", 0.0)),
         raw_output=raw_output,
         created_at=created_at or utc_now_iso(),
-        question_scores=normalize_question_scores(raw_output.get("question_scores")),
+        question_scores=normalize_question_scores(
+            raw_output.get("question_scores"),
+            allocation=list(context.problem.score_allocation or []),
+        ),
     )
 
 

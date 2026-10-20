@@ -35,6 +35,10 @@ class OCRApiSettings:
     host: str = "127.0.0.1"
     port: int = 8080
     layout_device: str = "cpu"
+    # 0 はリサイズしない。手書き写真向けの実験用で、品質を保証しない。
+    min_edge: int = 0
+    max_edge: int = 0
+    prompt_suffix: str = ""
 
 
 @dataclass(frozen=True)
@@ -325,6 +329,11 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             port=int(_env_override("OCR_API_PORT", str(ocr_api.get("port", 8080)))),
             layout_device=_env_override(
                 "OCR_LAYOUT_DEVICE", str(ocr_api.get("layout_device", "cpu"))
+            ),
+            min_edge=int(_env_override("GLMOCR_MIN_EDGE", str(ocr_api.get("min_edge", 0) or 0))),
+            max_edge=int(_env_override("GLMOCR_MAX_EDGE", str(ocr_api.get("max_edge", 0) or 0))),
+            prompt_suffix=_env_override(
+                "GLMOCR_PROMPT_SUFFIX", str(ocr_api.get("prompt_suffix", "") or "")
             ),
         ),
         services=_load_services(raw),

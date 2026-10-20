@@ -139,9 +139,12 @@ def cmd_gpu_profile(args: argparse.Namespace) -> int:
     for note in profile.notes:
         print(f"* {note}")
     if args.write_env:
+        from src.runtime.colab_env import colab_env_updates
+
         env_path = Path(args.write_env)
-        update_env_file(env_path, profile.env())
-        print(f"wrote {len(profile.env())} keys to {env_path}")
+        updates = colab_env_updates(profile.env())
+        update_env_file(env_path, updates)
+        print(f"wrote {len(updates)} keys to {env_path}")
     return 0
 
 
