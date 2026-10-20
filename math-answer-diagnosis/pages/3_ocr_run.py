@@ -82,7 +82,7 @@ with tab_answer:
             )
 
         if answer.tagging_metadata:
-            st.info("この答案は自動タグ付けで資料から抽出済みです。内容の修正は「OCR確認・修正」、画像からの再解析は「セット登録」で行ってください。")
+            st.info("この答案は自動タグ付けで資料から抽出済みです。内容の修正は「OCR確認・修正」、画像からの再解析は「資料を登録」で行ってください。")
         if st.button("答案OCRを実行", type="primary", disabled=bool(answer.tagging_metadata)):
             try:
                 result = _run_ocr(
@@ -126,7 +126,7 @@ with tab_problem:
             value=True,
         )
         if problem.tagging_metadata:
-            st.info("この問題は自動タグ付けで資料から抽出済みです。問題と解答を分離して再解析する場合は「セット登録」を使ってください。")
+            st.info("この問題は自動タグ付けで資料から抽出済みです。問題と解答を分離して再解析する場合は「資料を登録」を使ってください。")
         if st.button("問題・模範OCRを実行", type="primary", disabled=bool(problem.tagging_metadata)):
             try:
                 updated = problem

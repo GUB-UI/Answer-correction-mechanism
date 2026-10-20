@@ -182,3 +182,20 @@ def test_saved_batch_can_be_cleared_for_next_input(intake_app):
     assert app.text_area(key="intake_auto_text").value == ""
     assert not any(b.label == "確認した内容を保存" for b in app.button)
     assert len(storage.list_problems()) == 1
+
+
+def test_empty_submission_explains_what_to_add(intake_app):
+    app, storage = intake_app
+    app.run()
+    button(app, "解析して自動タグ付け").click().run()
+    assert not app.exception
+    assert any("テキストか画像を追加してください" in error.value for error in app.error)
+    assert storage.list_problems() == []
+
+
+def test_workspace_opens_on_document_intake(intake_app):
+    path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(str(path)).run()
+    assert not app.exception
+    assert app.radio(key="intake_mode").value == "auto"
+    assert app.text_input(key="intake_student_id").value == ""
