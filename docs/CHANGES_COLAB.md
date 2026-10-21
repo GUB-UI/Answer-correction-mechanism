@@ -155,6 +155,23 @@ v1.2 ではモデル自身の `needs_review` が 135 回とも false だった�
 | `src/adapters/diagnosis_helpers.py` | 診断結果の `raw_output.review_flags` に保存する。`REVIEW_FLAGS_ROUTE=true` のときだけ `review_status` を `needs_teacher_review` にする。点数は変えない。 |
 | `tests/test_review_flags.py` | フェンスだけでは立たないこと、項目不足、点数と理由の矛盾、LaTeX のゆれ、言い換え、式の誤補正、振り分けが既定でオフであること。 |
 
+## 追記: v1.2 の135件でフラグの偽陽性を数える
+
+試作は 79/135 を立て、その多くは OCR の疑いだった。新しい規則を同じ135件にかけ、引き金ごとの件数を出す。答案本文は添付に無いので、OCR と根拠の再判定はしていない。参照得点は使わない。guided JSON は入れてない。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `scripts/review_flag_study.py` | CSV と生の採点出力に、採点の読み取りと要確認フラグをかける。引き金の件数と例、CSV に残っていた試作の内訳を JSON で出す。 |
+| `tests/test_review_flag_study.py` | フェンスを外した合計不一致を数え、答案が無いときは OCR 疑いを立てないこと。試作の列は別枠で数えること。 |
+
+この環境で `results_v1.2.csv`（135行）と生出力93件（`result_from` で再利用した6件を含め、本文があるのは99件）にかけた結果:
+
+- 新しい規則の `needs_review` は 0。引き金は無し。
+- フェンスを外して読めたのは 4件。4件とも、それだけでは要確認にならない。
+- 生の本文が無く CSV から組み立てたのは 36件。そのうちフェンス行で読み直せなかったのは 2件（`S3_C_P1_3-A_s23`、`S3_C_P1_3-A_s47`）。
+- モデル自身の `needs_review` は 0、`grading_uncertain` は 0、`ocr_uncertain` は 39。モデルの `ocr_uncertain` だけでは要確認にしない。
+- CSV に残っていた試作は `needs_review` 79。内訳は `key_formula_possibly_unreadable` 72、`evidence_not_in_input` 14、`json_fence`（コード囲み）6。OCR の印は markdown のコード囲み 42、`\pi` 27、偶数 15、解得 15、`17''` 12、`\in I` 12、`a_k` 12、或 12。
+
 ## 実機で確認していないこと
 
 A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み込みと採点時間まで確認した。次は未確認。
