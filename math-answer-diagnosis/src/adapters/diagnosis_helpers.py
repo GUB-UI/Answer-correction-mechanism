@@ -10,6 +10,7 @@ from src.grading.parse import (
     parse_grading_text,
     validate_grading,
 )
+from src.grading.review_flags import evaluate_review_flags, review_routing_enabled
 
 
 def _to_float(value: Any) -> float | None:
@@ -201,6 +202,18 @@ def build_diagnosis_result(
         review_status = "needs_teacher_review"
         if "要教師確認" not in notes:
             notes = ("要教師確認。読める手順は設問ごとの部分点とし、全体を0点で確定しない。" + notes).strip()
+    routing = review_routing_enabled()
+    flags = evaluate_review_flags(
+        raw_output,
+        answer_text=context.used_text,
+        validation_errors=list(raw_output.get("grading_validation") or []),
+        fence_stripped=fence_stripped,
+        routing_applied=routing,
+    )
+    raw_output["review_flags"] = flags.as_dict()
+    # 既定では記録だけ。possible_ocr_issue による確認状態は変えない。
+    if routing and flags.needs_review:
+        review_status = "needs_teacher_review"
     return DiagnosisResult(
         diagnosis_id=diagnosis_id,
         answer_id=context.answer_id,

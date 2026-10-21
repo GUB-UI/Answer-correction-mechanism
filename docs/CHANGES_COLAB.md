@@ -143,6 +143,18 @@ v1.2 では Qwen3.8-27B-NVFP4（vLLM）の採点出力が、ときどき全体�
 | `src/adapters/diagnosis_helpers.py` | 採点の読み取りをこの手続きにした。`rubric_scores` があるとき、検証結果を `grading_validation` に残す。配点の ID が項目 ID と重ならないときは、設問番号とルーブリック ID を取り違えて欠落扱いにしない。 |
 | `tests/test_grading_parse.py` | フェンス1組、中にフェンス文字があるだけの JSON、前後に文章がある場合、項目数と合計の検証。 |
 
+## 追記: 要確認フラグは記録だけ（振り分けは既定でオフ）
+
+v1.2 ではモデル自身の `needs_review` が 135 回とも false だった。試作の規則は 79/135 を立て、その多くは OCR の疑いが粗すぎた（Markdown の囲みや式の外の `\pi` まで拾っていた）。今回の規則は記録用で、`REVIEW_FLAGS_ROUTE` を付けない限り、どの答案を教師確認へ回すかは変えない。参照得点は使わない。
+
+立つ条件は、JSON が読めない、項目が足りない・多い、点数と理由が矛盾する、数式として読めない印（式の中の「解得」「最小值」、`17°`、`''`、壊れた根号 `√‾`、`[不明]`）、根拠の式が入力に無い、である。根拠は LaTeX と空白と省略記号の差を吸収する。言い換えだけの文は根拠不一致にしない。フェンスを外したことだけでは立てない。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `src/grading/review_flags.py` | `needs_review`、`grading_uncertain`、`ocr_uncertain` と、それぞれの理由を返す。答案テキストが無いときは OCR と根拠は判定しない。 |
+| `src/adapters/diagnosis_helpers.py` | 診断結果の `raw_output.review_flags` に保存する。`REVIEW_FLAGS_ROUTE=true` のときだけ `review_status` を `needs_teacher_review` にする。点数は変えない。 |
+| `tests/test_review_flags.py` | フェンスだけでは立たないこと、項目不足、点数と理由の矛盾、LaTeX のゆれ、言い換え、式の誤補正、振り分けが既定でオフであること。 |
+
 ## 実機で確認していないこと
 
 A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み込みと採点時間まで確認した。次は未確認。
