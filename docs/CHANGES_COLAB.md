@@ -133,6 +133,16 @@ A100 掃引（commit `3618410`、UniMERNet オンは本文が壊れ、オフで�
 
 GLM-OCR に戻す環境変数は `OCR_PROVIDER=glmocr_sdk` と `OCR_MODEL_NAME=zai-org/GLM-OCR`。UniMERNet を試すときは `UNIMERNET_ENABLED=true`。
 
+## 追記: 採点 JSON の外側フェンスを1組だけ外す
+
+v1.2 では Qwen3.8-27B-NVFP4（vLLM）の採点出力が、ときどき全体を ```json で囲んで厳密な `json.loads` に失敗した。P0 と P1 の文面は変えていない。vLLM の guided JSON は点数そのものが変わることがあったので、既定にはしていない。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `src/grading/parse.py`、`src/grading/schema.json` | まずそのまま JSON として読む。失敗したときだけ、外側の ``` または ```json を1組外して読み直す。中の文字は変えない。囲みを外したことは `fence_stripped` に残し、それだけでは教師確認に回さない。読めない出力は `GradingOutputError` で、通常の採点結果にしない。読めたあとはスキーマ、配点があるときの項目数、点数の範囲、項目合計と `score` の一致を検証する。 |
+| `src/adapters/diagnosis_helpers.py` | 採点の読み取りをこの手続きにした。`rubric_scores` があるとき、検証結果を `grading_validation` に残す。配点の ID が項目 ID と重ならないときは、設問番号とルーブリック ID を取り違えて欠落扱いにしない。 |
+| `tests/test_grading_parse.py` | フェンス1組、中にフェンス文字があるだけの JSON、前後に文章がある場合、項目数と合計の検証。 |
+
 ## 実機で確認していないこと
 
 A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み込みと採点時間まで確認した。次は未確認。

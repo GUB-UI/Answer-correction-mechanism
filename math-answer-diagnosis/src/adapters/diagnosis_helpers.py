@@ -5,7 +5,11 @@ from typing import Any
 from src.adapters.base import DiagnosisRunContext
 from src.analysis import normalize_error_categories
 from src.models import DiagnosisResult, utc_now_iso
-from src.utils import extract_json_object
+from src.grading.parse import (
+    ExpectedItem,
+    parse_grading_text,
+    validate_grading,
+)
 
 
 def _to_float(value: Any) -> float | None:
@@ -160,6 +164,23 @@ def build_diagnosis_result(
     created_at: str | None = None,
 ) -> DiagnosisResult:
     allocation = list(context.problem.score_allocation or [])
+    raw_output = dict(raw_output)
+    fence_stripped = bool(raw_output.pop("_fence_stripped", False))
+    raw_output.pop("_grading_validation", None)
+    raw_output["fence_stripped"] = fence_stripped
+    if isinstance(raw_output.get("rubric_scores"), list):
+        expected = expected_items_from_allocation(allocation)
+        output_ids = {
+            str(item.get("item_id"))
+            for item in raw_output["rubric_scores"]
+            if isinstance(item, dict) and item.get("item_id")
+        }
+        alloc_ids = {item.item_id for item in expected}
+        if alloc_ids and output_ids and alloc_ids.isdisjoint(output_ids):
+            expected = []
+        raw_output["grading_validation"] = validate_grading(
+            raw_output, expected or None
+        ).errors
     possible_ocr_issue = bool(raw_output.get("possible_ocr_issue", False))
     score = float(raw_output.get("score", 0) or 0)
     question_scores = fill_question_scores_from_allocation(
@@ -206,4 +227,28 @@ def build_diagnosis_result(
 
 
 def parse_diagnosis_json(text: str) -> dict[str, Any]:
-    return extract_json_object(text)
+    """採点出力を読む。フェンスを1組外しただけでは要確認にしない。
+
+    読めない出力は GradingOutputError になり、採点結果にはしない。
+    rubric_scores があるときはスキーマ、点数の範囲、合計を検証して
+    ``_grading_validation`` に残す。項目の過不足は配点を渡した
+    ``validate_grading`` で見る。
+    """
+    parsed = parse_grading_text(text)
+    data = dict(parsed.data)
+    data["_fence_stripped"] = parsed.fence_stripped
+    if isinstance(data.get("rubric_scores"), list):
+        data["_grading_validation"] = validate_grading(data).errors
+    return data
+
+
+def expected_items_from_allocation(
+    allocation: list[dict[str, Any]] | None,
+) -> list[ExpectedItem]:
+    items: list[ExpectedItem] = []
+    for item in allocation or []:
+        question = str(item.get("question") or item.get("item_id") or "").strip()
+        max_score = _to_float(item.get("max_score"))
+        if question and max_score is not None:
+            items.append(ExpectedItem(question, max_score))
+    return items
