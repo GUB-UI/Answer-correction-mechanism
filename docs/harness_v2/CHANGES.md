@@ -389,3 +389,10 @@ Improvement cycle 1, `changed_components = ["prompt"]`. Plan reviewed twice by G
 | `harness_v2/tests/test_pipeline.py`, `test_p3_runner.py`, `test_p3_durable_identity.py` | Replace ad-hoc labels (`prompt-v0`, `p1`, `p2`) with registered versions. | Test fixtures must use real prompt versions under the strict registry. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **704 passed in 22.43s**.
+
+## Phase 4 / 03: Committed old-vs-new prompt experiment summary (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `docs/harness_v2/experiments/prompt_ambiguity_aware_v1_summary.md` | Aggregate, privacy-safe comparison of `harness_v2_default` vs `harness_v2_ambiguity_aware_v1` under identical model/config/dataset/OCR inputs: per-case 1-A/2-B/3-A statuses and totals, evidence traceability, unnecessary-flag change, an explicitly defined ambiguous-input detection rate, and limits. | Review request: the candidate must stay non-default until a human reviews the evidence. |
+| `harness_v2/tests/test_p4_experiment_summary.py` | Guards that the summary stays candidate-only and contains no images or local data paths. | Keep the committed artifact privacy-safe. |

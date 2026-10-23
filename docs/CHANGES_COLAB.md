@@ -480,3 +480,10 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | 既存テスト3件 | 仮ラベル（`prompt-v0`・`p1`・`p2`）を登録済みの版に置換。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **704 passed in 22.43s**。
+
+## Phase 4 / 03: 旧・新プロンプト比較の実験サマリーをコミット（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `docs/harness_v2/experiments/prompt_ambiguity_aware_v1_summary.md` | 同一条件（モデル・設定・データセット・OCR入力）での旧プロンプトと候補プロンプトの比較（集計のみ・画像/個人情報なし）。1-A/2-B/3-A の状態と点数、根拠一致、不要なフラグの変化、定義を明示した曖昧入力の検出率、限界。人が結果を確認するまで既定にしない。 |
+| `harness_v2/tests/test_p4_experiment_summary.py` | 候補扱いの明記と、画像・ローカルパスを含まないことを確認。 |
