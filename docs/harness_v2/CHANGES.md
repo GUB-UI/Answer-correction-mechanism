@@ -216,3 +216,13 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_reference.py` | Test stored validated mismatches/matches and zero/null scores; existing reference tests retain actual Codex/provider blinding coverage. | References remain evaluation-only and scores are never filled. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **409 passed in 12.23s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 07: Versioned private dataset manifests (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/dataset.py` | Read/write versioned manifests with case/input/rubric provenance; verify hashes, IDs, paths and reference ranges. Keep reference_scores/reference_items in their own hashed file and out of inference cases; secure files/directories. | Reproducible experiments need frozen, portable inputs and separately held labels. |
+| `scripts/build_dev_dataset.py, scripts/dev_dataset_references.json` | Build manual C0/C1/manual and Xiaomi fp32 inputs from the supplied local sources and stats. Copy declared labels as data, with item labels only for 1-A/3-A. | Rebuild the Phase 2 seven-condition dev set offline without score-specific runtime logic or committing transcripts. |
+| `harness_v2/tests/test_p3_dataset.py, docs/harness_v2/phase3_usage.md` | Cover temporary source fixtures, CRLF, separation, hash tampering, path escapes, duplicate cases and 0600/0700 modes; document schema and builder command. | Make input identity and privacy independently verifiable. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **415 passed in 12.68s** (offline guard; loopback mocks allowed).

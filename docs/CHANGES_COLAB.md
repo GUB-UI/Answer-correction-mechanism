@@ -308,3 +308,13 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_reference.py` | validatedの保存済み実行・項目不一致・一致・0点・欠落点を検証。既存のGemma/Codex境界テストも実行し、参照の送信と得点補完を防ぐ。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **409 passed in 12.23s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 07: 版付き非公開データセット（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/dataset.py` | dataset_id・versionと入力/基準/参照のSHA256を持つmanifestを追加。参照は別ファイルに分離し、パス逸脱・重複・不正参照を拒否。ファイル0600・ディレクトリ0700を保証する。 |
+| `scripts/build_dev_dataset.py, scripts/dev_dataset_references.json` | 指定ローカル資料から手動C0/C1・手動・Xiaomi CPU fp32の7条件を作成。項目参照は指定された1-A/3-AのみJSONデータで保持し、実際の答案はgit外へ出力する。 |
+| `harness_v2/tests/test_p3_dataset.py, docs/harness_v2/phase3_usage.md` | 一時fixtureでビルダー・ハッシュ改竄・CRLF・分離・権限を検証。実データでも/tmp/p3_dev_datasetへ7条件を構築し、APIは呼ばない。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **415 passed in 12.68s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
