@@ -183,7 +183,7 @@ def test_resume_after_initial_row_save_keeps_provenance_and_never_repeats_provid
     assert len(store.list_runs()) == 1
 
 
-def test_resume_repairs_legacy_provenance_and_missing_failure_for_completed_run(tmp_path, monkeypatch):
+def test_resume_recovers_missing_failure_for_completed_run_with_durable_identity(tmp_path, monkeypatch):
     import harness_v2.run as runner
     from harness_v2.storage.sqlite_store import RunStore
     from harness_v2.storage.artifacts import ArtifactStore
@@ -203,9 +203,8 @@ def test_resume_repairs_legacy_provenance_and_missing_failure_for_completed_run(
             runner.run_experiment(config, manifest, repeats=1, out=out)
     store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
     row = store.list_runs()[0]
-    # Also recover pre-fix rows saved before the runner's provenance update.
-    row['outputs'].pop('experiment_case', None)
-    store.update_outputs(row['run_id'], row['outputs'])
+    # Recovery is safe because the full experiment identity survived in SQLite.
+    assert row['outputs']['experiment_case']['experiment_identity']
     def unexpected_provider(*args):
         pytest.fail('completed mismatch was sent again')
     summary = runner.run_experiment(config, manifest, repeats=1, out=out,

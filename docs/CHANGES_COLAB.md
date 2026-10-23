@@ -441,3 +441,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_historical_ocr.py` | 片側/両側の過去来歴破損、欠落、sidecarの変更/欠落/宣言値、実際の再開時変更、全採点状態、OCR前失敗の除外、履歴間比較、派生入力ハッシュと私有CLIレポートのカウンタを検証。記録不変性と失敗得点の未補完を確認し、参照の送信や追加推論なしで監査可能にする。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **603 passed in 18.12s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。
+
+## harness v2 Phase 3 final check fix / 11: 完全な永続実験識別子を必須にする（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | チェックポイント保存・復元の前に、全SQLite試行のexperiment_caseに一致する完全なexperiment_identityを要求。メタデータだけを根拠とした旧来歴の補修を廃止し、experiment.jsonが一致しても来歴・完全な識別子がない行は再開を拒否する。永続識別子が確認できる場合のチェックポイント・失敗ファイル復元は維持。書換え可能なJSONや部分的な要求ハッシュでは元の問題文・OCR条件・実験全体を証明できず、古い得点の付替えを防げないため。 |
+| `harness_v2/tests/test_p3_durable_identity.py, harness_v2/tests/test_p3_runner.py` | 来歴/完全な識別子の欠落、一致/書換え済みメタデータ、問題文・OCRメタデータの変更、過去の失敗試行を検証。拒否時の全ファイル不変性とプロバイダ未呼出し、永続識別子がある中断後の復元・得点保持・冪等性・0600/0700を確認する。推論や得点補完なしで安全な復元を維持する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **615 passed in 18.05s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。

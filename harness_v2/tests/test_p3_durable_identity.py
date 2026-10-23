@@ -119,6 +119,40 @@ def test_rewritten_metadata_cannot_hide_changed_config(tmp_path):
     assert_refused(config, manifest, out, match='durable row experiment identity')
 
 
+@pytest.mark.parametrize('legacy', ['missing_provenance', 'missing_identity'])
+@pytest.mark.parametrize('change', ['unchanged', 'problem_text', 'ocr_metadata'])
+@pytest.mark.parametrize('historical', [False, True])
+def test_metadata_cannot_establish_missing_full_durable_identity(tmp_path, legacy, change, historical):
+    config, manifest, out = config_at(tmp_path), make_dataset(tmp_path), tmp_path / 'runs'
+    def broken(*args):
+        raise ProviderSetupError('temporary failure')
+    runner.run_experiment(config, manifest, repeats=1, out=out, commit='rev-a',
+                          provider_factory=broken if historical else None)
+    if historical:
+        runner.run_experiment(config, manifest, repeats=1, out=out, commit='rev-a')
+    def remove_identity(outputs):
+        if historical and outputs['grading']['status'] != 'failed':
+            return
+        if legacy == 'missing_provenance':
+            outputs.pop('experiment_case')
+        else:
+            outputs['experiment_case'].pop('experiment_identity')
+    edit_outputs(out, remove_identity)
+    changed = json.loads(manifest.read_text())
+    if change == 'problem_text':
+        changed['cases'][0]['problem_text'] = 'a different problem'
+    elif change == 'ocr_metadata':
+        changed['cases'][0]['ocr_metadata']['engine'] = 'a different engine'
+    manifest.write_text(json.dumps(changed))
+    # Rewrite the mutable checkpoint to agree with the new dataset. Neither
+    # this checkpoint nor the old request ID proves the full experiment.
+    stored = json.loads((out / 'experiment.json').read_text())
+    stored['dataset'] = changed
+    stored['identity'] = runner.identity({'config': stored['config'], 'dataset': changed, 'commit': 'rev-a'})
+    (out / 'experiment.json').write_text(json.dumps(stored))
+    assert_refused(config, manifest, out, match='durable row experiment identity')
+
+
 def test_commit_validation_includes_historical_failed_rows(tmp_path):
     config, manifest, out = config_at(tmp_path), make_dataset(tmp_path), tmp_path / 'runs'
     def broken(*args):

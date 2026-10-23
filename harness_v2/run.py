@@ -113,7 +113,7 @@ def resolve_implementation_commit() -> str | None:
 
 
 def validate_durable_identity(db_path: Path, *, commit: str, experiment_identity: str,
-                              config: dict, dataset: Dataset, metadata_exists: bool) -> None:
+                              config: dict, dataset: Dataset) -> None:
     """Read existing rows without creating/updating the database or checkpoints."""
     if not db_path.exists():
         return
@@ -130,14 +130,12 @@ def validate_durable_identity(db_path: Path, *, commit: str, experiment_identity
             if not isinstance(outputs, dict):
                 raise ValueError('durable row experiment identity cannot be established: invalid outputs')
             provenance = outputs.get('experiment_case')
-            if 'experiment_case' not in outputs and metadata_exists:
-                # Legacy rows can be repaired only with matching experiment metadata.
-                continue
             if not isinstance(provenance, dict):
                 raise ValueError('durable row experiment identity cannot be established: missing provenance')
-            recorded_identity = provenance.get('experiment_identity')
-            if (('experiment_identity' in provenance and recorded_identity != experiment_identity)
-                    or (recorded_identity is None and not metadata_exists)):
+            # Mutable checkpoints and partial case/request hashes do not bind
+            # the full dataset (including problem text and OCR conditions).
+            # Without a durable full identity, legacy repair would relabel grades.
+            if provenance.get('experiment_identity') != experiment_identity:
                 raise ValueError('durable row experiment identity differs or cannot be established')
             case = cases.get(provenance.get('case_id'))
             rep = provenance.get('repetition')
@@ -192,7 +190,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         if stored.get('identity') != experiment_identity:
             raise ValueError('output directory experiment identity differs; use a new output directory')
     validate_durable_identity(out / 'runs.sqlite', commit=commit, experiment_identity=experiment_identity,
-                              config=config, dataset=dataset, metadata_exists=experiment_path.exists())
+                              config=config, dataset=dataset)
     write_json(experiment_path, metadata)
     store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
     previous = store.list_runs()
@@ -222,15 +220,12 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         if failure is not None:
             write_json(path, failure.to_dict())
 
-    # Repair durable rows before completed jobs are skipped, including failures
-    # from earlier attempts. Evaluation artifacts never require inference.
+    # Recover evaluation artifacts only after every durable row's full identity
+    # is established, including failures from earlier attempts.
     for row in previous:
         rid = row['request_id']
         if rid not in provenance:
             continue
-        if 'experiment_case' not in row['outputs']:
-            row['outputs']['experiment_case'] = provenance[rid]
-            store.update_outputs(row['run_id'], row['outputs'])
         save_failure(row, cases_by_request[rid])
     skipped, sent, stopped = 0, 0, ''
     def checkpoint():

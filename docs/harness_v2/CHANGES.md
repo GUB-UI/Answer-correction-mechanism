@@ -350,3 +350,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_historical_ocr.py` | Cover one/both-side historical metadata corruption, missing fields/hashes, changed/missing/declared sidecars, real sidecar changes on resume, all grading statuses, pre-OCR exemptions, cross-history comparison, derived input hashes and private CLI report counters. Assert comparison does not mutate records or fill failed scores. | Keep full attempt accounting auditable without inference, reference exposure or score substitution. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **603 passed in 18.12s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.
+
+## Phase 3 final check fix / 11: Require full durable experiment identity (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/run.py` | Require every SQLite attempt to carry the matching full experiment_identity in experiment_case before any checkpoint writes or recovery. Remove metadata-based legacy provenance repair; absent provenance or a missing full identity now refuses resume even with matching experiment.json. Keep checkpoint and failure-artifact recovery for proven durable identities. | Mutable metadata and partial request/case hashes cannot prove the original problem text, OCR conditions or full experiment; repairing unproven rows would relabel old grades. |
+| `harness_v2/tests/test_p3_durable_identity.py, harness_v2/tests/test_p3_runner.py` | Cover missing provenance/full identity with matching or rewritten metadata, changed problem text/OCR metadata and historical failed attempts. Preserve interruption recovery with durable identity, unchanged grades, idempotency and private permissions. | Refused resumes must leave all output files unchanged and never reach a provider; proven recovery must remain available without inference or score filling. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **615 passed in 18.05s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.
