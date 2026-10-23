@@ -21,6 +21,7 @@ class LMStudioSettings:
 class ModelSettings:
     provider: str
     model_name: str
+    revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -298,6 +299,7 @@ def load_config(project_root: Path | None = None) -> AppConfig:
             ),
         ),
         ocr=ModelSettings(
+            revision=_env_override("OCR_MODEL_REVISION", str(ocr.get("revision", "") or "")),
             provider=_env_override("OCR_PROVIDER", str(ocr.get("provider", "mock"))),
             model_name=_env_override(
                 "OCR_MODEL_NAME",

@@ -98,7 +98,7 @@ if submitted:
             ocr_suspect=ocr_suspect,
             correction_note=correction_note.strip() or None,
         )
-        st.success("OCR結果を更新しました。")
+        st.success("手動転記を別の入力として保存しました。")
         st.write(f"**human_corrected:** {updated.human_corrected}")
         st.write(f"**ocr_suspect:** {updated.ocr_suspect}")
         if updated.correction_note:
