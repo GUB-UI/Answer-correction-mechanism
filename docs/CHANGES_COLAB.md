@@ -328,3 +328,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_runner.py, docs/harness_v2/phase3_usage.md` | fixtureでID・再開・429・構築例外・待機・CLI・設定伝播・参照分離を検証し、コマンドとJSON例を記載。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **420 passed in 13.13s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 09: BaselineとCandidateの比較条件（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | ケース/繰返しで対応付け、モデル・問題・入力ハッシュ・OCR来歴・基準版・生成設定等が異なる場合や結果欠落を理由付きで拒否。両側の成功率・遅延と差分を返す。 |
+| `harness_v2/evaluation/compare.py, harness_v2/tests/test_p3_comparison.py, docs/harness_v2/phase3_usage.md` | 保存済みディレクトリから比較するCLIを追加。各拒否条件・同条件・CLIをテストし、manifest検証付きの実行例を記載。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **432 passed in 13.28s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。

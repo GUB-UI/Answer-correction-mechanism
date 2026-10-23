@@ -36,3 +36,13 @@ Example configuration (Gemma calls require a locally configured AI Studio key; t
 Supported generation settings: `temperature`, `seed`, `max_output_tokens`, `top_p`, `top_k`. Unknown settings are rejected rather than silently ignored. `prompt_version` records the version of the current built-in prompt; change the prompt implementation/version together when testing a candidate. Configured rubric versions must match the dataset. For offline tests use `provider: "fixture"`, `model: "fixture"`, and `fixture_completion` (saved JSON string/object), or `fixture_completions` keyed by case ID; a list selects a response per repetition.
 
 IDs hash dataset/case/input/rubric/config/repetition identities. Reusing an output directory with another identity is rejected. Completed `validated` and `review_required` runs are skipped; failed attempts can be retried with the same request ID and new immutable artifact paths. SQLite holds all attempt records; `results.json` includes latest logical results plus full attempt history. `experiment.json`, atomic `state.json`, and per-run `failure_cases/` are private. On 429 the failed row and checkpoint are saved and execution stops immediately (exit 3); other recorded failures produce exit 1. `--delay` applies between logical requests; the provider separately handles bounded transient retries. No references reach the provider factory, prompt or independent-review payload.
+
+Compare a baseline with a candidate:
+
+```sh
+python -m harness_v2.evaluation.compare --baseline /tmp/harness-baseline \
+  --candidate /tmp/harness-candidate --dataset /tmp/harness-dev-v1/manifest.json \
+  --out /tmp/harness-comparison.json
+```
+
+Inputs can be run directories or their `results.json`. The optional `--dataset` overrides the saved manifest location; it must verify and match the stored manifest. The comparison refuses different requested/returned models, providers, problem/case/repetition sets, input hashes, OCR provenance, rubric hashes/versions, reference-file identities or effective generation settings. Prompt versions may differ to measure a prompt candidate. Missing results are reported as incomparable, with explicit reasons (exit 2). Reports include both sides' metrics and candidate-minus-baseline deltas. Comparison verdicts are separate from the three grading states.

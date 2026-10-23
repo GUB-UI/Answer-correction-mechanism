@@ -236,3 +236,13 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_runner.py, docs/harness_v2/phase3_usage.md` | Test deterministic repetitions, completed skips, retry after quota/setup errors, delay, offline CLI, settings and incompatible resume identities; document config and commands. | Ensure reproducibility and label isolation without live Gemma/Codex calls. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **420 passed in 13.13s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 09: Baseline/candidate comparability and CLI (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/comparison.py` | Align saved runs by case/repetition; reject changed model/provider/problem/input/OCR/rubric/reference/settings identities or incomplete/duplicate results with reasons. Compute initial success/latency metrics and recursive deltas. | Baseline and candidate results are meaningful only under matching evaluation conditions. |
+| `harness_v2/evaluation/compare.py` | Add a private-report CLI for run directories/results files; verify the dataset and return incomparable with reasons on invalid inputs. | Make comparisons repeatable without inference. |
+| `harness_v2/tests/test_p3_comparison.py, docs/harness_v2/phase3_usage.md` | Exercise each refusal boundary, returned model, effective settings, incomplete cases, same-condition metrics and the real offline CLI. | Prevent accidental apples-to-oranges comparisons. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **432 passed in 13.28s** (offline guard; loopback mocks allowed).

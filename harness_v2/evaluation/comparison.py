@@ -108,3 +108,139 @@ def summarize_comparisons(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"rows": rows, "case_count": len(rows), "success_count": success_count,
             "incomplete_count": len(rows) - success_count,
             "success_rate": success_count / len(rows) if rows else None}
+
+
+def experiment_index(payload: dict) -> tuple[dict, list[str]]:
+    """Align repetitions by case, not by config-dependent request IDs."""
+    reasons, expected, indexed = [], {}, {}
+    if not isinstance(payload, dict):
+        return {}, ['invalid experiment object']
+    jobs, runs = payload.get('expected_runs'), payload.get('runs')
+    if not isinstance(jobs, list) or not jobs:
+        return {}, ['missing or empty expected cases']
+    if not isinstance(runs, list):
+        return {}, ['incomplete run list']
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get('case_id'), str) or not isinstance(job.get('repetition'), int):
+            reasons.append('invalid expected case/repetition')
+            continue
+        key = (job['case_id'], job['repetition'])
+        if key in expected:
+            reasons.append('duplicate expected case/repetition')
+        expected[key] = job
+    by_request = {}
+    for run in runs:
+        rid = run.get('request_id') if isinstance(run, dict) else None
+        if not rid or rid in by_request:
+            reasons.append('duplicate or invalid run request id')
+            continue
+        by_request[rid] = run
+    for key, job in expected.items():
+        run = by_request.pop(job.get('request_id'), None)
+        if run is None:
+            reasons.append(f'incomplete case: {key}')
+            continue
+        if run.get('outputs', {}).get('grading', {}).get('status') not in {'validated', 'review_required', 'failed'}:
+            reasons.append(f'invalid grading status: {key}')
+        indexed[key] = run
+    if by_request:
+        reasons.append('unexpected cases in run list')
+    return indexed, reasons
+
+
+def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
+    reasons = []
+    for name, payload in (('baseline', baseline), ('candidate', candidate)):
+        if not isinstance(payload, dict) or not isinstance(payload.get('config'), dict) or not isinstance(payload.get('dataset'), dict):
+            reasons.append(f'{name}: missing configuration or dataset manifest')
+    if reasons:
+        return reasons
+    left, right = baseline['config'], candidate['config']
+    for key, label in (('model', 'model'), ('provider', 'provider'),
+                       ('rubric_version', 'rubric version'), ('generation_settings', 'generation settings')):
+        if key not in left or key not in right or left[key] != right[key]:
+            reasons.append(f'{label} differs or is missing')
+    for key in ('dataset_id', 'version', 'references'):
+        if baseline['dataset'].get(key) != candidate['dataset'].get(key) or key not in baseline['dataset']:
+            reasons.append(f'dataset {key} differs or is missing')
+    def cases(payload):
+        rows = payload['dataset'].get('cases', [])
+        if not isinstance(rows, list) or any(not isinstance(c, dict) or 'case_id' not in c for c in rows):
+            return {}
+        return {c['case_id']: c for c in rows}
+    a, b = cases(baseline), cases(candidate)
+    if not a or set(a) != set(b):
+        reasons.append('problem/case sets differ or are empty')
+    for key in set(a) & set(b):
+        for field, label in (('problem_id', 'problem'), ('problem_text', 'problem text'),
+                             ('input_version', 'input version'), ('grading_input', 'OCR/input hash'),
+                             ('ocr_metadata', 'OCR provenance'), ('rubric', 'rubric hash'),
+                             ('rubric_version', 'rubric version')):
+            # Paths may differ in otherwise identical portable datasets.
+            av, bv = a[key].get(field), b[key].get(field)
+            if field in {'grading_input', 'rubric'}:
+                av = av.get('sha256') if isinstance(av, dict) else None
+                bv = bv.get('sha256') if isinstance(bv, dict) else None
+            if av is None or bv is None or av != bv:
+                reasons.append(f'{label} differs or is missing: {key}')
+    ai, ar = experiment_index(baseline); bi, br = experiment_index(candidate)
+    reasons.extend(f'baseline: {reason}' for reason in ar)
+    reasons.extend(f'candidate: {reason}' for reason in br)
+    if set(ai) != set(bi):
+        reasons.append('case/repetition sets differ')
+    for key in set(ai) & set(bi):
+        x, y = ai[key], bi[key]
+        if not x.get('model_id') or x.get('model_id') != y.get('model_id'):
+            reasons.append(f'returned model differs or is missing: {key}')
+        if x.get('rubric_version') != y.get('rubric_version') or x.get('rubric_version') != left.get('rubric_version'):
+            reasons.append(f'run rubric version differs: {key}')
+        for field, label in (('ocr_sha256', 'OCR/input hash'), ('grading_input_sha256', 'grading input hash')):
+            xv, yv = x.get('outputs', {}).get(field), y.get('outputs', {}).get(field)
+            if xv != yv:
+                reasons.append(f'{label} differs: {key}')
+        for run, cfg in ((x, left), (y, right)):
+            settings = run.get('outputs', {}).get('settings', {})
+            if run.get('outputs', {}).get('grading', {}).get('status') != 'failed':
+                effective = {k: v for k, v in settings.items() if k != 'provider_policy'}
+                if effective != cfg.get('generation_settings'):
+                    reasons.append(f'effective generation settings differ: {key}')
+    return list(dict.fromkeys(reasons))
+
+
+def _basic_experiment_metrics(payload: dict) -> dict:
+    import statistics
+    rows = payload['runs']
+    complete = sum(row['outputs']['grading']['status'] != 'failed' for row in rows)
+    latency = [row['latency_ms'] for row in rows if isinstance(row.get('latency_ms'), (int, float))]
+    return {'success_rate': complete / len(payload['expected_runs']) if payload['expected_runs'] else None,
+            'mean_latency_ms': statistics.mean(latency) if latency else None}
+
+
+def metric_deltas(baseline: dict, candidate: dict) -> dict:
+    deltas = {}
+    for key in baseline.keys() & candidate.keys():
+        x, y = baseline[key], candidate[key]
+        if isinstance(x, dict) and isinstance(y, dict):
+            deltas[key] = metric_deltas(x, y)
+        elif (isinstance(x, (int, float)) and not isinstance(x, bool)
+              and isinstance(y, (int, float)) and not isinstance(y, bool)):
+            deltas[key] = y - x
+        elif x is None or y is None:
+            deltas[key] = None
+    return deltas
+
+
+def compare_experiments(baseline: dict, candidate: dict, *, dataset=None) -> dict:
+    reasons = compatibility_reasons(baseline, candidate)
+    if dataset is not None:
+        for name, payload in (('baseline', baseline), ('candidate', candidate)):
+            if payload.get('dataset') != dataset.manifest:
+                reasons.append(f'{name}: supplied dataset manifest differs')
+    if reasons:
+        return {'comparable': False, 'verdict': 'incomparable', 'reasons': reasons,
+                'baseline': None, 'candidate': None, 'deltas': {}}
+    before, after = _basic_experiment_metrics(baseline), _basic_experiment_metrics(candidate)
+    verdict = ('improved' if after['success_rate'] > before['success_rate'] else
+               'regressed' if after['success_rate'] < before['success_rate'] else 'not_improved')
+    return {'comparable': True, 'verdict': verdict, 'reasons': [],
+            'baseline': before, 'candidate': after, 'deltas': metric_deltas(before, after)}
