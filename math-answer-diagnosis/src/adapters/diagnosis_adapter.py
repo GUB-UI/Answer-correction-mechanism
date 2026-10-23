@@ -6,6 +6,7 @@ from src.adapters.diagnosis_helpers import (
     build_grading_metadata,
     format_score_allocation,
     parse_diagnosis_json,
+    valid_backend_fingerprint,
 )
 from src.adapters.lmstudio_client import LMStudioClient
 from src.adapters.mock_adapters import MockDiagnosisAdapter
@@ -55,7 +56,7 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
             get_service_manager(self.config).ensure(LLM)
         fingerprint_builder = getattr(self.lmstudio_client, "backend_fingerprint", None)
         backend = fingerprint_builder() if fingerprint_builder else None
-        if not isinstance(backend, dict):
+        if not valid_backend_fingerprint(backend):
             return None
         settings = {"request": self.generation_settings, "backend": backend}
         return build_grading_metadata(

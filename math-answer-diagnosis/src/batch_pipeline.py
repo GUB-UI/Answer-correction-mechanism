@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from src.adapters import create_diagnosis_adapter
 from src.adapters.base import DiagnosisRunContext
+from src.adapters.diagnosis_helpers import complete_grading_metadata
 from src.adapters.mock_adapters import MockOCRAdapter
 from src.adapters.ocr_adapter import (
     GLMOCRSdkAdapter,
@@ -251,7 +252,9 @@ def run_batch(
                 for d in storage.get_diagnosis_results_for_answer(answer.answer_id)
                 if d.ocr_id == item.ocr_id and d.prompt_type == opts.prompt_type
                 and d.problem_id == answer.problem_id and d.model_name == model_name
-                and metadata is not None and d.grading_metadata == metadata
+                and complete_grading_metadata(metadata)
+                and complete_grading_metadata(d.grading_metadata)
+                and d.grading_metadata == metadata
             ]
             if done:
                 latest = sorted(done, key=lambda d: d.created_at)[-1]
@@ -277,7 +280,9 @@ def run_batch(
                     diagnosis_id=storage.generate_id("diag"),
                     created_at=utc_now_iso(),
                 )
-                diagnosis.grading_metadata = metadata if metadata == after else None
+                diagnosis.grading_metadata = (
+                    metadata if complete_grading_metadata(metadata) and metadata == after else None
+                )
                 storage.save_diagnosis_result(diagnosis)
                 item.diagnosis_id = diagnosis.diagnosis_id
                 item.score, item.max_score = diagnosis.score, diagnosis.max_score

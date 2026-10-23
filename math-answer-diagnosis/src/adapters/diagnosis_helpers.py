@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from typing import Any
 
 from src.adapters.base import DiagnosisRunContext
@@ -14,6 +15,44 @@ from src.grading.parse import (
     validate_grading,
 )
 from src.grading.review_flags import evaluate_review_flags, review_routing_enabled
+
+
+def valid_backend_fingerprint(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    model = value.get("model_id")
+    settings = value.get("settings")
+    return (isinstance(model, str) and bool(model.strip())
+            and isinstance(settings, dict) and bool(settings))
+
+
+def complete_grading_metadata(value: Any) -> bool:
+    """Equality is meaningful only for complete, well-formed provenance."""
+    if not isinstance(value, dict):
+        return False
+    if any(not isinstance(value.get(key), str) or not value[key].strip()
+           for key in ("provider", "model_id")):
+        return False
+    if any(not isinstance(value.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None
+           for key in ("prompt_version", "rubric_identity")):
+        return False
+    settings = value.get("generation_settings")
+    if not isinstance(settings, dict):
+        return False
+    if value["provider"] == "mock":
+        version = settings.get("implementation_version")
+        return type(version) is int and version > 0
+    request = settings.get("request")
+    if not isinstance(request, dict) or not valid_backend_fingerprint(settings.get("backend")):
+        return False
+    temperature = request.get("temperature")
+    max_tokens = request.get("max_tokens")
+    return (
+        type(temperature) in (int, float) and math.isfinite(temperature) and temperature >= 0
+        and type(max_tokens) is int and max_tokens > 0
+        and type(request.get("response_format_json")) is bool
+        and type(request.get("disable_thinking")) is bool
+    )
 
 
 def build_grading_metadata(

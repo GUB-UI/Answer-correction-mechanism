@@ -6,6 +6,7 @@ from typing import Any
 
 from openai import OpenAI
 
+from src.adapters.diagnosis_helpers import valid_backend_fingerprint
 from src.config import AppConfig
 
 # Qwen 3.5/3.8 の思考モードを REST API から確実に切るためのプレフィル。
@@ -44,13 +45,7 @@ class LMStudioClient:
         if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("error"):
             return None
         fingerprint = payload.get("backend_fingerprint")
-        if not isinstance(fingerprint, dict):
-            return None
-        model = fingerprint.get("model_id")
-        settings = fingerprint.get("settings")
-        if not isinstance(model, str) or not model.strip() or not isinstance(settings, dict) or not settings:
-            return None
-        return fingerprint
+        return fingerprint if valid_backend_fingerprint(fingerprint) else None
 
     def chat_completion(
         self,
