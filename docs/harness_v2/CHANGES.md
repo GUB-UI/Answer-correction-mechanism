@@ -322,3 +322,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_failed_settings.py` | Cover parse/HTTP/quota failures, one/both-side mismatches, missing/invalid settings, successful resumes with incompatible failed history, genuine setup failures, uncertain counters and contradictory response evidence. Assert comparison preserves records and leaves failed scores unscored. | Prevent status-based validation bypasses while retaining the pre-call setup exemption, reference isolation and honest metrics. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **542 passed in 15.33s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation).
+
+## Phase 3 review fix / 08: Distinguish tracked local modifications (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/run.py` | Append the SHA256 of exact tracked `git diff HEAD` bytes to dirty HEAD identities. Include staged, unstaged and binary changes; disable external diff/text conversion. Keep clean HEAD identities unchanged and fail closed if Git cannot resolve the diff. | Different local modifications must not share a resumable implementation identity. |
+| `harness_v2/tests/test_p3_commit_identity.py` | Mock all Git resolution; cover clean and distinct dirty diffs, raw binary bytes, deterministic resolution, diff failures and refusal to resume another dirty tree before writes or provider calls. | Verify the revision boundary without depending on the real repository. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **544 passed in 16.79s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes.

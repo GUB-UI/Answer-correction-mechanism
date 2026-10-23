@@ -413,3 +413,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_failed_settings.py` | JSON解析・HTTP・quota失敗、片側/両側の不一致、設定欠落/不正、再開成功後の失敗履歴、呼出し前の設定失敗、不明な試行数と応答記録の矛盾を検証。比較前後の記録と未採点を保持し、得点補完や参照送信を防ぐ。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **542 passed in 15.33s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 08: 追跡対象のローカル変更を識別（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | 変更済みHEADの識別子に、追跡対象の`git diff HEAD`の生バイト列のSHA256を付加。ステージ済み・未ステージ・バイナリ変更を含め、外部diffとテキスト変換を無効化する。クリーンHEADは従来どおりとし、diff取得不能なら拒否する。異なるローカル変更による再開識別子の衝突を防ぐ。 |
+| `harness_v2/tests/test_p3_commit_identity.py` | Git解決をすべてモックし、クリーン状態・異なる変更・バイナリの生バイト・決定性・diff失敗・別の変更状態での再開拒否を検証。拒否時は保存もプロバイダ呼出しも行わず、実リポジトリ状態に依存しない。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **544 passed in 16.79s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。

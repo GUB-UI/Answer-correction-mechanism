@@ -103,11 +103,11 @@ def resolve_implementation_commit() -> str | None:
                               capture_output=True, text=True, check=True, timeout=5).stdout.strip()
         if len(head) not in {40, 64} or any(c not in '0123456789abcdef' for c in head):
             return None
-        status = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=source,
-                                capture_output=True, text=True, check=True, timeout=5).stdout
+        diff = subprocess.run(['git', 'diff', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD', '--'],
+                              cwd=source, capture_output=True, check=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return None
-    return head + ('+dirty' if status.strip() else '')
+    return head + ('+dirty-' + hashlib.sha256(diff).hexdigest() if diff else '')
 
 
 class _LazyProvider:
@@ -232,7 +232,7 @@ def main(argv=None) -> int:
     parser.add_argument('--repeats', type=int, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--delay', type=float, default=0, help='seconds between logical requests')
-    parser.add_argument('--commit', help='implementation identity; default: harness source HEAD with +dirty for tracked changes')
+    parser.add_argument('--commit', help='implementation identity; default: harness source HEAD with +dirty-<sha256> for tracked changes')
     args = parser.parse_args(argv)
     try:
         result = run_experiment(args.config, args.dataset, repeats=args.repeats, out=args.out,

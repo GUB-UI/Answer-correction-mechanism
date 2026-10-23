@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -79,30 +80,53 @@ def test_cli_default_resolves_or_reports_clear_error(tmp_path, monkeypatch, caps
         assert json.loads((out / 'experiment.json').read_text())['commit'] == resolved
 
 
-@pytest.mark.parametrize('status,expected', [('', 'a' * 40), (' M harness_v2/run.py\n', 'a' * 40 + '+dirty'),
-    ('M  harness_v2/run.py\n', 'a' * 40 + '+dirty')])
-def test_git_resolution_uses_source_checkout_and_tracked_status(monkeypatch, isolated_commit_resolver, status, expected):
+@pytest.mark.parametrize('diff', [b'', b'diff --git a/harness_v2/run.py b/harness_v2/run.py\n+first\n',
+    b'diff --git a/harness_v2/run.py b/harness_v2/run.py\n+second\n', b'GIT binary patch\n\xff\x00\r\n'])
+def test_git_resolution_uses_source_checkout_and_exact_tracked_diff(monkeypatch, isolated_commit_resolver, diff):
     def git(args, *, cwd, **kwargs):
         assert cwd == Path(runner.__file__).resolve().parent
-        assert kwargs == {'capture_output': True, 'text': True, 'check': True, 'timeout': 5}
         if args == ['git', 'rev-parse', 'HEAD']:
+            assert kwargs == {'capture_output': True, 'text': True, 'check': True, 'timeout': 5}
             return subprocess.CompletedProcess(args, 0, 'a' * 40 + '\n', '')
-        assert args == ['git', 'status', '--porcelain', '--untracked-files=no']
-        return subprocess.CompletedProcess(args, 0, status, '')
+        assert args == ['git', 'diff', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD', '--']
+        assert kwargs == {'capture_output': True, 'check': True, 'timeout': 5}
+        return subprocess.CompletedProcess(args, 0, diff, b'')
     monkeypatch.setattr(runner.subprocess, 'run', git)
+    expected = 'a' * 40 + ('+dirty-' + hashlib.sha256(diff).hexdigest() if diff else '')
+    assert isolated_commit_resolver() == expected
     assert isolated_commit_resolver() == expected
 
 
-@pytest.mark.parametrize('stage', ['HEAD', 'status'])
+@pytest.mark.parametrize('stage', ['HEAD', 'diff'])
 @pytest.mark.parametrize('error', [FileNotFoundError('git unavailable'),
     subprocess.CalledProcessError(128, ['git']), subprocess.TimeoutExpired(['git'], 5)])
 def test_git_resolution_fails_closed(monkeypatch, isolated_commit_resolver, stage, error):
     def git(args, **kwargs):
-        if (stage == 'HEAD') == (args[-1] == 'HEAD'):
+        if (stage == 'HEAD') == (args[1] == 'rev-parse'):
             raise error
         return subprocess.CompletedProcess(args, 0, 'a' * 40 + '\n', '')
     monkeypatch.setattr(runner.subprocess, 'run', git)
     assert isolated_commit_resolver() is None
+
+
+def test_distinct_dirty_trees_cannot_resume_each_other(tmp_path, monkeypatch, isolated_commit_resolver):
+    diff = b'+first local change\n'
+    def git(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, 'a' * 40 if args[1] == 'rev-parse' else diff)
+    monkeypatch.setattr(runner.subprocess, 'run', git)
+    monkeypatch.setattr(runner, 'resolve_implementation_commit', isolated_commit_resolver)
+    config, manifest, out = config_at(tmp_path), make_dataset(tmp_path), tmp_path / 'runs'
+    first = isolated_commit_resolver()
+    runner.run_experiment(config, manifest, repeats=1, out=out)
+    assert runner.run_experiment(config, manifest, repeats=1, out=out)['skipped'] == 1
+    before = {p.relative_to(out): p.read_bytes() for p in out.rglob('*') if p.is_file()}
+    diff = b'+second local change\n'
+    assert isolated_commit_resolver() != first
+    def forbidden(*args):
+        pytest.fail('changed dirty identity reached provider')
+    with pytest.raises(ValueError, match='commit'):
+        runner.run_experiment(config, manifest, repeats=2, out=out, provider_factory=forbidden)
+    assert {p.relative_to(out): p.read_bytes() for p in out.rglob('*') if p.is_file()} == before
 
 
 @pytest.mark.parametrize('head', ['', 'unknown\n', 'HEAD\n'])
