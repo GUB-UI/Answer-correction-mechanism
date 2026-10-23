@@ -513,3 +513,10 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 | File | What | Why |
 | --- | --- | --- |
 | `harness_v2/tests/test_private_permissions.py` | Use the registered `harness_v2_default` prompt version in the shared-input runner test. | The PR #10 permission test used an ad-hoc `v1` label, which the PR #11 strict registry rejects after the restack merge. |
+
+## Phase 5 / 07: Append-only improvement history with evidence-bound approval and version rollback (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/history.py` | Hash-chained, fsync'd, flock'd `history.jsonl` + atomic `head.json`; replay validates every transition (unique ids, accepted only after an improved latest evaluation, rejected is final). Evaluations derive a snapshot (full commits, config/dataset digests, prompt, OCR preprocess, comparison digest) from experiment.json/comparison files. Approvals must name repository, base branch, PR and the latest snapshot; promotion requires the version to equal that snapshot (`promotion_blockers`). Versions store config and the complete dataset tree as content-addressed objects; the first version is the immutable baseline; rollback only to baseline or previously promoted versions; `materialize` restores a git worktree plus config/dataset and verifies hashes. | Design §8 Phase 5 (a)(c)(e) and the completion criterion: multiple cycles without losing data/versions/history, with rollback. Scope: tamper-evidence and a guard against accidental/automated promotion, not a security boundary; real merge enforcement is GitHub branch protection. |
+| `harness_v2/tests/test_improvement_history.py` | Multi-cycle + rollback + materialize; baseline immutability; stale-approval and repo/base binding; snapshot mismatch; evidence binding; crash between log and head; torn tail repair; truncation; missing head; idempotent draft import; runner never approves. | Contracts for the above. |
