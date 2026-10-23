@@ -598,3 +598,10 @@ Keep signed implicit factors grouped and treat each complete superscript run as 
 
 Regressions cover signed products (including fractions, sums, roots, and powers), compound exponents, plus/minus versus addition of a negative, division, unknown commands, and split function names, checking collisions, equivalence, and idempotence.
 Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **236 passed**. No network/API calls or excluded-file reads.
+
+## PR #12 / Follow-up B: Require a nonempty challenge plan and unique planned IDs (2026-10-24)
+
+Require an explicit nonempty job list and report absent, empty, or incorrectly typed plans in `reasons`. Count planned request IDs before forming a set and report duplicate planned IDs. Cells with ambiguous planned IDs are incomplete, preventing one run from supplying scores or agreement for multiple jobs. Plan errors set `comparable: false` and CLI exit code 2. Unambiguous pairs remain diagnostic only. Scores are never filled in and grading status names are unchanged.
+
+Regressions cover duplicate planned IDs across original/variant jobs, sources, and repetitions; plan order; zero/one/two recorded runs; mixed ambiguous and valid pairs; absent/empty/malformed plans; and CLI JSON/exit codes.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **47 passed, 1 deselected**. Combined with the three skeleton-related test files: **283 passed, 1 deselected**. Only the existing builder test is excluded because it reads forbidden `references.json`. No network/API calls or excluded-file reads.

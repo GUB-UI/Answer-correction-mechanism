@@ -177,7 +177,56 @@ def test_all_request_id_problems_are_reported_together():
     ]
 
 
-@pytest.mark.parametrize("problem", [None, "duplicate", "missing", "unexpected"])
+@pytest.mark.parametrize("record_count", [0, 1, 2])
+@pytest.mark.parametrize("reverse_plan", [False, True])
+@pytest.mark.parametrize("axis", ["variant", "source", "repetition"])
+def test_duplicate_planned_ids_cannot_reuse_a_record(axis, reverse_plan, record_count):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    if axis == "source":
+        jobs[1]["case_id"] = "P:other:F"
+    elif axis == "repetition":
+        jobs[1]["repetition"] = 2
+    for job in jobs:
+        job["request_id"] = "same"
+    runs = [_run("same", "validated", [("R1", 1)]) for _ in range(record_count)]
+    report = challenge_report({"expected_runs": jobs[::-1] if reverse_plan else jobs, "runs": runs},
+                              rubric_items=R)
+    assert report["comparable"] is False
+    assert "duplicate planned request_id: same" in report["reasons"]
+    for variant in ("O", "F"):
+        stats = report["variants"][variant]
+        assert stats["scheduled"] == stats["incomplete"] == 1
+        assert stats["flag_denominator"] == stats["pairs"] == stats["items"] == 0
+        assert stats["item_agreement"] is None and stats["flag_rate"] is None
+
+
+@pytest.mark.parametrize("results", [
+    {}, {"runs": []}, {"expected_runs": []}, {"expected_runs": [], "runs": []},
+    {"expected_runs": None, "runs": []}, {"expected_runs": {}, "runs": []},
+])
+def test_absent_empty_or_invalid_job_plan_is_not_comparable(results):
+    report = challenge_report(results, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == ["expected_runs must be an explicit nonempty job plan"]
+    assert report["variants"] == report["by_source"] == {}
+
+
+def test_duplicate_planned_ids_leave_only_unambiguous_pairs_as_diagnostics():
+    jobs = _jobs(variants=("O", "F"), reps=(1, 2))
+    for job in jobs:
+        if job["repetition"] == 1:
+            job["request_id"] = "same"
+    runs = [_run(rid, "validated", [("R1", 1)]) for rid in {job["request_id"] for job in jobs}]
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == ["duplicate planned request_id: same"]
+    assert report["variants"]["F"]["pairs"] == 1
+    assert report["variants"]["F"]["items"] == 1
+    assert report["variants"]["F"]["incomplete"] == 1
+
+
+@pytest.mark.parametrize("problem", [None, "duplicate", "missing", "unexpected", "duplicate planned",
+                                     "absent plan", "empty plan"])
 def test_cli_marks_request_id_integrity_in_report_and_exit_code(tmp_path, monkeypatch, capsys, problem):
     jobs = _jobs(variants=("O", "F"), reps=(1,))
     runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in reversed(jobs)]
@@ -187,8 +236,17 @@ def test_cli_marks_request_id_integrity_in_report_and_exit_code(tmp_path, monkey
         runs.pop()
     elif problem == "unexpected":
         runs.append(_run("unscheduled", "validated", [("R1", 1)]))
+    elif problem == "duplicate planned":
+        for job in jobs:
+            job["request_id"] = "same"
+        runs = [_run("same", "validated", [("R1", 1)])]
+    payload = {"expected_runs": jobs, "runs": runs}
+    if problem == "absent plan":
+        payload = {}
+    elif problem == "empty plan":
+        payload = {"expected_runs": [], "runs": []}
     results_path, out = tmp_path / "results.json", tmp_path / "report.json"
-    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.write_text(json.dumps(payload))
     monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
     code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
     report = json.loads(out.read_text())
@@ -200,4 +258,10 @@ def test_cli_marks_request_id_integrity_in_report_and_exit_code(tmp_path, monkey
         assert report["variants"]["F"]["item_agreement"] == 1
     else:
         assert len(report["reasons"]) == 1
-        assert report["reasons"][0].startswith(f"{problem} request_id:")
+        if problem in ("absent plan", "empty plan"):
+            assert report["reasons"] == ["expected_runs must be an explicit nonempty job plan"]
+        else:
+            assert report["reasons"][0].startswith(f"{problem} request_id:")
+        if problem == "duplicate planned":
+            assert report["variants"]["F"]["pairs"] == 0
+            assert report["variants"]["F"]["item_agreement"] is None

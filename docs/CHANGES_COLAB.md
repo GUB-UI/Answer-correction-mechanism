@@ -714,3 +714,10 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 
 回帰テストは符号付き積（分数・和・根号・冪を含む）、複合指数、加減記号と負数の加算、除算、未知コマンド、分割された関数名の衝突・表記一致・冪等性を検証する。
 検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **236 件成功**。ネットワーク・API 呼び出しおよび除外対象ファイルの読み取りなし。
+
+## PR #12 / 再修正B: challenge の計画の存在と ID 一意性（2026-10-24）
+
+明示された空でないジョブ計画を必須とし、計画なし・空リスト・不正な計画型を `reasons` に記録する。計画 ID は集合化の前に数え、重複した ID を報告する。重複計画に属するセルは incomplete とし、一つの実行記録を複数ジョブの得点や一致率に利用しない。いずれの計画異常も `comparable: false`・CLI 終了コード 2 とする。曖昧でない残りのペアは診断用に保持する。得点補完および採点ステータス名の変更なし。
+
+回帰テストは原本・変形間、異なる入力元・反復間の計画 ID 重複、計画順序、記録数 0/1/2、正常ペアとの混在、計画欠落・空・不正型、および CLI の JSON と終了コードを検証する。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **47 件成功、1 件除外**。skeleton 関連 3 ファイルとの結合実行は **283 件成功、1 件除外**。`references.json` を読む既存 builder テストのみ除外した。ネットワーク・API 呼び出しおよび除外対象ファイルの読み取りなし。

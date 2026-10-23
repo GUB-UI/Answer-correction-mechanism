@@ -5,8 +5,9 @@ source and repetition. Needs no reference scores and reads none. Every
 scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 ``failed`` (grading status failed) or ``incomplete`` (missing, duplicate,
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
-nothing is filled in. Duplicate, missing or unexpected run request IDs make
-the report non-comparable; any remaining metrics are diagnostic only.
+nothing is filled in. Missing/empty plans and duplicate planned IDs, as well
+as duplicate, missing or unexpected run IDs, make the report non-comparable;
+any remaining metrics are diagnostic only.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from harness_v2.storage.permissions import private_write_text
@@ -66,13 +67,19 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
     """
     if not isinstance(rubric_items, dict):
         raise ValueError("rubric_items is required")
-    jobs = results.get("expected_runs", [])
-    planned_ids = {job["request_id"] for job in jobs}
+    reasons = []
+    jobs = results.get("expected_runs")
+    if not isinstance(jobs, list) or not jobs:
+        reasons.append("expected_runs must be an explicit nonempty job plan")
+        jobs = []
+    planned_counts = Counter(job["request_id"] for job in jobs)
+    duplicate_planned_ids = {rid for rid, count in planned_counts.items() if count > 1}
+    planned_ids = set(planned_counts)
     runs = defaultdict(list)
     for run in results.get("runs", []):
         runs[run.get("request_id")].append(run)
-    reasons = []
     for label, ids in (
+        ("duplicate planned", duplicate_planned_ids),
         ("duplicate", {rid for rid, records in runs.items() if len(records) > 1}),
         ("missing", planned_ids - runs.keys()),
         ("unexpected", runs.keys() - planned_ids),
@@ -86,7 +93,7 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
             raise ValueError(f"no rubric item ids for problem {job.get('problem_id')!r}")
         expected = set(ids)
         records = runs.get(job["request_id"], [])
-        if len(records) > 1:
+        if job["request_id"] in duplicate_planned_ids or len(records) > 1:
             cell = {"outcome": "incomplete", "status": None, "scores": None}
         else:
             cell = _cell(records[0] if records else None, expected)
