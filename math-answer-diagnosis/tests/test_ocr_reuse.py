@@ -134,7 +134,9 @@ def test_formula_setting_and_failed_refinement_do_not_reuse_raw_ocr(case):
     failed = run(config=config, options=options, formula_refiner=fail).items[0]
     assert failed.ocr_id != first.ocr_id
     assert failed.errors
-    completed = run(config=config, options=options, formula_refiner=lambda r: r).items[0]
+    completed = run(config=config, options=options, formula_refiner=lambda r: r.model_copy(update={
+        "raw_output": {**r.raw_output, "formula_summary": {"completed": True}},
+    })).items[0]
     assert completed.ocr_id != failed.ocr_id
     assert run(config=config, options=options).items[0].ocr_id == completed.ocr_id
     assert adapter.calls == 6
@@ -148,3 +150,80 @@ def test_model_revision_is_loaded_from_config_and_forwarded_to_managed_servers(t
     for name in ("glm_ocr", "xiaomi_ocr"):
         command = build_service_specs(config)[name].command
         assert command[command.index("--revision") + 1] == "pinned-revision"
+
+
+@pytest.mark.parametrize("outcome", ["unavailable", "prediction_error", "exception", "unchanged", "success", "no_formula"])
+def test_real_formula_outcome_controls_reuse(case, monkeypatch, outcome):
+    from io import BytesIO
+    from PIL import Image
+    from src.adapters import ocr_adapter as module
+
+    storage, config, answer, options, adapter, run = case
+    config = replace(config, formula=replace(config.formula, enabled=True))
+    options = replace(options, apply_formula=True)
+    image = BytesIO()
+    Image.new("RGB", (40, 40), "white").save(image, format="PNG")
+    for path in answer.image_paths:
+        config.resolve_path(path).write_bytes(image.getvalue())
+    original_run = adapter.run
+
+    def layout(context):
+        result = original_run(context)
+        text = "a+b" if outcome != "no_formula" else "説明文"
+        return result.model_copy(update={"raw_text": text, "used_text": text, "raw_output": {
+            "image_path": str(context.image_path),
+            "result": {"markdown_result": text, "json_result": [[{
+                "label": "formula" if outcome != "no_formula" else "text",
+                "content": text, "bbox_2d": [0, 0, 1000, 100],
+            }]]},
+        }})
+
+    class Formula:
+        def __init__(self, *args):
+            pass
+
+        def health(self):
+            if outcome == "exception":
+                raise RuntimeError("health error")
+            return outcome != "unavailable"
+
+        def predict_image(self, image):
+            if outcome == "prediction_error":
+                raise RuntimeError("prediction error")
+            return "a+b"
+
+    monkeypatch.setattr(adapter, "run", layout)
+    monkeypatch.setattr(module, "UniMERNetClient", Formula)
+    monkeypatch.setattr(module, "_ensure_service", lambda *args: None)
+    kwargs = {"formula_refiner": lambda r: r} if outcome == "unchanged" else {}
+    first = run(config=config, options=options, **kwargs).items[0]
+    saved = storage.get_ocr_result(first.ocr_id)
+    successful = outcome in {"success", "no_formula"}
+    assert bool(saved.provenance and saved.provenance.settings["formula_enabled"]) is successful
+    if outcome == "unavailable":
+        assert "unimernet_unavailable" in saved.raw_output["formula_summary"]["skipped"]
+    if outcome == "prediction_error":
+        assert saved.raw_output["formula_replacements"][0]["error"] == "prediction error"
+    if outcome == "success":
+        assert saved.raw_output["formula_summary"]["replaced"] == 2
+    second = run(config=config, options=options, **kwargs).items[0]
+    assert (second.ocr_id == first.ocr_id) is successful
+    assert adapter.calls == (2 if successful else 4)
+
+
+def test_legacy_formula_provenance_without_success_is_not_reused(case):
+    from src.ocr_provenance import ocr_provenance
+
+    storage, config, answer, options, adapter, run = case
+    first = run().items[0]
+    config = replace(config, formula=replace(config.formula, enabled=True))
+    options = replace(options, apply_formula=True)
+    saved = storage.get_ocr_result(first.ocr_id)
+    legacy = saved.model_copy(update={"provenance": ocr_provenance(
+        config, answer.image_paths, provider=options.ocr_provider, adapter=adapter,
+        apply_formula=True,
+    )})
+    storage.update_ocr_result(legacy)
+    retried = run(config=config, options=options, formula_refiner=lambda r: r).items[0]
+    assert retried.ocr_id != first.ocr_id
+    assert adapter.calls == 4
