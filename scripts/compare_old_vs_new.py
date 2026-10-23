@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from harness_v2.evaluation.comparison import (  # noqa: E402
+    evaluate_comparison,
+    load_result,
+    summarize_comparisons,
+)
 
 
 def compare(inputs: Path, out: Path) -> dict:
@@ -35,8 +43,21 @@ def compare(inputs: Path, out: Path) -> dict:
             capture_output=True,
             text=True,
         )
+        old_result, old_error = load_result(old_dir / "result.json")
+        new_result, new_error = load_result(new_dir / "result.json")
+        case = json.loads(path.read_text(encoding="utf-8"))
+        evaluation = evaluate_comparison(old_result, new_result, case)
+        reasons = [evaluation["reason"]] if evaluation["reason"] else []
+        for side, process, error in (("old", old, old_error), ("new", new, new_error)):
+            if process.returncode:
+                reasons.append(f"{side}: process exited {process.returncode}")
+            if error:
+                reasons.append(f"{side}: {error}")
+        if reasons:
+            evaluation = {"success": False, "status": "incomplete", "reason": "; ".join(reasons)}
         rows.append(
             {
+                **evaluation,
                 "input": path.name,
                 "old_exit": old.returncode,
                 "new_exit": new.returncode,
@@ -46,9 +67,18 @@ def compare(inputs: Path, out: Path) -> dict:
                 "new_stderr": new.stderr[-500:],
             }
         )
-    summary = {"rows": rows}
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    summary = summarize_comparisons(rows)
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    out.chmod(0o700)
+    # stderr and validation details can contain private student text.
+    fd = os.open(out / "summary.json", os.O_CREAT | os.O_WRONLY, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.ftruncate(fd, 0)
+        with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as handle:
+            handle.write(json.dumps(summary, indent=2))
+    finally:
+        os.close(fd)
     return summary
 
 
@@ -58,8 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
     summary = compare(args.inputs, args.out)
-    failed = [row for row in summary["rows"] if row["old_exit"] or row["new_exit"]]
-    return 1 if failed else 0
+    return 1 if not summary["case_count"] or summary["incomplete_count"] else 0
 
 
 if __name__ == "__main__":
