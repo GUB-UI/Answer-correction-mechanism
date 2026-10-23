@@ -121,3 +121,36 @@ def test_dataset_input_mutation_between_repetitions_fails_before_provider(tmp_pa
     assert len(calls) == 1
     assert result['failed'] == 1
     assert 'hash' in json.loads((out / 'results.json').read_text())['runs'][1]['failure_reason']
+
+
+@pytest.mark.parametrize('original,resumed', [('rev-a', 'rev-b'), ('unknown', 'rev-a'), ('rev-a', 'unknown')])
+def test_resume_rejects_changed_implementation_without_mutating_results(tmp_path, original, resumed):
+    from harness_v2.run import run_experiment
+    manifest = make_dataset(tmp_path)
+    config = config_at(tmp_path)
+    out = tmp_path / 'runs'
+    run_experiment(config, manifest, repeats=1, out=out, commit=original)
+    before = {name: (out / name).read_bytes() for name in ['experiment.json', 'results.json', 'state.json']}
+    def unexpected_provider(*args):
+        pytest.fail('completed runs must not call a provider')
+    with pytest.raises(ValueError, match='commit'):
+        run_experiment(config, manifest, repeats=2, out=out, commit=resumed,
+                       provider_factory=unexpected_provider)
+    assert {name: (out / name).read_bytes() for name in before} == before
+
+
+@pytest.mark.parametrize('commit', ['rev-a', 'unknown'])
+def test_experiment_persists_implementation_identity_and_resumes_same_commit(tmp_path, commit):
+    from harness_v2.run import run_experiment
+    manifest = make_dataset(tmp_path)
+    config = config_at(tmp_path)
+    out = tmp_path / 'runs'
+    run_experiment(config, manifest, repeats=1, out=out, commit=commit)
+    metadata = json.loads((out / 'experiment.json').read_text())
+    assert metadata['commit'] == commit
+    def unexpected_provider(*args):
+        pytest.fail('completed runs must not call a provider')
+    assert run_experiment(config, manifest, repeats=1, out=out, commit=commit,
+                          provider_factory=unexpected_provider)['skipped'] == 1
+    run_experiment(config, manifest, repeats=1, out=tmp_path / 'other', commit=commit + '-other')
+    assert json.loads((tmp_path / 'other/experiment.json').read_text())['identity'] != metadata['identity']

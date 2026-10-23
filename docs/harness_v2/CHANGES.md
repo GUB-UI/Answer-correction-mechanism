@@ -258,3 +258,12 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `docs/harness_v2/phase3_usage.md` | Document metric denominators, nulls, latency/history semantics, unknown usage, verdict rules and the 07/08/09 commands. | Keep results interpretable and the workflow repeatable. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **447 passed in 13.54s** (offline guard; loopback mocks allowed).
+
+## Phase 3 review fix / 01: Immutable implementation identity (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/run.py` | Persist commit in experiment/results metadata and include it in the experiment identity; reject a different or missing stored commit before checkpoints or provider calls. Treat `unknown` as an exact identity value. | Resume must never mix implementation revisions or silently relabel existing runs. |
+| `harness_v2/tests/test_p3_runner.py` | Cover same-commit resume, distinct commit identities, changes to/from `unknown`, and unchanged checkpoints on rejection. | Pin the implementation boundary and prevent provider calls under an incompatible revision. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **452 passed in 13.48s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks require sandbox escalation).

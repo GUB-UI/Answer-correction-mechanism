@@ -116,12 +116,16 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
     if any(case['rubric_version'] != config['rubric_version'] for case in dataset.cases):
         raise ValueError('config rubric_version differs from dataset rubric_version')
     out = private_directory(Path(out))
-    experiment_identity = identity({'config': config, 'dataset': dataset.manifest})
+    experiment_identity = identity({'config': config, 'dataset': dataset.manifest, 'commit': commit})
     experiment_path = out / 'experiment.json'
     metadata = {'schema_version': 1, 'identity': experiment_identity, 'config': config,
-                'dataset': dataset.manifest, 'dataset_path': str(dataset.path)}
-    if experiment_path.exists() and read_json(experiment_path).get('identity') != experiment_identity:
-        raise ValueError('output directory experiment identity differs; use a new output directory')
+                'dataset': dataset.manifest, 'dataset_path': str(dataset.path), 'commit': commit}
+    if experiment_path.exists():
+        stored = read_json(experiment_path)
+        if stored.get('commit') != commit:
+            raise ValueError('output directory implementation commit differs; use a new output directory')
+        if stored.get('identity') != experiment_identity:
+            raise ValueError('output directory experiment identity differs; use a new output directory')
     write_json(experiment_path, metadata)
     store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
     previous = store.list_runs()

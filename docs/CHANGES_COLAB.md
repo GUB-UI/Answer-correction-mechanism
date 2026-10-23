@@ -349,3 +349,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `docs/harness_v2/phase3_usage.md` | 分母・null・履歴・判定規則と07/08/09の再現コマンドを記載する。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **447 passed in 13.54s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 01: 実装コミットの不変識別（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | experiment/resultsにcommitを保存して実験identityに含める。保存済みcommitが異なる、または存在しない場合は更新・推論前に拒否し、`unknown`も完全一致で照合する。異なる実装の混在や既存記録の付替えを防ぐ。 |
+| `harness_v2/tests/test_p3_runner.py` | 同一commitでの再開、異なるidentity、`unknown`との相互変更、拒否時のチェックポイント保持を検証する。異なる実装でのプロバイダ呼出しを防ぐ。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **452 passed in 13.48s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
