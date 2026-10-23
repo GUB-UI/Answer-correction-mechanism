@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SandboxMode from openai/codex rust-v0.163.0 codex-rs/app-server-protocol/schema/typescript/v2/SandboxMode.ts. codex is not installed here, so this enum is the generated schema value used to reject readOnly.",
+  "title": "SandboxMode",
+  "type": "string",
+  "enum": ["read-only", "workspace-write", "danger-full-access"]
+}
