@@ -23,7 +23,7 @@ from src.grading.parse import GradingOutputError, parse_grading_text  # noqa: E4
 def run(input_path: Path, out_dir: Path) -> dict:
     case = json.loads(input_path.read_text(encoding="utf-8"))
     public = prepare_independent_input(case)
-    private_directory(out_dir)
+    private_directory(out_dir, managed=True)
     private_write_text(out_dir / "input_used.json",
         json.dumps(public, ensure_ascii=False, indent=2),
     )

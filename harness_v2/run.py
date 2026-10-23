@@ -20,7 +20,7 @@ from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.providers.fixture import FixtureProvider
 from harness_v2.providers.gemma_ai_studio import GemmaAIStudio, QuotaExceeded
 from harness_v2.storage.artifacts import ArtifactStore
-from harness_v2.storage.permissions import private_directory, private_open, private_write_text
+from harness_v2.storage.permissions import private_directory, private_write_text
 from harness_v2.storage.secrets import redact
 from harness_v2.storage.sqlite_store import RunStore
 
@@ -34,7 +34,7 @@ def identity(value: Any) -> str:
 
 
 def read_json(path: Path) -> Any:
-    with private_open(path) as handle:
+    with Path(path).open(encoding='utf-8') as handle:
         return json.load(handle)
 
 
@@ -180,7 +180,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
     config, dataset = load_config(Path(config_path)), load_dataset(Path(dataset_path))
     if any(case['rubric_version'] != config['rubric_version'] for case in dataset.cases):
         raise ValueError('config rubric_version differs from dataset rubric_version')
-    out = private_directory(Path(out))
+    out = private_directory(Path(out), managed=True)
     experiment_identity = identity({'config': config, 'dataset': dataset.manifest, 'commit': commit})
     experiment_path = out / 'experiment.json'
     metadata = {'schema_version': 1, 'identity': experiment_identity, 'config': config,

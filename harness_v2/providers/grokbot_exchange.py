@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from harness_v2.storage.secrets import redact
-from harness_v2.storage.permissions import private_directory, private_open, private_write_text
+from harness_v2.storage.permissions import private_directory, private_write_text
 from harness_v2.evaluation.independent import scrub_score_text
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -161,11 +161,12 @@ class FileExchange:
 
     def _path(self, folder: str, request_id: str) -> Path:
         token = safe_request_id(request_id)
-        private_directory(self.root)
         return _inside(self.root / folder, self.root / folder / f"{token}.json")
 
     def publish_request(self, payload: dict[str, Any]) -> Path:
         cleaned = _publishable_request(payload)
+        private_directory(self.root, managed=True)
+        private_directory(self.root / "requests", managed=True)
         path = self._path("requests", cleaned["request_id"])
         private_write_text(path, json.dumps(cleaned, ensure_ascii=False, indent=2))
         return path
@@ -176,13 +177,15 @@ class FileExchange:
         request_path = self._path("requests", cleaned["request_id"])
         if not request_path.exists():
             raise SchemaError(f"no request with request_id {cleaned['request_id']}")
+        private_directory(self.root, managed=True)
+        private_directory(self.root / "results", managed=True)
         path = self._path("results", cleaned["request_id"])
         private_write_text(path, json.dumps(cleaned, ensure_ascii=False, indent=2))
         return path
 
     def read_result(self, request_id: str) -> dict[str, Any]:
         path = self._path("results", request_id)
-        with private_open(path) as handle:
+        with path.open(encoding="utf-8") as handle:
             payload = json.load(handle)
         if not isinstance(payload, dict):
             raise SchemaError("result is not an object")
@@ -202,9 +205,9 @@ class GitHubHandoff:
         cleaned = _publishable_request(payload)
         request_id = safe_request_id(cleaned["request_id"])
         folder = _inside(self.root, self.root / "handoff" / request_id)
-        private_directory(self.root)
-        private_directory(self.root / "handoff")
-        private_directory(folder)
+        private_directory(self.root, managed=True)
+        private_directory(self.root / "handoff", managed=True)
+        private_directory(folder, managed=True)
         branch = f"harness/{request_id}"
         private_write_text(folder / "request.json",
             json.dumps(cleaned, ensure_ascii=False, indent=2),

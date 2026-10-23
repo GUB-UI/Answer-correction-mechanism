@@ -34,16 +34,15 @@ class ArtifactStore:
             raise ArtifactRejected(f"artifact name escapes the store: {name}")
         if path.suffix.lower() in _IMAGE_SUFFIXES:
             raise ArtifactRejected("student images are not stored in the harness")
-        private_directory(self.root)
-        relative = path.parent.relative_to(self.root.resolve())
-        folder = self.root
-        for part in relative.parts:
-            folder = folder / part
-            private_directory(folder)
         return path
 
     def _exclusive_bytes(self, name: str, data: bytes) -> Path:
         path = self._path(name)
+        private_directory(self.root, managed=True)
+        folder = self.root
+        for part in path.parent.relative_to(self.root.resolve()).parts:
+            folder = folder / part
+            private_directory(folder, managed=True)
         try:
             with private_open(path, "xb") as handle:
                 handle.write(data)
@@ -65,9 +64,9 @@ class ArtifactStore:
         return self.write_text(name, json.dumps(redact(payload), ensure_ascii=False, indent=2))
 
     def read_text(self, name: str) -> str:
-        with private_open(self._path(name)) as handle:
+        with self._path(name).open(encoding="utf-8") as handle:
             return handle.read()
 
     def read_bytes(self, name: str) -> bytes:
-        with private_open(self._path(name), "rb") as handle:
+        with self._path(name).open("rb") as handle:
             return handle.read()

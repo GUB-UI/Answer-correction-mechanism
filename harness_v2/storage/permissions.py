@@ -6,19 +6,36 @@ from pathlib import Path
 from typing import IO
 
 
-def private_directory(path: Path) -> Path:
+def private_directory(path: Path, *, managed: bool = False) -> Path:
+    """Create private directories, preserving existing ancestors.
+
+    Only explicitly managed harness output directories may have their existing
+    permissions tightened. Implicit parents can be shared/user directories.
+    """
     path = Path(path)
-    if not path.exists():
-        if not path.parent.exists():
-            private_directory(path.parent)
-        path.mkdir(mode=0o700, exist_ok=True)
+    if not path.parent.exists():
+        private_directory(path.parent)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        if not path.is_dir():
+            raise
+        if not managed:
+            return path
     path.chmod(0o700)
     return path
 
 
 def private_open(path: Path, mode: str = "r", *, encoding: str = "utf-8") -> IO:
-    """Set permissions before reading, truncating, or writing existing data."""
+    """Open reads unchanged; create/tighten only harness-managed output writes.
+
+    Callers must use write modes only for private outputs, never external inputs.
+    Existing parent directories are preserved; owners manage output roots via
+    ``private_directory(..., managed=True)`` when writing.
+    """
     path = Path(path)
+    if not any(flag in mode for flag in "wax+"):
+        return path.open(mode, **({} if "b" in mode else {"encoding": encoding}))
     private_directory(path.parent)
     flags = os.O_RDWR if "+" in mode else os.O_WRONLY if mode[0] in "wax" else os.O_RDONLY
     if mode[0] in "wax":

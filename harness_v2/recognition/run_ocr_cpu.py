@@ -97,7 +97,7 @@ def _run_model(args: argparse.Namespace) -> int:
 
     torch.set_num_threads(args.threads)
     out_dir = Path(args.out)
-    private_directory(out_dir)
+    private_directory(out_dir, managed=True)
     started = time.perf_counter()
     processor = AutoProcessor.from_pretrained(MODEL_ID, revision=REVISION)
     model = AutoModelForImageTextToText.from_pretrained(

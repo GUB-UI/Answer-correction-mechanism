@@ -422,10 +422,9 @@ def compare_experiments(baseline: dict, candidate: dict, *, dataset=None) -> dic
             reasons.append(f'dataset unavailable for metrics: {exc}')
     if dataset is not None:
         import hashlib
-        from harness_v2.storage.permissions import private_open
         derived = {}
         for case in dataset.cases:
-            with private_open(case['ocr_import_path'], 'rb') as handle:
+            with open(case['ocr_import_path'], 'rb') as handle:
                 raw = handle.read()
             if hashlib.sha256(raw).hexdigest() != case['input_sha256']:
                 reasons.append(f"dataset input hash changed: {case['case_id']}")
