@@ -410,3 +410,15 @@ Improvement cycle 2 (Cycle A), `changed_components = ["recognition"]`. Plan revi
 | `harness_v2/tests/test_p5_preprocess_skeleton.py` | Identity of `none`, determinism, size cap, unknown names rejected; equivalent notations equal, different mathematics different; CER and gate thresholds. | Regression contract frozen before candidate OCR is generated. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **730 passed in 22.46s**.
+
+## Phase 5 / 03: Reference-free robustness challenge set (2026-10-24)
+
+Cycle B, evaluation only (no grading component changes). Characterization, not a gate; development-data robustness, not generalization.
+
+| File | What | Why |
+| --- | --- | --- |
+| `scripts/build_challenge_set.py` | Reads only manual transcriptions, problems and rubrics (never a reference file). Per manual case, seed 20261024: O original; F ASCII digits → full-width (math included); S one space around ASCII = + - < >; N delete max(1, round(3% of n)) CJK characters, only when n ≥ 1. No-op variants dropped and recorded. Writes a dataset with empty reference mappings plus `inventory.json` (0600). | Phase 4 follow-up: test false flags and score stability without score labels. The existing loader accepts empty references, so the runner is unchanged. |
+| `harness_v2/evaluation/challenge.py` | Pairs each variant run with the O run of the same source and repetition; per variant: complete pairs, incomplete pairs, item agreement, runs with all items equal, newly flagged / unflagged relative to O, flagged count. | Label-free report; incomplete or failed runs are counted, never filled. |
+| `harness_v2/tests/test_p5_challenge.py` | Transforms, determinism, zero-eligible handling, empty references, 0700/0600 permissions, pairing and incomplete counting. | Regression contract. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **734 passed in 22.16s**.

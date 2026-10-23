@@ -501,3 +501,15 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p5_preprocess_skeleton.py` | none は無変化、決定性、サイズ上限、未知の名前の拒否、同じ式は同じ・違う式は違う、CER と判定のしきい値。候補 OCR を作る前に固定。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **730 passed in 22.46s**。
+
+## harness v2 Phase 5 / 03: 点数ラベルを使わない頑健性チャレンジセット（2026-10-24）
+
+Cycle B。評価用のみで採点部は変えない。合否判定ではなく傾向の把握で、開発データ上の頑健性であり汎化の証明ではない。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `scripts/build_challenge_set.py` | 手動書き起こし・問題・ルーブリックだけを読む（正解点ファイルは読まない）。各ケースで O 原文、F 半角数字→全角、S ASCII の = + - < > の前後に空白、N 漢字・かなを3%（最低1字）削除（対象0字なら作らない）。変化しない版は除外して記録。正解点が空のデータセットと inventory.json（0600）を書く。 |
+| `harness_v2/evaluation/challenge.py` | 各版を同じ元・同じ繰り返しの O と対にし、項目一致率・O に比べて新たに要確認になった数などを数える。失敗や欠けた実行は数えるだけで補わない。 |
+| `harness_v2/tests/test_p5_challenge.py` | 変換、決定性、対象0字の扱い、空の正解点、権限、対応付けを検証。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **734 passed in 22.16s**。
