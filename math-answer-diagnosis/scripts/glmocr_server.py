@@ -35,10 +35,12 @@ class GlmOcrBackend:
         self,
         model_id: str,
         *,
+        revision: str = "",
         device: str = "auto",
         dtype: str = "auto",
         max_new_tokens_cap: int = 4096,
     ) -> None:
+        self.revision = revision
         self.model_id = model_id
         self.model_name = model_id
         self.requested_device = device
@@ -54,9 +56,10 @@ class GlmOcrBackend:
         device = pick_device(self.requested_device)
         dtype = pick_dtype(device, self.requested_dtype)
         print(f"[glmocr] loading {self.model_id} on {device} ({dtype})", flush=True)
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        self.processor = AutoProcessor.from_pretrained(self.model_id, revision=self.revision or None)
         self.model = AutoModelForImageTextToText.from_pretrained(
             self.model_id,
+            revision=self.revision or None,
             dtype=dtype,
             device_map=device,
         )
@@ -139,12 +142,14 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--model", default="zai-org/GLM-OCR")
+    parser.add_argument("--revision", default="")
     parser.add_argument("--device", default="auto", help="auto / cuda / cpu")
     parser.add_argument("--dtype", default="auto", help="auto / bfloat16 / float16 / float32")
     parser.add_argument("--max-new-tokens-cap", type=int, default=4096)
     args = parser.parse_args()
     backend = GlmOcrBackend(
         args.model,
+        revision=args.revision,
         device=args.device,
         dtype=args.dtype,
         max_new_tokens_cap=args.max_new_tokens_cap,

@@ -227,9 +227,9 @@ def test_batch_runs_phases_and_reuses_results(tmp_path: Path) -> None:
         options,
         progress=lambda phase, index, total, answer_id: phases.append(phase),
     )
-    assert report.items[0].status == "done"
+    assert report.items[0].status == "review_required"
     assert report.items[0].score == 3.0
     assert phases == ["ocr", "diagnosis"]
     again = run_batch(storage, config, storage.list_answers(), options)
-    assert again.items[0].status == "skipped_existing"
+    assert again.items[0].status == "review_required"
     assert len(storage.list_diagnosis_results()) == 1

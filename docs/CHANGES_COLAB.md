@@ -496,3 +496,20 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | --- | --- |
 | `docs/harness_v2/experiments/prompt_ambiguity_aware_v1_summary.md` | 同一条件（モデル・設定・データセット・OCR入力）での旧プロンプトと候補プロンプトの比較（集計のみ・画像/個人情報なし）。1-A/2-B/3-A の状態と点数、根拠一致、不要なフラグの変化、定義を明示した曖昧入力の検出率、限界。人が結果を確認するまで既定にしない。 |
 | `harness_v2/tests/test_p4_experiment_summary.py` | 候補扱いの明記と、画像・ローカルパスを含まないことを確認。 |
+## PR #9 修正1: OCR 再利用の条件と手動転記の分離
+
+OCR 結果にエンジン、モデル ID・revision、OCR 設定、入力画像ごとの SHA-256（ページ順）を保存し、現在の実行とすべて一致するときだけ再利用する。情報のない旧レコード、画像の変更・欠落、設定の変更では再利用しない。数式置換が失敗した結果を、置換済みとして再利用しない。`OCR_MODEL_REVISION` は managed サーバーの processor・重みの読み込みにも渡す。
+
+人の修正は元の OCR を残して別レコードの `manual_transcription` として保存する。旧 `human_corrected` レコードもこの入力型として読み込む。一括処理で手動転記を使うときは `--input-type manual_transcription`、テキスト答案は `--input-type typed_text` を明示する。OCR キャッシュとしては扱わない。
+
+検証: `tests/test_ocr_reuse.py` に一致時の再利用、各条件の不一致、複数画像の順序・枚数、旧レコード、手動転記・テキスト入力の分離、数式置換失敗、revision の受け渡しを追加。全テストを指定の Python・pytest コマンドで実行し、147 件成功（既存の HTTP mock 用に localhost 接続を許可）。
+
+## PR #9 修正2: 設問点の自動補完を廃止
+
+合計点が満点・途中点・0点のどの場合も、配点や配点比から設問点を計算しない。モデルが省略した設問、null・無効な設問点は `None` のまま残し、設問と診断を `review_required` にする。この確認は `REVIEW_FLAGS_ROUTE` がオフでも必須。明示された 0 点や部分点は変えず、ルーブリックに実際に出力された同じ ID の点だけを正規化する。mock も配点から設問点を生成しない。合計点も設問点から書き換えず、不一致を確認理由に残す。
+
+診断・一括処理の状態名を `validated` / `review_required` / `failed` に統一し、旧 `needs_teacher_review` は読み込み時に変換する。画面・プロンプトも同じ名前を使う。設問点が未確定のまま保存・教師比較・再チェックできるようにした。
+
+検証: `tests/test_no_score_autofill.py` に合計点と OCR 疑いの組合せ、部分的な出力、明示的な 0 点、null・欠落・無効値、配点なし、ルーブリック項目不足、mock、保存後の null、教師比較、一括再利用時の確認状態を追加。既存の満点補完・合計書き換えの期待値を撤回し、旧状態名のテストを更新。
+
+全テストを指定の Python・pytest コマンドで実行し、180 件成功（既存の HTTP mock 用に localhost 接続を許可）。`docs/harness_v2/CHANGES.md` はこのブランチには存在しないため、新規作成していない。

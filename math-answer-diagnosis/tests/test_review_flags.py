@@ -174,15 +174,17 @@ def test_routing_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("REVIEW_FLAGS_ROUTE", raising=False)
     payload = _payload()
     payload["score"] = 0
+    payload["rubric_scores"][1]["score"] = 0
+    payload["rubric_scores"][1]["reason"] = "基準を満たすので満点とする"
     raw = parse_diagnosis_json(json.dumps(payload, ensure_ascii=False))
     diagnosis = build_diagnosis_result(_context("$x=1$\n$y=2$"), raw, "diag")
     assert diagnosis.raw_output["review_flags"]["needs_review"] is True
     assert diagnosis.raw_output["review_flags"]["routing_applied"] is False
-    assert diagnosis.review_status == ""
+    assert diagnosis.review_status == "validated"
     assert diagnosis.score == 0
 
     monkeypatch.setenv("REVIEW_FLAGS_ROUTE", "true")
     routed = build_diagnosis_result(_context("$x=1$\n$y=2$"), raw, "diag2")
-    assert routed.review_status == "needs_teacher_review"
+    assert routed.review_status == "review_required"
     assert routed.score == 0
     assert routed.possible_ocr_issue is False

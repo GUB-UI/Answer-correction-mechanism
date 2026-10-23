@@ -188,6 +188,7 @@ def cmd_batch(args: argparse.Namespace) -> int:
         diagnosis_provider=args.diagnosis_provider or config.diagnosis.provider,
         prompt_type=args.prompt_type,
         reuse_existing_ocr=not args.rerun_ocr,
+        input_type=args.input_type,
         skip_existing_diagnosis=not args.rerun_diagnosis,
         stop_services_after=args.stop_after,
     )
@@ -317,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
     batch.add_argument("--ocr-provider", default=None)
     batch.add_argument("--diagnosis-provider", default=None)
     batch.add_argument("--prompt-type", default="step_by_step_check")
+    batch.add_argument("--input-type", choices=["ocr_output", "manual_transcription", "typed_text"], default="ocr_output")
     batch.add_argument("--rerun-ocr", action="store_true")
     batch.add_argument("--rerun-diagnosis", action="store_true")
     batch.add_argument("--stop-after", action="store_true", help="終了後に全サーバーを停止")
