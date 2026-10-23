@@ -141,6 +141,29 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
                  'problem_id': case['problem_id'], 'input_version': case['input_version'],
                  'input_sha256': case['input_sha256'], 'rubric_sha256': case['rubric_sha256']}
                 for case, rep, rid in jobs]
+    provenance = {job['request_id']: {**job,
+        'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
+        'config_id': identity(config)} for job in expected}
+    cases_by_request = {rid: case for case, _, rid in jobs}
+
+    def save_failure(row, case):
+        path = out / 'failure_cases' / f'{row["request_id"]}--attempt-{row["outputs"].get("run_attempt", 1)}.json'
+        if path.exists():
+            return
+        failure = failure_from_run(row, **dataset.reference_for(case['problem_id']))
+        if failure is not None:
+            write_json(path, failure.to_dict())
+
+    # Repair durable rows before completed jobs are skipped, including failures
+    # from earlier attempts. Evaluation artifacts never require inference.
+    for row in previous:
+        rid = row['request_id']
+        if rid not in provenance:
+            continue
+        if 'experiment_case' not in row['outputs']:
+            row['outputs']['experiment_case'] = provenance[rid]
+            store.update_outputs(row['run_id'], row['outputs'])
+        save_failure(row, cases_by_request[rid])
     skipped, sent, stopped = 0, 0, ''
     def checkpoint():
         selected = [latest[rid] for _, _, rid in jobs if rid in latest]
@@ -164,6 +187,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         # model-input allowlist. No references are supplied to the provider factory.
         runtime_case = {**case, 'request_id': rid, 'prompt_version': config['prompt_version'],
                         'generation_settings': config['generation_settings'],
+                        'experiment_case': provenance[rid],
                         **dataset.reference_for(case['problem_id'])}
         pipeline = Pipeline(store, provider)
         sent += 1
@@ -172,16 +196,8 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         except QuotaExceeded as exc:
             record = exc.record
             stopped = 'quota'
-        record.outputs['experiment_case'] = {
-            **next(item for item in expected if item['request_id'] == rid),
-            'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
-            'config_id': identity(config)}
-        # Persist experiment metadata in SQLite too, without creating another run.
-        store.update_outputs(record.run_id, record.outputs)
         latest[rid] = record.to_dict()
-        failure = failure_from_run(record, **dataset.reference_for(case['problem_id']))
-        if failure is not None:
-            write_json(out / 'failure_cases' / f'{rid}--attempt-{record.outputs["run_attempt"]}.json', failure.to_dict())
+        save_failure(latest[rid], case)
         checkpoint()
         if stopped:
             break

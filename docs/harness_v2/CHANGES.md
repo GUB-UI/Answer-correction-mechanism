@@ -267,3 +267,12 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_runner.py` | Cover same-commit resume, distinct commit identities, changes to/from `unknown`, and unchanged checkpoints on rejection. | Pin the implementation boundary and prevent provider calls under an incompatible revision. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **452 passed in 13.48s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks require sandbox escalation).
+
+## Phase 3 review fix / 02: Recover interrupted experiment bookkeeping (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/core/pipeline.py, harness_v2/run.py` | Save experiment_case with the initial SQLite row. Before skipping completed requests, reconcile missing provenance and regenerate missing FailureCases for stored attempts; keep existing failure artifacts unchanged. | Interruptions after a durable grade must not leave incomplete reports or trigger another provider call for completed runs. |
+| `harness_v2/tests/test_p3_runner.py` | Interrupt after row save and before failure-file write; exercise legacy provenance recovery, unchanged completed grades, historical failed attempts, idempotency and private permissions. | Prove recovery works from SQLite alone while preserving attempt history and reference isolation. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **455 passed in 14.03s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks allowed).

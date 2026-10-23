@@ -71,6 +71,8 @@ class Pipeline:
         context = {"artifact_id": artifact_id, "run_attempt": attempt, "attempt_count": 0, "attempts": [],
                    "case_metadata": {"problem_id": str(case.get("problem_id") or case.get("input_id") or request_id),
                                      "input_version": str(case.get("input_version") or "")}}
+        if "experiment_case" in case:
+            context["experiment_case"] = dict(case["experiment_case"])
         started = time.perf_counter()
         try:
             return self._run(case, experiment_id=experiment_id, commit=commit, context=context)

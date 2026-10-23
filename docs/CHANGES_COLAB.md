@@ -358,3 +358,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_runner.py` | 同一commitでの再開、異なるidentity、`unknown`との相互変更、拒否時のチェックポイント保持を検証する。異なる実装でのプロバイダ呼出しを防ぐ。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **452 passed in 13.48s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 02: 中断後の実験記録の復元（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/pipeline.py, harness_v2/run.py` | 最初のSQLite保存時にexperiment_caseを含める。完了済み要求のスキップ前に欠落来歴を補修し、過去の試行も含めて不足するFailureCaseを復元。既存ファイルは保持し、中断による報告欠落や完了済み推論の再呼出しを防ぐ。 |
+| `harness_v2/tests/test_p3_runner.py` | 行保存直後・失敗ファイル作成前の中断、旧形式の来歴欠落、完了済み得点の保持、過去の失敗試行、再開の冪等性と0600/0700を検証。SQLiteだけで復元できることを保証する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **455 passed in 14.03s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。

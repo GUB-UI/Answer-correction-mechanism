@@ -154,3 +154,91 @@ def test_experiment_persists_implementation_identity_and_resumes_same_commit(tmp
                           provider_factory=unexpected_provider)['skipped'] == 1
     run_experiment(config, manifest, repeats=1, out=tmp_path / 'other', commit=commit + '-other')
     assert json.loads((tmp_path / 'other/experiment.json').read_text())['identity'] != metadata['identity']
+
+
+def test_resume_after_initial_row_save_keeps_provenance_and_never_repeats_provider(tmp_path, monkeypatch):
+    from harness_v2.run import run_experiment
+    from harness_v2.storage.sqlite_store import RunStore
+    from harness_v2.storage.artifacts import ArtifactStore
+    manifest = make_dataset(tmp_path)
+    config = config_at(tmp_path)
+    out = tmp_path / 'runs'
+    original_save = RunStore.save_run
+    def interrupt_after_save(self, record):
+        original_save(self, record)
+        raise KeyboardInterrupt('after durable row')
+    with monkeypatch.context() as patch:
+        patch.setattr(RunStore, 'save_run', interrupt_after_save)
+        with pytest.raises(KeyboardInterrupt):
+            run_experiment(config, manifest, repeats=1, out=out)
+    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
+    row = store.list_runs()[0]
+    assert row['outputs']['experiment_case']['input_sha256']
+    assert row['outputs']['experiment_case']['repetition'] == 1
+    def unexpected_provider(*args):
+        pytest.fail('completed run was sent again')
+    assert run_experiment(config, manifest, repeats=1, out=out,
+                          provider_factory=unexpected_provider)['skipped'] == 1
+    assert len(store.list_runs()) == 1
+
+
+def test_resume_repairs_legacy_provenance_and_missing_failure_for_completed_run(tmp_path, monkeypatch):
+    import harness_v2.run as runner
+    from harness_v2.storage.sqlite_store import RunStore
+    from harness_v2.storage.artifacts import ArtifactStore
+    manifest = make_dataset(tmp_path)
+    grade = json.loads(_valid())
+    grade['items'][0]['score'] = grade['total_score'] = 3
+    config = config_at(tmp_path, fixture_completion=grade)
+    out = tmp_path / 'runs'
+    original_write = runner.write_json
+    def interrupt_failure_write(path, value):
+        if path.parent.name == 'failure_cases':
+            raise KeyboardInterrupt('before failure artifact')
+        original_write(path, value)
+    with monkeypatch.context() as patch:
+        patch.setattr(runner, 'write_json', interrupt_failure_write)
+        with pytest.raises(KeyboardInterrupt):
+            runner.run_experiment(config, manifest, repeats=1, out=out)
+    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
+    row = store.list_runs()[0]
+    # Also recover pre-fix rows saved before the runner's provenance update.
+    row['outputs'].pop('experiment_case', None)
+    store.update_outputs(row['run_id'], row['outputs'])
+    def unexpected_provider(*args):
+        pytest.fail('completed mismatch was sent again')
+    summary = runner.run_experiment(config, manifest, repeats=1, out=out,
+                                    provider_factory=unexpected_provider)
+    assert summary['skipped'] == summary['completed'] == 1
+    results = json.loads((out / 'results.json').read_text())
+    repaired = results['runs'][0]
+    assert repaired['outputs']['experiment_case']['request_id'] == row['request_id']
+    assert store.list_runs()[0]['outputs'] == repaired['outputs']
+    assert repaired['outputs']['grading'] == row['outputs']['grading']
+    assert len(store.list_runs()) == 1
+    path = next((out / 'failure_cases').glob('*.json'))
+    failure_bytes = path.read_bytes()
+    assert 'reference_total_mismatch' in json.loads(failure_bytes)['errors']
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    runner.run_experiment(config, manifest, repeats=1, out=out, provider_factory=unexpected_provider)
+    assert path.read_bytes() == failure_bytes
+
+
+def test_resume_regenerates_missing_failures_for_earlier_attempts(tmp_path):
+    from harness_v2.run import run_experiment
+    manifest = make_dataset(tmp_path)
+    config = config_at(tmp_path)
+    out = tmp_path / 'runs'
+    def broken(*args):
+        raise ProviderSetupError('temporary failure')
+    run_experiment(config, manifest, repeats=1, out=out, provider_factory=broken)
+    run_experiment(config, manifest, repeats=1, out=out)
+    failure_path = next((out / 'failure_cases').glob('*.json'))
+    failure_path.unlink()
+    def unexpected_provider(*args):
+        pytest.fail('completed run was sent again')
+    run_experiment(config, manifest, repeats=1, out=out, provider_factory=unexpected_provider)
+    assert failure_path.exists()
+    assert 'temporary failure' in json.loads(failure_path.read_text())['errors'][0]
+    assert len(json.loads((out / 'results.json').read_text())['attempt_runs']) == 2
