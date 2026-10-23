@@ -359,3 +359,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_durable_identity.py, harness_v2/tests/test_p3_runner.py` | Cover missing provenance/full identity with matching or rewritten metadata, changed problem text/OCR metadata and historical failed attempts. Preserve interruption recovery with durable identity, unchanged grades, idempotency and private permissions. | Refused resumes must leave all output files unchanged and never reach a provider; proven recovery must remain available without inference or score filling. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **615 passed in 18.05s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.
+
+## Phase 3 final check fix / 12: Prove pre-OCR exemptions and reject malformed outputs (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/comparison.py` | Exempt missing OCR provenance only for failed runs with an explicit integer attempt_count of zero, an empty attempts list and no OCR, prompt, grading-input or response artifacts. Validate output/grading objects before indexing or settings checks; return an incomparable report on compatibility errors before derived hashes or metrics consume malformed history. | Recorded calls/prompts and uncertain counters must not bypass OCR validation, and historical outputs such as null must produce a report instead of an AttributeError. |
+| `harness_v2/tests/test_p3_ocr_exemption.py, harness_v2/tests/test_p3_historical_ocr.py` | Cover prompt/call evidence, missing/null/invalid counters, one/both sides, current/history runs, malformed output/grading objects with supplied or saved datasets, and the CLI's private incomparable report. Remove downstream artifacts from the synthetic pre-OCR fixture; retain the real pre-OCR failure regression. Assert records remain unchanged and failed scores remain unscored. | Require affirmative exemption evidence while preserving genuine early failures, reference isolation, status validation and 0600/0700 reports without inference or score substitution. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **692 passed in 22.74s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.

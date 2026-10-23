@@ -140,8 +140,11 @@ def experiment_index(payload: dict) -> tuple[dict, list[str]]:
         if run is None:
             reasons.append(f'incomplete case: {key}')
             continue
-        if run.get('outputs', {}).get('grading', {}).get('status') not in {'validated', 'review_required', 'failed'}:
+        outputs = run.get('outputs')
+        grading = outputs.get('grading') if isinstance(outputs, dict) else None
+        if not isinstance(grading, dict) or grading.get('status') not in ('validated', 'review_required', 'failed'):
             reasons.append(f'invalid grading status: {key}')
+            continue
         indexed[key] = run
     if by_request:
         reasons.append('unexpected cases in run list')
@@ -154,10 +157,14 @@ def _ocr_metadata_reasons(case: dict, outputs: dict) -> list[str]:
     from harness_v2.recognition.run_ocr_cpu import MODEL_ID
 
     actual = outputs.get('ocr_metadata')
-    # Failures before OCR have no imported provenance to validate.
-    if (actual is None and not any(outputs.get(field) for field in (
+    # Only explicit zero-call failures without OCR or downstream evidence can
+    # precede OCR. Missing/invalid counters cannot establish that exemption.
+    if (actual is None and type(outputs.get('attempt_count')) is int
+            and outputs['attempt_count'] == 0 and outputs.get('attempts') == []
+            and not any(outputs.get(field) for field in (
             'ocr_sha256', 'ocr_artifact', 'ocr_redacted', 'grading_input_sha256',
-            'raw_response_artifact', 'exchange', 'provider_response_id'))
+            'grading_input_artifact', 'prompt_artifact', 'raw_response_artifact',
+            'exchange', 'provider_response_id'))
             and outputs.get('grading', {}).get('status') == 'failed'):
         return []
     if not isinstance(actual, dict):
@@ -219,7 +226,7 @@ def _provenance_reasons(payload: dict, *, sidecars: dict | None = None) -> list[
         if observed is not None and observed != case.get('grading_input', {}).get('sha256'):
             reasons.append(f'run OCR/input hash differs from manifest: {case_id}')
         status = grading.get('status')
-        if status not in {'validated', 'review_required', 'failed'}:
+        if status not in ('validated', 'review_required', 'failed'):
             reasons.append(f'invalid grading status: {case_id}')
         if status != 'failed' and not observed:
             reasons.append(f'run OCR/input hash is missing: {case_id}')
@@ -292,11 +299,15 @@ def _generation_settings_reasons(payload: dict) -> list[str]:
             if not isinstance(outputs, dict):
                 reasons.append(f'effective generation settings unavailable: invalid {field} run')
                 continue
+            grading = outputs.get('grading')
+            if not isinstance(grading, dict):
+                reasons.append(f'effective generation settings unavailable: invalid {field} grading')
+                continue
             # Only explicit setup errors with zero calls can lack effective
             # settings. Missing counters or contradictory response evidence
             # cannot establish that no provider call occurred.
             setup_failure = (
-                outputs.get('grading', {}).get('status') == 'failed'
+                grading.get('status') == 'failed'
                 and outputs.get('error_class') in {'ProviderSetupError', 'MissingAPIKey'}
                 and type(outputs.get('attempt_count')) is int
                 and outputs['attempt_count'] == 0 and outputs.get('attempts') == []
@@ -399,7 +410,12 @@ def compare_experiments(baseline: dict, candidate: dict, *, dataset=None) -> dic
     from harness_v2.evaluation.dataset import load_dataset
     from harness_v2.evaluation.metrics import compute_metrics
     reasons = compatibility_reasons(baseline, candidate)
-    if dataset is None and not reasons:
+    # Compatibility validates output objects before derived hashes or metrics
+    # consume them, including malformed historical attempts in saved results.
+    if reasons:
+        return {'comparable': False, 'verdict': 'incomparable', 'reasons': reasons,
+                'baseline': None, 'candidate': None, 'deltas': {}}
+    if dataset is None:
         try:
             dataset = load_dataset(Path(baseline['dataset_path']))
         except (ValueError, OSError, KeyError, TypeError) as exc:

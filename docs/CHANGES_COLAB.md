@@ -450,3 +450,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_durable_identity.py, harness_v2/tests/test_p3_runner.py` | 来歴/完全な識別子の欠落、一致/書換え済みメタデータ、問題文・OCRメタデータの変更、過去の失敗試行を検証。拒否時の全ファイル不変性とプロバイダ未呼出し、永続識別子がある中断後の復元・得点保持・冪等性・0600/0700を確認する。推論や得点補完なしで安全な復元を維持する。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **615 passed in 18.05s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。
+
+## harness v2 Phase 3 final check fix / 12: OCR前の除外根拠を確認し不正な履歴を比較不能にする（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | OCR来歴欠落の除外は、failedかつ整数のattempt_countが明示的に0、attemptsが空リスト、OCR・プロンプト・採点入力・応答の成果物がない場合だけ許可。outputs/gradingの型を索引・設定照合前に確認し、互換性エラーがあれば派生ハッシュや指標処理の前に比較不能レポートを返す。呼出し・プロンプトの証拠や不明な試行数による検証回避と、過去のoutputsがnullの場合のAttributeErrorを防ぐ。 |
+| `harness_v2/tests/test_p3_ocr_exemption.py, harness_v2/tests/test_p3_historical_ocr.py` | 呼出し/プロンプトの証拠、試行数の欠落・null・不正型、片側/両側、最新/過去の実行、明示/保存済みdatasetでの不正outputs/grading、CLIの非公開比較不能レポートを検証。合成したOCR前失敗から後続成果物を除き、実際のOCR前例外の回帰テストも維持。記録不変性・失敗得点の未補完・参照分離・状態検証・0600/0700を保持し、根拠のある早期失敗だけを除外する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **692 passed in 22.74s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。

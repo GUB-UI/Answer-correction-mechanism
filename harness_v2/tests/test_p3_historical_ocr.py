@@ -169,7 +169,8 @@ def test_sidecars_are_compared_between_histories_when_latest_failure_precedes_oc
         latest['run_id'] = 'latest'
         latest['outputs'].update(run_attempt=2, attempt_count=0, attempts=[], error_class='ProviderSetupError')
         for field in ('ocr_metadata', 'ocr_sha256', 'ocr_artifact', 'ocr_redacted', 'grading_input_sha256',
-                      'raw_response_artifact', 'exchange', 'provider_response_id'):
+                      'grading_input_artifact', 'prompt_artifact', 'raw_response_artifact',
+                      'exchange', 'provider_response_id'):
             latest['outputs'].pop(field, None)
         payload['runs'] = [latest]
         payload['attempt_runs'].append(copy.deepcopy(latest))
