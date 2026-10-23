@@ -14,7 +14,9 @@ import unicodedata
 
 _FENCE = re.compile(r"```[A-Za-z]*")
 _FRAC_HEAD = re.compile(r"\\[dt]?frac(?![A-Za-z])\s*")
-_ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|√|\bsqrt(?=\s*\()")
+# Canonical roots can directly follow a coefficient or variable, including
+# inside another root. Recognize them again without losing their scope.
+_ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|√|sqrt(?=\s*\()")
 _SUPERSCRIPTS = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+")
 _SUPERSCRIPT_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")

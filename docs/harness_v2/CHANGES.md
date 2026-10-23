@@ -1,5 +1,12 @@
 # Harness v2 changes
 
+## Fix 1: preserve canonical root scope after coefficients and variables
+
+- Recognize canonical `sqrt(...)` at any position, including immediately after digits or letters, using the existing balanced radicand parser. LaTeX, Unicode, and canonical roots now retain the same explicit scope when prefixed or nested, and repeated normalization preserves the result.
+- Added 36 regression cases for notation equivalence, radical scope, and idempotence, including nested roots, fractions, exponents, and full-width notation. Before the fix, 31 of the new cases failed.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **902 passed** (localhost mock servers permitted).
+
 ## PR #10: preserve input and shared-directory permissions
 
 - Read-only `private_open()` calls preserve file and directory modes and do not create missing parents. Config, dataset, OCR text/metadata, artifact, and exchange-result reads now use plain reads; SQLite listing uses a read-only connection.

@@ -29,6 +29,37 @@ def test_grouped_and_nested_roots(latex, unicode, expected):
     assert skeleton(expected) == expected
 
 
+@pytest.mark.parametrize("prefix", ["2", "x", "ab", "2x"])
+@pytest.mark.parametrize("notation", [r"\sqrt{13}", "√13", "sqrt(13)"])
+def test_roots_after_coefficients_and_variables_match(prefix, notation):
+    canonical = prefix + "sqrt(13)"
+    assert skeleton(prefix + notation) == skeleton(canonical) == canonical
+    assert cer(prefix + notation, canonical) == 0
+
+
+@pytest.mark.parametrize("prefix", ["2", "x", "ab", "2x"])
+@pytest.mark.parametrize("outside,inside", [
+    ("sqrt(x)+3", "sqrt(x+3)"),
+    ("sqrt(x)^2", "sqrt(x^2)"),
+    ("sqrt(2sqrt(x))+3", "sqrt(2sqrt(x)+3)"),
+])
+def test_prefixed_canonical_roots_preserve_scope(prefix, outside, inside):
+    assert skeleton(prefix + outside) == prefix + outside
+    assert skeleton(prefix + inside) == prefix + inside
+    assert cer(prefix + outside, prefix + inside) > 0
+
+
+@pytest.mark.parametrize("text", [
+    r"2\sqrt{13}", "2√13", "2sqrt(13)", "xsqrt(x+3)",
+    "absqrt(x)+3", "2xsqrt(x^2)", r"\sqrt{2\sqrt{x}+3}",
+    "2sqrt(xsqrt(x+3))+sqrt(y)", r"\frac{2\sqrt{x}}{3}",
+    "２√（ｘ＋３）", "2√x²", r"$a \sqrt{x} + b \sqrt{y}$",
+])
+def test_prefixed_root_normalization_is_idempotent(text):
+    normalized = skeleton(text)
+    assert skeleton(normalized) == normalized
+
+
 @pytest.mark.parametrize("digits,superscript", list(zip("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")))
 def test_superscript_digits_keep_exponent_operator(digits, superscript):
     expected = "x^" + digits
