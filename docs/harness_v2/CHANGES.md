@@ -436,3 +436,14 @@ Sol diff review round 1 (REJECT: 1 major, 2 minor). The 02 entry's claim that no
 The A1 gate was recomputed with the fixed skeleton; the outcome is reported in the Phase 5 report.
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **744 passed in 21.11s**.
+
+## Phase 5 / 05: Challenge report counts every scheduled job (2026-10-24)
+
+Sol diff review round 2 (REJECT: 2 major, 1 minor). Corrects the 03 entry: missing runs were not counted and failed grades could be compared.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/challenge.py` | Iterates `expected_runs`; each job is ok / missing / failed (status not validated or review_required) / incomplete (duplicate, unexpected, missing or non-finite item scores; optional `--dataset` supplies rubric item ids, no labels). Only ok pairs are compared; variants whose O is not ok are counted as `unpaired_no_valid_O`. Results per source and per variant, with `flag_rate` = flagged / scored runs (None when no scored run). | [major] missing jobs vanished from coverage; [major] a failed grade with duplicate item ids could count as full agreement; [minor] per-source results and flag-rate denominators. |
+| `harness_v2/tests/test_p5_challenge.py` | Missing variants and originals, failed/duplicate/NaN/unexpected items, per-source separation of C0/C1. | Regression contract. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **748 passed in 20.31s**.

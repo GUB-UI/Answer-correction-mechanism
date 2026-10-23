@@ -51,19 +51,61 @@ def test_builder_writes_label_free_private_dataset(tmp_path):
 
 
 def _run(rid, status, scores):
-    items = [{"item_id": k, "score": v} for k, v in scores.items()] if scores is not None else []
+    items = [{"item_id": k, "score": v} for k, v in scores] if scores is not None else []
     return {"request_id": rid, "outputs": {"grading": {"status": status, "items": items}}}
 
 
-def test_report_pairs_by_repetition_and_counts_incomplete():
-    expected = [{"request_id": f"{v}{r}", "case_id": f"P:manual:{v}", "repetition": r}
-                for v in ("O", "F", "N") for r in (1, 2)]
-    runs = [_run("O1", "validated", {"R1": 2}), _run("O2", "validated", {"R1": 1}),
-            _run("F1", "validated", {"R1": 2}), _run("F2", "review_required", {"R1": 2}),
-            _run("N1", "failed", None), _run("N2", "review_required", {"R1": 1})]
-    report = challenge_report({"expected_runs": expected, "runs": runs})
+def _jobs(sources=("P:manual",), variants=("O", "F", "N"), reps=(1, 2)):
+    return [{"request_id": f"{s}{v}{r}", "case_id": f"{s}:{v}", "problem_id": "P", "repetition": r}
+            for s in sources for v in variants for r in reps]
+
+
+def test_report_pairs_by_repetition_and_classifies_outcomes():
+    runs = [_run("P:manualO1", "validated", [("R1", 2)]), _run("P:manualO2", "validated", [("R1", 1)]),
+            _run("P:manualF1", "validated", [("R1", 2)]), _run("P:manualF2", "review_required", [("R1", 2)]),
+            _run("P:manualN1", "failed", None), _run("P:manualN2", "review_required", [("R1", 1)])]
+    report = challenge_report({"expected_runs": _jobs(), "runs": runs})
     f, n = report["variants"]["F"], report["variants"]["N"]
     assert f["pairs"] == 2 and f["items_equal"] == 1 and f["item_agreement"] == 0.5
-    assert f["newly_flagged_relative_to_O"] == 1
-    assert n["incomplete_pairs"] == 1 and n["pairs"] == 1 and n["flagged"] == 1
+    assert f["newly_flagged_relative_to_O"] == 1 and f["flag_rate"] == 0.5
+    assert n["failed"] == 1 and n["pairs"] == 1 and n["flagged"] == 1 and n["flag_denominator"] == 1
     assert "reference" not in json.dumps(report)
+
+
+def test_missing_runs_are_counted_not_dropped():
+    runs = [_run("P:manualO1", "validated", [("R1", 2)]), _run("P:manualF1", "validated", [("R1", 2)])]
+    report = challenge_report({"expected_runs": _jobs(), "runs": runs})
+    f, o, n = (report["variants"][k] for k in "FON")
+    assert f["scheduled"] == 2 and f["missing"] == 1 and f["pairs"] == 1
+    assert o["missing"] == 1 and n["missing"] == 2 and n["item_agreement"] is None and n["flag_rate"] is None
+
+
+def test_variant_without_valid_original_is_unpaired():
+    runs = [_run("P:manualO1", "failed", None), _run("P:manualF1", "validated", [("R1", 2)])]
+    report = challenge_report({"expected_runs": _jobs(variants=("O", "F"), reps=(1,)), "runs": runs})
+    assert report["variants"]["F"]["unpaired_no_valid_O"] == 1 and report["variants"]["F"]["pairs"] == 0
+
+
+def test_failed_duplicate_nonfinite_and_unexpected_items_never_agree():
+    runs = [_run("P:manualO1", "validated", [("R1", 1)]),
+            _run("P:manualF1", "failed", [("R1", 0), ("R1", 1)]),
+            _run("P:manualG1", "validated", [("R1", 0), ("R1", 1)]),
+            _run("P:manualH1", "validated", [("R1", float("nan"))]),
+            _run("P:manualI1", "validated", [("R1", 1), ("R9", 0)])]
+    report = challenge_report({"expected_runs": _jobs(variants=("O", "F", "G", "H", "I"), reps=(1,)),
+                               "runs": runs}, rubric_items={"P": ["R1"]})
+    v = report["variants"]
+    assert v["F"]["failed"] == 1
+    assert v["G"]["incomplete"] == v["H"]["incomplete"] == v["I"]["incomplete"] == 1
+    assert all(v[k]["pairs"] == 0 for k in "FGHI")
+
+
+def test_by_source_keeps_transcriptions_separate():
+    jobs = _jobs(sources=("P:manual_C0", "P:manual_C1"), variants=("O", "F"), reps=(1,))
+    runs = [_run("P:manual_C0O1", "validated", [("R1", 1)]), _run("P:manual_C0F1", "validated", [("R1", 1)]),
+            _run("P:manual_C1O1", "validated", [("R1", 1)]), _run("P:manual_C1F1", "review_required", [("R1", 0)])]
+    report = challenge_report({"expected_runs": jobs, "runs": runs})
+    assert report["by_source"]["P:manual_C0"]["F"]["item_agreement"] == 1.0
+    assert report["by_source"]["P:manual_C1"]["F"]["item_agreement"] == 0.0
+    assert report["by_source"]["P:manual_C1"]["F"]["newly_flagged_relative_to_O"] == 1
+    assert report["variants"]["F"]["pairs"] == 2

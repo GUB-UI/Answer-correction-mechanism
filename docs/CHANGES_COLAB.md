@@ -526,3 +526,14 @@ Sol 差分レビュー1回目（REJECT: major 1、minor 2）への対応。02 �
 修正後の skeleton で A1 判定を再計算し、結果は Phase 5 レポートに記載。
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **744 passed in 21.11s**。
+
+## harness v2 Phase 5 / 05: チャレンジ報告で予定した全実行を数える（2026-10-24）
+
+Sol 差分レビュー2回目（REJECT: major 2、minor 1）への対応。03 の記述を訂正（欠けた実行が数えられず、失敗した採点が比較に入り得た）。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/challenge.py` | 予定した実行ごとに ok / missing（記録なし）/ failed / incomplete（項目の重複・欠け・想定外・非有限）に分類し、ok 同士だけ比べる。元の版が ok でない場合は別に数える。結果を元の書き起こしごと・版ごとに出し、要確認率は分母つき。補完はしない。 |
+| `harness_v2/tests/test_p5_challenge.py` | 欠け、失敗、重複・NaN、C0/C1 の分離を検証。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **748 passed in 20.31s**。
