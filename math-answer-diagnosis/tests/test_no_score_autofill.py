@@ -195,3 +195,79 @@ def test_recheck_instructions_preserve_undetermined_scores(context):
     instructions = build_recheck_instructions(SimpleNamespace(question="(2)"), result)
     assert "合計: 未確定 / 20" in instructions
     assert "(2): 未確定 / 7" in instructions
+
+
+@pytest.mark.parametrize("scores_present", [False, True])
+@pytest.mark.parametrize("review_status", [None, "", "validated", "review_required", "failed"])
+def test_legacy_empty_question_scores_require_review(context, scores_present, review_status):
+    payload = build(context).model_dump()
+    if scores_present:
+        payload["question_scores"] = []
+    else:
+        payload.pop("question_scores")
+    if review_status is None:
+        payload.pop("review_status")
+    else:
+        payload["review_status"] = review_status
+    result = DiagnosisResult.model_validate_json(json.dumps(payload))
+    assert result.review_status == ("failed" if review_status == "failed" else "review_required")
+    assert result.question_scores == []
+    assert result.score == payload["score"]
+    assert result.max_score == payload["max_score"]
+
+
+@pytest.mark.parametrize("scores_present", [False, True])
+@pytest.mark.parametrize("review_status", [None, "", "validated", "failed"])
+def test_batch_cache_reuses_legacy_empty_scores_with_review_status(
+    context, tmp_path, scores_present, review_status,
+):
+    from src.batch_pipeline import BatchOptions, run_batch
+    from src.models import AnswerRecord
+
+    class CountingDiagnosis(MockDiagnosisAdapter):
+        calls = 0
+
+        def run(self, context):
+            self.calls += 1
+            return {"score": 10, "max_score": 20, "question_scores": []}
+
+    config = load_config(tmp_path)
+    storage = Storage(config)
+    storage.save_problem(context.problem)
+    answer = AnswerRecord(answer_id="a", problem_id="p", created_at=utc_now_iso(),
+                          student_anonymized_id="student", image_path=storage.save_image(b"test input"))
+    storage.save_answer(answer)
+    adapter = CountingDiagnosis()
+    options = BatchOptions(ocr_provider="mock", diagnosis_provider="mock")
+    first = run_batch(storage, config, [answer], options, diagnosis_adapter=adapter).items[0]
+    payload = storage.get_diagnosis_result(first.diagnosis_id).model_dump()
+    if scores_present:
+        payload["question_scores"] = []
+    else:
+        payload.pop("question_scores")
+    if review_status is None:
+        payload.pop("review_status")
+    else:
+        payload["review_status"] = review_status
+    # Write a legacy record directly so model validation happens on cache load.
+    (config.records_dir / "diagnosis_results.jsonl").write_text(json.dumps(payload) + "\n")
+    reused = run_batch(storage, config, [answer], options, diagnosis_adapter=adapter).items[0]
+    assert reused.ocr_id == first.ocr_id
+    assert reused.diagnosis_id == first.diagnosis_id
+    assert adapter.calls == 1
+    assert reused.status == ("failed" if review_status == "failed" else "review_required")
+    assert reused.score == first.score == payload["score"]
+    assert reused.max_score == first.max_score == payload["max_score"]
+    assert storage.get_diagnosis_result(reused.diagnosis_id).question_scores == []
+
+
+def test_legacy_blank_status_with_complete_explicit_scores_can_validate(context):
+    payload = build(context, score=6, question_scores=[
+        {"question": "(1)", "score": 0}, {"question": "(2)", "score": 2},
+        {"question": "(3)", "score": 4},
+    ]).model_dump()
+    payload["review_status"] = ""
+    result = DiagnosisResult.model_validate(payload)
+    assert result.review_status == "validated"
+    assert result.question_scores == payload["question_scores"]
+    assert result.score == payload["score"]
