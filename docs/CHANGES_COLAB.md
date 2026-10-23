@@ -648,3 +648,11 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 | `harness_v2/providers/grokbot_exchange.py` | 文字列の `enum` 検査が抜けていたのを修正（Sol 指摘）。 |
 | `harness_v2/improvement/history.py` | 履歴ディレクトリを管理対象の非公開出力として作成（PR #10 の権限方針に合わせる）。 |
 | `harness_v2/tests/test_improvement_handoff.py` | 権限、enum、snapshot 不一致、未発行ID、再送の拒否。 |
+
+## Phase 5 / 10: 履歴CLI（承認・マージ確認・ロールバック）と過去サイクルの登録（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `scripts/improvement_history.py` | `status`・`verify`・`approve`（承認を書く唯一の経路。承認者とオーナー指示の原文が必須）・`override`・`rollback`・読み取り専用の `check-merge`（PR の head が評価済み候補と一致し、リポジトリ/ベース/PR/最新 snapshot に結び付いた承認がなければ終了コード1）。実際のマージ制限は GitHub のブランチ保護（オーナー操作）。 |
+| `scripts/register_history.py` | Phase 4 のプロンプト改善（improved、採否は人の確認待ち）と Phase 5 の OCR 前処理（ゲート不合格で却下）を、根拠ファイルのハッシュつきで冪等に登録。 |
+| `harness_v2/tests/test_improvement_cli.py` | 承認前後・head 変更後の check-merge、昇格→ロールバック、検証。 |

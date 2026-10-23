@@ -537,3 +537,11 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 | `harness_v2/providers/grokbot_exchange.py` | `_check` now enforces `enum` on string fields. | Sol plan review: enum was skipped after the string check. |
 | `harness_v2/improvement/history.py` | History directories are created as managed private outputs (`managed=True`); replay validates review requests/replays. | Align with the PR #10 permission rule. |
 | `harness_v2/tests/test_improvement_handoff.py` | Files/modes, enum, snapshot mismatch, unknown request, replay. | |
+
+## Phase 5 / 10: History CLI (approve/check-merge/rollback) and historical cycle registration (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `scripts/improvement_history.py` | `status`, `verify`, `approve` (the only approval writer; requires approver + verbatim quote), `override`, `rollback`, and read-only advisory `check-merge` (gh pr view; exit 1 unless the PR head equals the evaluated candidate and an approval binds repository/base/PR/latest snapshot). | Design §8 (e): no merge without a recorded approval; the actual merge boundary remains GitHub branch protection (owner action). |
+| `scripts/register_history.py` | Idempotently registers the Phase 4 prompt cycle (evaluated improved from experiment/comparison evidence; decision pending human review) and the Phase 5 OCR-preprocess cycle (skeleton-CER gate evidence; rejected). | Design §8 (a)(c): keep successful and non-improving proposals with their evidence. |
+| `harness_v2/tests/test_improvement_cli.py` | check-merge before/after approval and after the PR head moves; promote then rollback; verify; status. | Rollback demonstration. |
