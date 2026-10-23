@@ -459,3 +459,14 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_ocr_exemption.py, harness_v2/tests/test_p3_historical_ocr.py` | 呼出し/プロンプトの証拠、試行数の欠落・null・不正型、片側/両側、最新/過去の実行、明示/保存済みdatasetでの不正outputs/grading、CLIの非公開比較不能レポートを検証。合成したOCR前失敗から後続成果物を除き、実際のOCR前例外の回帰テストも維持。記録不変性・失敗得点の未補完・参照分離・状態検証・0600/0700を保持し、根拠のある早期失敗だけを除外する。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **692 passed in 22.74s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。
+
+## harness v2 Phase 4 / 01: プロンプト版の登録制と曖昧さ申告プロンプト（2026-10-23）
+
+改善サイクル1、変更コンポーネントは prompt のみ。計画は GPT-6.1 Sol の読み取り専用レビューを2回受け、OCRトークン検出器（過学習・複数コンポーネント）案から、このプロンプトのみの変更に修正した。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/grading/scorer.py` | `PROMPT_VERSIONS` を追加し、prompt_version で指示文の追記を選ぶ。`v0`・`harness_v2_default`・`harness_v2_` 以外の旧ラベルは従来プロンプトをバイト単位で再現し、未登録の `harness_v2_*` は拒否。新版 `harness_v2_ambiguity_aware_v1`: 書かれた数学だけに得点し内容を補わない、採点に影響する崩れ・曖昧な箇所は逐語引用し uncertainty≥0.5 と review_reason を付ける、明確な記述や明確な誤りには付けない。問題ID・式・点数は一切含まない。 |
+| `harness_v2/core/pipeline.py` | ケースの prompt_version を build_prompt に渡す。 |
+| `harness_v2/run.py` | 未登録の `harness_v2_*` 版を API 呼び出し前に拒否。 |
+| `harness_v2/tests/test_p4_prompt_versions.py` | 既定プロンプトのハッシュ固定、追記のみの差分、禁止語なし、旧ラベル、誤記拒否、uncertainty→review_required・null→failed（補完なし）を検証。 |

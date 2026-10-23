@@ -131,7 +131,8 @@ class Pipeline:
         if prompt_answer != answer_text:
             grading_name = f"grading_private/{artifact_id}.txt"
             _, grading_hash = self.store.artifacts.write_private_text(grading_name, prompt_answer)
-        prompt = build_prompt(str(view.get("problem_text") or ""), prompt_answer, rubric)
+        prompt = build_prompt(str(view.get("problem_text") or ""), prompt_answer, rubric,
+                              str(case.get("prompt_version") or "v0"))
         prompt_name = f"prompts/{artifact_id}.txt"
         context.update({"prompt_artifact": prompt_name,
                         "ocr_artifact": artifact.artifact_name if artifact else "",

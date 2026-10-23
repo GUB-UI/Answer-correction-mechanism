@@ -148,8 +148,36 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
     return items, _number(total) if total is not None else None, fence
 
 
-def build_prompt(problem_text: str, answer_text: str, rubric: list[RubricItem]) -> str:
+AMBIGUITY_AWARE_V1 = (
+    " The answer text may be a transcription and can contain transcription errors. "
+    "Give credit only for mathematics supported by the supplied text; do not reconstruct content that is "
+    "not written. When a passage that affects an item's score looks garbled or ambiguous, cite it verbatim, "
+    "explain in math_reason, set uncertainty to at least 0.5, and name the passage in review_reason. "
+    "Do not raise uncertainty for clear work, including clear mistakes."
+)
+
+# Registered instruction variants. "v0" and "harness_v2_default" (and any label outside the reserved
+# "harness_v2_" namespace, as used by older experiments) render the historical prompt byte for byte.
+# An unregistered "harness_v2_*" name is rejected so a typo cannot silently run the default prompt.
+PROMPT_VERSIONS = {
+    "v0": "",
+    "harness_v2_default": "",
+    "harness_v2_ambiguity_aware_v1": AMBIGUITY_AWARE_V1,
+}
+
+
+def prompt_suffix(prompt_version: str) -> str:
+    if prompt_version in PROMPT_VERSIONS:
+        return PROMPT_VERSIONS[prompt_version]
+    if prompt_version.startswith("harness_v2_"):
+        raise ValueError(f"unregistered prompt_version: {prompt_version!r}")
+    return ""
+
+
+def build_prompt(problem_text: str, answer_text: str, rubric: list[RubricItem],
+                 prompt_version: str = "harness_v2_default") -> str:
     """Prompt body. Reference scores are not a field on this object."""
+    suffix = prompt_suffix(prompt_version)
     return json.dumps(
         {
             "problem_text": problem_text,
@@ -177,7 +205,7 @@ def build_prompt(problem_text: str, answer_text: str, rubric: list[RubricItem]) 
                 "review_reason is a string and is empty when the item is clear. "
                 "total_score is the sum of the item scores, or null if any score is null. "
                 "Rubric max_points is the point allocation. Do not return a different maximum."
-            ),
+            ) + suffix,
         },
         ensure_ascii=False,
     )

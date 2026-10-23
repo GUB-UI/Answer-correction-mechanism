@@ -368,3 +368,14 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` â
 | `harness_v2/tests/test_p3_ocr_exemption.py, harness_v2/tests/test_p3_historical_ocr.py` | Cover prompt/call evidence, missing/null/invalid counters, one/both sides, current/history runs, malformed output/grading objects with supplied or saved datasets, and the CLI's private incomparable report. Remove downstream artifacts from the synthetic pre-OCR fixture; retain the real pre-OCR failure regression. Assert records remain unchanged and failed scores remain unscored. | Require affirmative exemption evidence while preserving genuine early failures, reference isolation, status validation and 0600/0700 reports without inference or score substitution. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` â€” **692 passed in 22.74s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.
+
+## Phase 4 / 01: Prompt version registry and ambiguity-aware candidate prompt (2026-10-23)
+
+Improvement cycle 1, `changed_components = ["prompt"]`. Plan reviewed twice by GPT-6.1 Sol (read-only); the reviewed plan replaced an OCR token detector (overfit risk, multi-component) with this prompt-only change.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/grading/scorer.py` | `PROMPT_VERSIONS` registry; `build_prompt(..., prompt_version)` appends the registered instruction suffix. `v0`, `harness_v2_default` and legacy labels outside the `harness_v2_` namespace render the historical prompt byte for byte; unregistered `harness_v2_*` names raise. New `harness_v2_ambiguity_aware_v1`: source-neutral instruction to credit only written mathematics, never reconstruct content, cite garbled/ambiguous score-affecting passages verbatim and set uncertainty >= 0.5 with a review_reason, and not raise uncertainty for clear work or clear mistakes. | Surface transcription ambiguity through the existing uncertainty -> review_required rule without detector code, problem ids, formulas or scores. Typos in a variant name must not silently run the default prompt. |
+| `harness_v2/core/pipeline.py` | Pass the case `prompt_version` into `build_prompt`. | The configured version now selects the prompt, not only a label. |
+| `harness_v2/run.py` | `load_config` rejects unregistered `harness_v2_*` prompt versions before any provider call. | Fail before spending quota. |
+| `harness_v2/tests/test_p4_prompt_versions.py` | Pin default prompt hash; suffix-only difference; no problem/formula/score tokens in the suffix; legacy labels; typo rejection; uncertainty -> review_required and null -> failed without filling. | Regression contracts for the candidate. |
