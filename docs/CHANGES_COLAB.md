@@ -231,3 +231,26 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 
 - `harness_v2/providers/gemma_ai_studio.py`: AI Studio クライアントに `http_options.timeout=180000`（ms）を追加。Phase 2 実走で応答のない呼び出しがバッチを20分以上止めたため。エンドポイント固定・`vertexai=False`・429停止・フォールバックなしは維持。
 - テスト: `test_rereview_gemma_policy.py`、`test_gemma.py` を更新・追加。`pytest -q harness_v2/tests math-answer-diagnosis/tests` → 309 passed。実機で1回呼び出し成功を確認。
+
+## 追記: harness v2 の参照採点・比較・非公開データ保護の3修正（2026-10-23）
+
+状態名は `validated` / `review_required` / `failed` を維持。参照得点は採点後の評価専用とし、参照との不一致だけでは状態や予測得点を変更しない。欠落得点の補完、特定の数式・得点の特例、`math-answer-diagnosis/` の編集、git 書き込みは行っていない。
+
+| 修正 | ファイル | 何を、なぜ |
+| --- | --- | --- |
+| 1 | `harness_v2/core/pipeline.py` | 合計の `reference_score` と項目別の `reference_items` を採点・独立レビュー後に照合。`validated` でも不一致なら既存の FailureCase・提案・実行記録リンクを保存する。`independent=False` でもモデル入力の参照情報除去を必須にし、評価用ラベルによる採点への影響を防ぐ。 |
+| 1 | `harness_v2/evaluation/independent.py` | 埋め込み JSON とラベル付きテキストから `reference_items` を除去。Python/YAML 風・不正形式の代入は残りのテキストを保守的に伏せ、値が漏れないようにする。元の OCR は非公開アーティファクトにそのまま残す。 |
+| 1 | `harness_v2/tests/test_reference_evaluation.py` | 合計・項目別不一致、一致・参照なし、0点、未採点を検証。provider に渡るプロンプトと実際の Codex turn の両方に参照キー・値が無いこと、JSON/Python/YAML 形式でも漏れないことを確認する。 |
+| 2 | `harness_v2/evaluation/comparison.py` | 結果読込・新旧双方の妥当性検証・ベンチマーク集計を共通化。旧形式の必須項目、正規フィールド、得点・根拠・合計と新形式の `validated` を確認し、項目別のレビュー理由・不確実性も保持する。不完全なケースも分母に残し、成功率の水増しを防ぐ。 |
+| 2 | `scripts/compare_old_vs_new.py` | 終了コードだけでなく双方の保存結果を確認し、比較の成否・不完全な理由を記録。不完全・入力0件では CLI を非0終了にする。非公開テキストを含み得る summary も作成・再書込み時に権限を固定する。比較状態と採点状態は別に扱う。 |
+| 2 | `harness_v2/tests/test_comparison_reliability.py` | 終了0でも結果なし・解析失敗・不正得点なら不成功になること、結果ファイル欠落・破損、別形式の別名による検証回避、旧形式必須項目欠落・項目別の要確認フラグ、空入力、集計・CLI 終了・summary 権限を検証する。 |
+| 3 | `harness_v2/storage/permissions.py` | ディレクトリを `0o700`、ファイルを `0o600` に固定する共通処理を追加。既存ファイルも読込・切詰め・書込み前に fd で chmod し、呼出側の umask に依存しない。 |
+| 3 | `harness_v2/storage/artifacts.py` | 全アーティファクトと親ディレクトリの作成・読込を保護。上書きを拒否した既存ファイルも chmod する。`ocr_private/`・`grading_private/`・raw 応答・任意名の非公開アーティファクトを、バイト列と不変性を保って保護する。 |
+| 3 | `harness_v2/storage/sqlite_store.py` | DB を接続前に安全な権限で用意し、既存 DB・journal/WAL/SHM も修正。接続を明示的に閉じ、処理後も権限を確認する。新規 sidecar は DB の権限を継承させる。 |
+| 3 | `harness_v2/recognition/ocr.py`, `harness_v2/recognition/run_ocr_cpu.py` | インポート元の生 OCR、生成 Markdown・統計・出力ディレクトリの権限を固定。アーティファクト保存前の OCR も公開しないため。 |
+| 3 | `harness_v2/__main__.py`, `scripts/legacy_runner.py` | 新旧 CLI の結果と入力コピーを、既存ファイルへの再書込みも含めて保護。生の答案・モデル本文を含むため。 |
+| 3 | `harness_v2/providers/grokbot_exchange.py` | request/result の作成・読込と handoff ファイル・ディレクトリの権限を固定。ファイル連携に残る答案も保護する。 |
+| 3 | `harness_v2/tests/test_private_permissions.py` | `os.umask(0o000)` と `os.stat` で新規・既存アーティファクト、OCR、CLI・旧形式・連携ファイル、DB と稼働中の journal/WAL/SHM を検証。終了時に umask を復元する。CPU 出力はローカルのモデル代替で試し、重みを取得しない。 |
+| 共通 | `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md`, `commit_plan.json` | 変更内容・理由・検証結果を記録し、修正1→2→3の3グループに整理。共有する両ドキュメントは最後のグループに置き、git 状態を変更せずレビュー可能にする。 |
+
+検証: `/workspace/venv_h2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **379 passed（12.27秒）**。既存アプリの localhost モックサーバー用に loopback ソケットの sandbox 権限を付けて実行した。最初の制限付き実行は345件成功、ソケット権限による失敗・エラー14件。外部接続・モデル取得は不要。read-only レビューで見つかった非 JSON の参照情報、空比較、形式の別名による検証回避も回帰テストを追加して修正した。`git diff --check` も成功。

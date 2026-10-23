@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+from harness_v2.storage.permissions import private_directory, private_open, private_write_text
+
 MODEL_ID = "SeerRay-Lab/Xiaomi-OCR-0"
 REVISION = "ff990be318c4c68f7e621dd690231200f47e48c4"
 MAX_NEW_TOKENS = 4096
@@ -95,7 +97,7 @@ def _run_model(args: argparse.Namespace) -> int:
 
     torch.set_num_threads(args.threads)
     out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    private_directory(out_dir)
     started = time.perf_counter()
     processor = AutoProcessor.from_pretrained(MODEL_ID, revision=REVISION)
     model = AutoModelForImageTextToText.from_pretrained(
@@ -143,7 +145,7 @@ def _run_model(args: argparse.Namespace) -> int:
         new_tokens = int(output.shape[1] - prompt_len)
         text = processor.decode(output[0][prompt_len:], skip_special_tokens=True)
         name = Path(image_path).stem
-        (out_dir / f"{name}.md").write_text(text, encoding="utf-8")
+        private_write_text(out_dir / f"{name}.md", text)
         stats = {
             "image": name,
             "revision": REVISION,
@@ -157,7 +159,7 @@ def _run_model(args: argparse.Namespace) -> int:
             "load_s": round(load_s, 3),
             "model": MODEL_ID,
         }
-        with (out_dir / "stats.jsonl").open("a", encoding="utf-8") as handle:
+        with private_open(out_dir / "stats.jsonl", "a") as handle:
             handle.write(json.dumps(stats) + "\n")
     return 0
 

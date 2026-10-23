@@ -26,6 +26,7 @@ from harness_v2.recognition.run_ocr_cpu import (
     cpu_command,
 )
 from harness_v2.storage.artifacts import ArtifactStore
+from harness_v2.storage.permissions import private_open
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
@@ -94,7 +95,8 @@ class XiaomiOCR:
             raise OCRImportError("import OCR text, not a student image")
         if not source.is_file():
             raise OCRImportError(f"OCR text file not found: {source}")
-        raw = source.read_bytes().decode("utf-8")
+        with private_open(source, "rb") as handle:
+            raw = handle.read().decode("utf-8")
         return self._store(ocr_id, source.name, raw)
 
     def store_text(self, raw: str, *, ocr_id: str, source_name: str) -> OCRArtifact:

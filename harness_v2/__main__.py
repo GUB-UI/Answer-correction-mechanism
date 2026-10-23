@@ -12,6 +12,7 @@ from harness_v2.providers.fixture import FixtureProvider
 from harness_v2.storage.artifacts import ArtifactStore
 from harness_v2.storage.secrets import redact
 from harness_v2.storage.sqlite_store import RunStore
+from harness_v2.storage.permissions import private_directory, private_write_text
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default="unknown")
     args = parser.parse_args(argv)
     case = json.loads(args.input.read_text(encoding="utf-8"))
-    args.out.mkdir(parents=True, exist_ok=True)
+    private_directory(args.out)
     store = RunStore(args.out / "runs.sqlite", ArtifactStore(args.out / "artifacts"))
     completion = case.get("new_completion")
     if not isinstance(completion, str) or not completion:
@@ -33,16 +34,15 @@ def main(argv: list[str] | None = None) -> int:
                 "failure_reason": "saved new_completion is required for an offline run",
             }
         )
-        (args.out / "result.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        private_write_text(args.out / "result.json", json.dumps(payload, indent=2))
         return 0
     pipeline = Pipeline(store, FixtureProvider(completion))
     record = pipeline.run(case, experiment_id=args.experiment, commit=args.commit)
-    (args.out / "result.json").write_text(
+    private_write_text(args.out / "result.json",
         json.dumps(
             redact({"pipeline": "harness_v2", "status": "ran", "run": record.to_dict()}),
             indent=2,
         ),
-        encoding="utf-8",
     )
     return 0
 

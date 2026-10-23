@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from harness_v2.core.contracts import RunRecord
 from harness_v2.storage.artifacts import ArtifactStore
 from harness_v2.storage.secrets import redact
+from harness_v2.storage.permissions import private_directory, private_open
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -38,15 +40,34 @@ CREATE TABLE IF NOT EXISTS runs (
 class RunStore:
     def __init__(self, db_path: Path, artifacts: ArtifactStore) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        private_directory(self.db_path.parent)
         self.artifacts = artifacts
         with self._connect() as conn:
             conn.execute(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    def _secure_files(self) -> None:
+        private_directory(self.db_path.parent)
+        # SQLite derives newly-created journal/WAL/SHM modes from the database.
+        # Precreate it securely and tighten existing sidecars before recovery.
+        with private_open(self.db_path, "ab"):
+            pass
+        for suffix in ("-wal", "-journal", "-shm"):
+            try:
+                self.db_path.with_name(self.db_path.name + suffix).chmod(0o600)
+            except FileNotFoundError:
+                pass
+
+    @contextmanager
+    def _connect(self):
+        self._secure_files()
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+            self._secure_files()
 
     def save_run(self, record: RunRecord) -> RunRecord:
         cleaned = redact(record.to_dict())

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 from harness_v2.storage.secrets import redact
+from harness_v2.storage.permissions import private_directory, private_open
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
@@ -24,7 +24,7 @@ class ArtifactRejected(ValueError):
 class ArtifactStore:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
+        private_directory(self.root)
 
     def _path(self, name: str) -> Path:
         if not name or name.startswith(("/", "\\")) or ".." in Path(name).parts:
@@ -34,19 +34,22 @@ class ArtifactStore:
             raise ArtifactRejected(f"artifact name escapes the store: {name}")
         if path.suffix.lower() in _IMAGE_SUFFIXES:
             raise ArtifactRejected("student images are not stored in the harness")
+        private_directory(self.root)
+        relative = path.parent.relative_to(self.root.resolve())
+        folder = self.root
+        for part in relative.parts:
+            folder = folder / part
+            private_directory(folder)
         return path
 
     def _exclusive_bytes(self, name: str, data: bytes) -> Path:
         path = self._path(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            with private_open(path, "xb") as handle:
+                handle.write(data)
         except FileExistsError as exc:
+            path.chmod(0o600)
             raise ImmutableArtifactError(f"artifact already exists: {name}") from exc
-        try:
-            os.write(fd, data)
-        finally:
-            os.close(fd)
         return path
 
     def write_text(self, name: str, text: str) -> Path:
@@ -62,7 +65,9 @@ class ArtifactStore:
         return self.write_text(name, json.dumps(redact(payload), ensure_ascii=False, indent=2))
 
     def read_text(self, name: str) -> str:
-        return self._path(name).read_text(encoding="utf-8")
+        with private_open(self._path(name)) as handle:
+            return handle.read()
 
     def read_bytes(self, name: str) -> bytes:
-        return self._path(name).read_bytes()
+        with private_open(self._path(name), "rb") as handle:
+            return handle.read()

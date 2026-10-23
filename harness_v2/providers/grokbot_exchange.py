@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from harness_v2.storage.secrets import redact
+from harness_v2.storage.permissions import private_directory, private_open, private_write_text
 from harness_v2.evaluation.independent import scrub_score_text
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -154,17 +155,19 @@ def validate_result(payload: dict[str, Any]) -> None:
 class FileExchange:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
-        (self.root / "requests").mkdir(parents=True, exist_ok=True)
-        (self.root / "results").mkdir(parents=True, exist_ok=True)
+        private_directory(self.root)
+        private_directory(self.root / "requests")
+        private_directory(self.root / "results")
 
     def _path(self, folder: str, request_id: str) -> Path:
         token = safe_request_id(request_id)
+        private_directory(self.root)
         return _inside(self.root / folder, self.root / folder / f"{token}.json")
 
     def publish_request(self, payload: dict[str, Any]) -> Path:
         cleaned = _publishable_request(payload)
         path = self._path("requests", cleaned["request_id"])
-        path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+        private_write_text(path, json.dumps(cleaned, ensure_ascii=False, indent=2))
         return path
 
     def write_result(self, payload: dict[str, Any]) -> Path:
@@ -174,12 +177,13 @@ class FileExchange:
         if not request_path.exists():
             raise SchemaError(f"no request with request_id {cleaned['request_id']}")
         path = self._path("results", cleaned["request_id"])
-        path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+        private_write_text(path, json.dumps(cleaned, ensure_ascii=False, indent=2))
         return path
 
     def read_result(self, request_id: str) -> dict[str, Any]:
         path = self._path("results", request_id)
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        with private_open(path) as handle:
+            payload = json.load(handle)
         if not isinstance(payload, dict):
             raise SchemaError("result is not an object")
         validate_result(payload)
@@ -198,24 +202,23 @@ class GitHubHandoff:
         cleaned = _publishable_request(payload)
         request_id = safe_request_id(cleaned["request_id"])
         folder = _inside(self.root, self.root / "handoff" / request_id)
-        folder.mkdir(parents=True, exist_ok=True)
+        private_directory(self.root)
+        private_directory(self.root / "handoff")
+        private_directory(folder)
         branch = f"harness/{request_id}"
-        (folder / "request.json").write_text(
+        private_write_text(folder / "request.json",
             json.dumps(cleaned, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
-        (folder / "branch.txt").write_text(branch + "\n", encoding="utf-8")
-        (folder / "issue.md").write_text(
+        private_write_text(folder / "branch.txt", branch + "\n")
+        private_write_text(folder / "issue.md",
             f"# Grokbot {cleaned['kind']} {request_id}\n\n"
             f"experiment: {cleaned['experiment_id']}\n\n"
             f"commit: {cleaned['commit']}\n\n"
             "Open this file as a GitHub issue. The harness does not post it.\n",
-            encoding="utf-8",
         )
-        (folder / "pr.md").write_text(
+        private_write_text(folder / "pr.md",
             f"# PR for {request_id}\n\n"
             f"Branch `{branch}` holds the handoff files for this request_id.\n"
             "Open the pull request separately. This file is the body.\n",
-            encoding="utf-8",
         )
         return folder
