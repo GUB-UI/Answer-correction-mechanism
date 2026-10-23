@@ -215,6 +215,13 @@ class ProviderExchange:
     provider_response_id: str = ""
     error: str = ""
     attempt_count: int = 1
+    attempts: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.attempts and self.attempt_count == 1:
+            self.attempts = [{"latency_ms": self.latency_ms, "status": self.status,
+                              "error_class": "", "input_tokens": self.input_tokens,
+                              "output_tokens": self.output_tokens}]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

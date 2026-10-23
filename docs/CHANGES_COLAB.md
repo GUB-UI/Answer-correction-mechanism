@@ -281,3 +281,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_setup.py` | キー未設定・準備失敗・返却前例外・孤立成果物・同一ID再試行・429の回帰テストを追加。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **400 passed in 12.58s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 04: 再試行を含む遅延と試行履歴（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/contracts.py, harness_v2/providers/gemma_ai_studio.py` | latency_msを再試行待機も含む合計時間に変更。各試行のlatency_ms・状態・例外クラス・既知のトークン数を保持する。 |
+| `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_latency.py` | 通常・失敗・429の記録に試行数と履歴を保存。偽時計で合計550msと各試行20/30msを検証し、最後の試行だけを記録する問題を防ぐ。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **403 passed in 12.15s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。

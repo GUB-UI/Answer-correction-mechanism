@@ -194,6 +194,8 @@ class GemmaAIStudio:
             "base_url": AI_STUDIO_ENDPOINT,
         }}
         last_error = ""
+        attempts: list[dict[str, Any]] = []
+        total_started = self._monotonic()
         for attempt in range(1, self.max_attempts + 1):
             started = self._monotonic()
             try:
@@ -206,6 +208,8 @@ class GemmaAIStudio:
                 latency_ms = (self._monotonic() - started) * 1000
                 code = _status_code(exc)
                 raw = _raw_from_exception(exc)
+                attempts.append({"latency_ms": latency_ms, "status": "quota" if _is_quota(exc, code) else "error",
+                                 "error_class": type(exc).__name__, "input_tokens": None, "output_tokens": None})
                 exchange = ProviderExchange(
                     request_id=request_id,
                     model_requested=MODEL_ID,
@@ -213,11 +217,12 @@ class GemmaAIStudio:
                     settings=recorded,
                     input_tokens=None,
                     output_tokens=None,
-                    latency_ms=latency_ms,
+                    latency_ms=(self._monotonic() - total_started) * 1000,
                     raw_response=raw,
                     status="quota" if _is_quota(exc, code) else "error",
                     error=redact(str(exc)),
                     attempt_count=attempt,
+                    attempts=list(attempts),
                 )
                 if _is_quota(exc, code):
                     raise QuotaExceeded(exchange) from exc
@@ -229,6 +234,8 @@ class GemmaAIStudio:
                 return exchange
             latency_ms = (self._monotonic() - started) * 1000
             input_tokens, output_tokens = _usage(response)
+            attempts.append({"latency_ms": latency_ms, "status": "ok", "error_class": "",
+                             "input_tokens": input_tokens, "output_tokens": output_tokens})
             return ProviderExchange(
                 request_id=request_id,
                 model_requested=MODEL_ID,
@@ -236,10 +243,11 @@ class GemmaAIStudio:
                 settings=recorded,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                latency_ms=latency_ms,
+                latency_ms=(self._monotonic() - total_started) * 1000,
                 raw_response=_response_text(response),
                 status="ok",
                 provider_response_id=_response_id(response),
                 attempt_count=attempt,
+                attempts=list(attempts),
             )
         raise ProviderSetupError(last_error or "generate failed")

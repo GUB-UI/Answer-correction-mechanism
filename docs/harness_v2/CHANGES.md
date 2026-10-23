@@ -188,3 +188,12 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_setup.py` | Exercise missing key, SDK/setup/runtime errors, same-id retries, orphaned artifacts and quota persistence. | Ensure retry does not overwrite history or double-record quota. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **400 passed in 12.58s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 04: Total and per-attempt latency (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/core/contracts.py, harness_v2/providers/gemma_ai_studio.py` | ProviderExchange retains per-attempt latency/status/error class/known usage. latency_ms now measures the entire generation loop including retry backoff, for success, errors and quota. | The final attempt alone understated Phase 2 request time and retry usage. |
+| `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_latency.py` | Persist attempt_count/history in completed and quota records; verify 20ms error + 500ms backoff + 30ms final attempt with a fake clock. | Keep total and attempt distributions auditable without network calls. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **403 passed in 12.15s** (offline guard; loopback mocks allowed).

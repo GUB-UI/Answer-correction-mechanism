@@ -78,7 +78,7 @@ class Pipeline:
         request_id = str(case.get("request_id") or uuid.uuid4().hex)
         case["request_id"] = request_id
         artifact_id, attempt = self._allocate_attempt(request_id)
-        context = {"artifact_id": artifact_id, "run_attempt": attempt}
+        context = {"artifact_id": artifact_id, "run_attempt": attempt, "attempt_count": 0, "attempts": []}
         started = time.perf_counter()
         try:
             return self._run(case, experiment_id=experiment_id, commit=commit, context=context)
@@ -174,6 +174,7 @@ class Pipeline:
                 "settings": exchange.settings,
                 "provider_response_id": exchange.provider_response_id,
                 "attempt_count": exchange.attempt_count,
+                "attempts": exchange.attempts,
                 "independent_review": review_payload,
             },
             checks=[check.to_dict() for check in result.checks],
@@ -202,7 +203,7 @@ class Pipeline:
         request_id = exchange.request_id or str(case.get("request_id") or uuid.uuid4().hex)
         if context is None:
             artifact_id, attempt = self._allocate_attempt(request_id)
-            context = {"artifact_id": artifact_id, "run_attempt": attempt}
+            context = {"artifact_id": artifact_id, "run_attempt": attempt, "attempt_count": 0, "attempts": []}
         raw_name = f"raw/{context['artifact_id']}.txt"
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         record = RunRecord(
@@ -221,6 +222,7 @@ class Pipeline:
                 "settings": exchange.settings,
                 "provider_response_id": exchange.provider_response_id,
                 "attempt_count": exchange.attempt_count,
+                "attempts": exchange.attempts,
             },
             checks=[],
             latency_ms=exchange.latency_ms,
