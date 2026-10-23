@@ -591,3 +591,10 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider h
 
 `test_p5_challenge.py` covers duplicate original/variant records in both orders, missing and unexpected IDs, combined errors, clean reports, and CLI output/exit codes.
 Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **19 passed, 1 deselected**. The existing dataset-builder test is excluded because it reads `references.json`, which this task forbids. Combined with Fix A's relevant tests: **185 passed, 1 deselected**. No network or API calls.
+
+## PR #12 / Follow-up A: Preserve operator scope and token boundaries in skeletons (2026-10-24)
+
+Keep signed implicit factors grouped and treat each complete superscript run as one exponent. Canonicalize `\pm` to a distinct `±` token and `\div`/`÷` to division. Strip only known formatting commands, retaining unknown commands and their boundaries. Compare token sequences before removing parentheses so separate operands cannot manufacture numbers, commands, or root functions. No formula-specific or score-specific rules.
+
+Regressions cover signed products (including fractions, sums, roots, and powers), compound exponents, plus/minus versus addition of a negative, division, unknown commands, and split function names, checking collisions, equivalence, and idempotence.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **236 passed**. No network/API calls or excluded-file reads.

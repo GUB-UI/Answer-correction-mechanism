@@ -22,20 +22,26 @@ _SUPERSCRIPT_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "012345678
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _BARRED = re.compile(r"(?:[^\s\u0304\u0305][\u0304\u0305]+)+")
 _COMMANDS = [
-    (r"\\leqq|\\leq|\\le(?![A-Za-z])", "<="),
-    (r"\\geqq|\\geq|\\ge(?![A-Za-z])", ">="),
-    (r"\\neq|\\ne(?![A-Za-z])", "!="),
+    (r"\\(?:leqq|leq|le)(?![A-Za-z])", "<="),
+    (r"\\(?:geqq|geq|ge)(?![A-Za-z])", ">="),
+    (r"\\(?:neq|ne)(?![A-Za-z])", "!="),
     (r"\\lt(?![A-Za-z])", "<"),
     (r"\\gt(?![A-Za-z])", ">"),
     (r"\\minus(?![A-Za-z])", "-"),
-    (r"\\times|\\cdot(?![A-Za-z])", "*"),
-    (r"\\pm(?![A-Za-z])", "+-"),
+    (r"\\(?:times|cdot)(?![A-Za-z])", "*"),
+    (r"\\div(?![A-Za-z])", "/"),
+    (r"\\pm(?![A-Za-z])", "±"),
 ]
 _UNICODE = {"≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
-            "×": "*", "·": "*", "±": "+-"}
+            "×": "*", "·": "*", "÷": "/"}
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
-_DROP = set("$\\_") | {"\u0304", "\u0305"}
-_PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1,
+_FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
+               "text", "displaystyle", "textstyle", "quad", "qquad"}
+# Token boundaries must survive removing groups: numbers, commands, and roots
+# cannot be manufactured by concatenating formerly separate operands.
+_TOKEN = re.compile(r"\\[A-Za-z]+|sqrt(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
+_DROP = set("$_") | {"\u0304", "\u0305"}
+_PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4}
 
 
@@ -103,6 +109,13 @@ def _content(text: str) -> str:
             inner, pos = argument if argument else ("", root.end())
             out.append(f"sqrt({_content(inner)})")
         else:
+            command = _COMMAND_WORD.match(text, pos)
+            if command:
+                # Group unknown commands so adjacent letters cannot extend the
+                # command name when whitespace/formatting is removed.
+                out.append(f"({command.group()})")
+                pos = command.end()
+                continue
             ch = text[pos]
             if not ch.isspace() and ch not in _DROP:
                 out.append({"{": "(", "}": ")", "[": "(", "]": ")"}.get(ch, ch))
@@ -116,7 +129,7 @@ def _precedence(text: str) -> int:
     while pos < len(text):
         ch = text[pos]
         if ch in _PRECEDENCE:
-            unary = ch in "+-" and not operand
+            unary = ch in "+-±" and not operand
             weakest = min(weakest, 3 if unary else _PRECEDENCE[ch])
             operand = False
             pos += 1
@@ -127,7 +140,8 @@ def _precedence(text: str) -> int:
         start = root.end() if root else pos
         group = _group(text, start, delimiters="(") if text[start:start + 1] == "(" else None
         number = _NUMBER.match(text, pos)
-        pos = group[1] if group else number.end() if number else pos + 1
+        command = _COMMAND_WORD.match(text, pos)
+        pos = group[1] if group else command.end() if command else number.end() if number else pos + 1
         operand = True
     return weakest
 
@@ -156,28 +170,30 @@ def _grouping(text: str) -> str:
             strength = _precedence(inner)
             left, right = out[-1:], text[end:end + 1]
             lp = _PRECEDENCE.get(left, 2) if left else -1
-            if left in ("+", "-") and (len(out) == 1 or out[-2] in "(=<>!+-*/^"):
+            if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/^"):
                 lp = 3  # unary sign
             rp = _PRECEDENCE.get(right, 2) if right else -1
             left_ok = strength > lp or (left == "^" and strength >= 3)
             right_ok = strength > rp if right == "^" else strength >= rp
-            # Removing a numeric atom must not concatenate distinct numbers.
-            joins_number = (((left.isdigit() or left == ".") and inner[:1] in "0123456789.")
-                            or ((right.isdigit() or right == ".") and inner[-1:] in "0123456789."))
-            out += inner if inner and left_ok and right_ok and not joins_number else f"({inner})"
+            signed_factor = (left and left not in _PRECEDENCE and inner[:1] in ("+", "-", "±"))
+            tail = text[end:]
+            joins_tokens = (_TOKEN.findall(out + inner + tail)
+                            != _TOKEN.findall(out) + _TOKEN.findall(inner) + _TOKEN.findall(tail))
+            out += (inner if inner and left_ok and right_ok and not signed_factor and not joins_tokens
+                    else f"({inner})")
         pos = end
     return out
 
 
 def skeleton(text: str) -> str:
     # NFKC alone would flatten superscripts into ordinary baseline digits.
-    text = _SUPERSCRIPTS.sub(lambda m: "^" + m.group().translate(_SUPERSCRIPT_MAP),
+    text = _SUPERSCRIPTS.sub(lambda m: "^(" + m.group().translate(_SUPERSCRIPT_MAP) + ")",
                              _FENCE.sub("", text))
     text = unicodedata.normalize("NFKC", text)
     text = _fractions(text)
     for pattern, repl in _COMMANDS:
         text = re.sub(pattern, repl, text)
-    text = _COMMAND_WORD.sub(lambda m: m.group() if m.group() == r"\sqrt" else "", text)
+    text = _COMMAND_WORD.sub(lambda m: "" if m.group()[1:] in _FORMATTING else m.group(), text)
     for key, value in _UNICODE.items():
         text = text.replace(key, value)
     return _grouping(_content(text))

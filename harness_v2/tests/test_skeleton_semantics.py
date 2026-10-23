@@ -154,3 +154,72 @@ def test_grouped_notations_match_and_are_idempotent(latex, plain):
 def test_grouping_normalization_is_idempotent(text):
     normalized = skeleton(text)
     assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("factor,ungrouped", [
+    ("a", "a"), (r"\frac{a}{b}", "a/b"), ("(a+b)", "(a+b)"),
+    ("sqrt(d)", "sqrt(d)"), ("a^2", "a^2"),
+])
+@pytest.mark.parametrize("sign", ["+", "-", "±"])
+@pytest.mark.parametrize("variable", ["b", "c"])
+def test_signed_implicit_factors_keep_multiplication(factor, ungrouped, sign, variable):
+    product = factor + "(" + sign + variable + ")"
+    addition = ungrouped + sign + variable
+    normalized = skeleton(product)
+    assert normalized != skeleton(addition)
+    assert cer(product, addition) > 0
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("superscript,exponent", [
+    ("¹⁻²", "1-2"), ("¹⁺²", "1+2"), ("⁻¹⁺²", "-1+2"),
+    ("⁺¹⁻²", "+1-2"), ("¹²⁻³⁺⁴", "12-3+4"),
+])
+def test_complete_superscript_run_is_one_exponent(superscript, exponent):
+    normalized = skeleton("x" + superscript)
+    assert normalized == skeleton("x^{" + exponent + "}")
+    assert normalized != skeleton("x^" + exponent)
+    assert cer("x" + superscript, "x^{" + exponent + "}") == 0
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("prefix", ["a", "a/b", "(a+b)"])
+def test_plus_minus_is_distinct_from_addition_of_negative(prefix):
+    normalized = skeleton(prefix + "±b")
+    assert normalized == skeleton(prefix + r"\pm b")
+    assert normalized != skeleton(prefix + "+(-b)")
+    assert cer(prefix + "±b", prefix + "+(-b)") > 0
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("notation", [r"\div", "÷"])
+@pytest.mark.parametrize("left,right", [("a", "b"), ("(a+b)", "(c-d)"), ("sqrt(x)", "y^2")])
+def test_division_operator_notations_match_without_disappearing(notation, left, right):
+    text = left + notation + " " + right
+    normalized = skeleton(text)
+    assert normalized == skeleton(left + "/" + right)
+    assert normalized != skeleton(left + right)
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("command", [r"\alpha", r"\sin", r"\unknown", r"\timesextra", r"\leqqextra"])
+def test_unknown_semantic_commands_and_their_boundaries_survive(command):
+    text = "a" + command + " b"
+    normalized = skeleton(text)
+    assert command in normalized
+    assert normalized != skeleton("ab")
+    assert normalized != skeleton("a" + command + "b")
+    assert normalized != skeleton("a" + command[1:] + "b")
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("letters", [
+    "(s)qrt", "s(q)rt", "sq(r)t", "sqr(t)", "(sq)(rt)", "(sqrt)", "((s))qrt",
+])
+@pytest.mark.parametrize("prefix", ["", "2", "a+"])
+def test_removing_groups_cannot_manufacture_a_function_token(letters, prefix):
+    text = prefix + letters + "(x+y)"
+    normalized = skeleton(text)
+    assert normalized != skeleton(prefix + "sqrt(x+y)")
+    assert cer(text, prefix + "sqrt(x+y)") > 0
+    assert skeleton(normalized) == normalized
