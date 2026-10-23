@@ -47,8 +47,8 @@ class LMStudioClient:
         fingerprint = payload.get("backend_fingerprint")
         return fingerprint if valid_backend_fingerprint(fingerprint) else None
 
-    def chat_completion(
-        self,
+    @staticmethod
+    def prepare_chat_request(
         *,
         messages: list[dict[str, Any]],
         model: str | None = None,
@@ -56,8 +56,9 @@ class LMStudioClient:
         temperature: float = 0.2,
         max_tokens: int = 1024,
         disable_thinking: bool = True,
-    ) -> str:
-        payload_messages = list(messages)
+    ) -> dict[str, Any]:
+        """Build the final JSON messages once for both hashing and transmission."""
+        payload_messages = json.loads(json.dumps(messages, ensure_ascii=False))
         if disable_thinking:
             last = payload_messages[-1] if payload_messages else None
             if last is None or last.get("role") != "assistant":
@@ -77,6 +78,22 @@ class LMStudioClient:
             kwargs["model"] = model
         if response_format_json:
             kwargs["response_format"] = {"type": "json_object"}
+        return kwargs
+
+    def chat_completion(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        response_format_json: bool = False,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+        disable_thinking: bool = True,
+    ) -> str:
+        kwargs = self.prepare_chat_request(
+            messages=messages, model=model, response_format_json=response_format_json,
+            temperature=temperature, max_tokens=max_tokens, disable_thinking=disable_thinking,
+        )
 
         try:
             response = self._client.chat.completions.create(**kwargs)

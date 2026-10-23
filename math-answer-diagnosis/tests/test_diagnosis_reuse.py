@@ -1,4 +1,5 @@
 import json
+import hashlib
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -6,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.adapters.diagnosis_adapter import LMStudioDiagnosisAdapter
+from src.adapters.lmstudio_client import LMStudioClient
 from src.batch_pipeline import BatchOptions, run_batch
 from src.config import load_config
 from src.models import AnswerRecord, ProblemRecord, utc_now_iso
@@ -35,6 +37,7 @@ def case(tmp_path, monkeypatch):
     manager = SimpleNamespace(events=[], ensure=lambda service: None)
     monkeypatch.setattr("src.runtime.services.get_service_manager", lambda config: manager)
     client = MagicMock()
+    client.prepare_chat_request.side_effect = LMStudioClient.prepare_chat_request
     client.backend_fingerprint.return_value = {
         "model_id": "loaded-weights-A", "settings": {"max_new_tokens_cap": 512},
     }
@@ -302,6 +305,44 @@ def test_equal_incomplete_metadata_on_both_sides_never_reuses(case, monkeypatch,
 def test_adapter_rejects_incomplete_fingerprint_from_injected_client(case, fingerprint):
     storage, config, options, client, run = case
     client.backend_fingerprint.return_value = fingerprint
+    first = run()
+    again = run()
+    assert first.diagnosis_id and again.diagnosis_id != first.diagnosis_id
+    assert client.chat_completion.call_count == 2
+    assert all(d.grading_metadata is None for d in storage.list_diagnosis_results())
+
+
+def test_prompt_hash_tracks_transmitted_prefill_and_forces_regrading(case, monkeypatch):
+    storage, config, options, client, run = case
+    # Exercise the actual client request builder and send path with an in-memory SDK.
+    client.chat_completion.side_effect = LMStudioClient.chat_completion.__get__(client, LMStudioClient)
+    create = client._client.chat.completions.create
+    create.return_value = SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content=client.chat_completion.return_value),
+    )])
+    first = run()
+    first_messages = create.call_args.kwargs["messages"]
+    from src.adapters.lmstudio_client import _THINKING_OFF_PREFILL
+
+    assert first_messages[-1] == {"role": "assistant", "content": _THINKING_OFF_PREFILL}
+    monkeypatch.setattr("src.adapters.lmstudio_client._THINKING_OFF_PREFILL", "changed assistant prefill")
+    again = run()
+    second_messages = create.call_args.kwargs["messages"]
+    assert second_messages[-1] == {"role": "assistant", "content": "changed assistant prefill"}
+    assert first_messages != second_messages
+    assert again.diagnosis_id and again.diagnosis_id != first.diagnosis_id
+    assert create.call_count == 2
+    for diagnosis_id, messages in [(first.diagnosis_id, first_messages), (again.diagnosis_id, second_messages)]:
+        expected = hashlib.sha256(json.dumps(messages, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        assert storage.get_diagnosis_result(diagnosis_id).grading_metadata["prompt_version"] == expected
+    assert run().diagnosis_id == again.diagnosis_id
+    assert create.call_count == 2
+
+
+@pytest.mark.parametrize("builder", [None, lambda **kwargs: {}, lambda **kwargs: {"messages": "unknown"}])
+def test_unknown_final_request_disables_reuse(case, builder):
+    storage, config, options, client, run = case
+    client.prepare_chat_request = builder
     first = run()
     again = run()
     assert first.diagnosis_id and again.diagnosis_id != first.diagnosis_id

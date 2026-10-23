@@ -88,3 +88,23 @@ def test_managed_health_reports_loaded_weights_and_effective_settings(monkeypatc
             "dtype": "float16", "device": "cuda:0", "chat_template": "template",
         },
     }
+
+
+@pytest.mark.parametrize("disable_thinking", [True, False])
+@pytest.mark.parametrize("assistant_last", [True, False])
+def test_final_request_messages_match_the_request_sent_to_sdk(tmp_path, disable_thinking, assistant_last):
+    client = LMStudioClient(load_config(tmp_path))
+    create = MagicMock(return_value=SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content="response"),
+    )]))
+    client._client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    messages = [{"role": "user", "content": "question"}]
+    if assistant_last:
+        messages.append({"role": "assistant", "content": "existing prefill"})
+    original = json.loads(json.dumps(messages))
+    kwargs = dict(messages=messages, disable_thinking=disable_thinking, model="alias")
+    prepared = client.prepare_chat_request(**kwargs)
+    assert client.chat_completion(**kwargs) == "response"
+    assert create.call_args.kwargs == prepared
+    assert messages == original
+    assert len(prepared["messages"]) == len(messages) + (disable_thinking and not assistant_last)

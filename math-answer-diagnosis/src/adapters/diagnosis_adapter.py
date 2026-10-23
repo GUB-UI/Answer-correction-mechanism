@@ -58,9 +58,19 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
         backend = fingerprint_builder() if fingerprint_builder else None
         if not valid_backend_fingerprint(backend):
             return None
+        request_builder = getattr(self.lmstudio_client, "prepare_chat_request", None)
+        if not callable(request_builder):
+            return None
+        request = request_builder(
+            messages=self._messages(context),
+            model=context.model_name or self.config.diagnosis.model_name,
+            **self.generation_settings,
+        )
+        if not isinstance(request, dict) or not isinstance(request.get("messages"), list):
+            return None
         settings = {"request": self.generation_settings, "backend": backend}
         return build_grading_metadata(
-            context, provider=self.transport, messages=self._messages(context),
+            context, provider=self.transport, messages=request["messages"],
             generation_settings=settings,
         )
 
