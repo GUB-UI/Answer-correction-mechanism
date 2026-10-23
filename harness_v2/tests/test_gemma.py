@@ -24,6 +24,13 @@ class _Models:
         return self.behavior(kwargs)
 
 
+@pytest.fixture(autouse=True)
+def _offline_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-test-key")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEX_AI", raising=False)
+
+
 def _client(behavior):
     models = _Models(behavior)
     return SimpleNamespace(models=models), models
@@ -33,7 +40,7 @@ def test_missing_key_does_not_build_a_client(monkeypatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv("GOOGLE_API_KEY", "other-project-key")
     with pytest.raises(MissingAPIKey):
-        GemmaAIStudio().generate("grade this", request_id="r1")
+        GemmaAIStudio(free_tier_project=True).generate("grade this", request_id="r1")
 
 
 def test_non_json_response_is_kept(monkeypatch) -> None:
@@ -48,7 +55,7 @@ def test_non_json_response_is_kept(monkeypatch) -> None:
         )
 
     client, models = _client(behavior)
-    exchange = GemmaAIStudio(client=client).generate(
+    exchange = GemmaAIStudio(free_tier_project=True, client_factory=lambda **_kwargs: client).generate(
         "prompt",
         request_id="r2",
         settings={
@@ -85,7 +92,7 @@ def test_quota_stops_without_retry() -> None:
 
     client, models = _client(behavior)
     with pytest.raises(QuotaExceeded) as caught:
-        GemmaAIStudio(client=client, sleep=slept.append).generate("prompt", request_id="r3")
+        GemmaAIStudio(free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append).generate("prompt", request_id="r3")
     assert slept == []
     assert len(models.calls) == 1
     assert caught.value.exchange.status == "quota"
@@ -103,7 +110,7 @@ def test_transient_errors_retry_then_stop() -> None:
         raise ServerError("unavailable")
 
     client, models = _client(behavior)
-    exchange = GemmaAIStudio(client=client, sleep=slept.append, max_attempts=3).generate(
+    exchange = GemmaAIStudio(free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append, max_attempts=3).generate(
         "prompt",
         request_id="r4",
     )
@@ -124,7 +131,7 @@ def test_transient_error_then_success() -> None:
         return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok")
 
     client, _models = _client(behavior)
-    exchange = GemmaAIStudio(client=client, sleep=slept.append).generate("prompt", request_id="r5")
+    exchange = GemmaAIStudio(free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append).generate("prompt", request_id="r5")
     assert exchange.status == "ok"
     assert exchange.raw_response == "{}"
     assert exchange.attempt_count == 2
@@ -147,7 +154,7 @@ def test_sdk_missing_does_not_switch_provider(monkeypatch) -> None:
 
     monkeypatch.setattr(builtins, "__import__", blocked)
     with pytest.raises(ProviderSetupError, match="google-genai") as caught:
-        GemmaAIStudio().generate("prompt", request_id="r6")
+        GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="r6")
     assert "unique-test-key-value" not in str(caught.value)
     assert "paid-project" not in str(caught.value)
 
@@ -174,8 +181,8 @@ def test_client_is_constructed_for_the_gemini_api(monkeypatch) -> None:
     google.genai = genai
     monkeypatch.setitem(sys.modules, "google", google)
     monkeypatch.setitem(sys.modules, "google.genai", genai)
-    exchange = GemmaAIStudio().generate("prompt", request_id="vertex-off")
-    assert captured == [{"vertexai": False, "api_key": "gemini-test-key"}]
+    exchange = GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-off")
+    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com"}}]
     assert "project" not in captured[0]
     assert "location" not in captured[0]
     assert exchange.status == "ok"
@@ -186,4 +193,4 @@ def test_vertex_env_is_rejected(monkeypatch) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
     with pytest.raises(ProviderSetupError, match="Vertex"):
-        GemmaAIStudio().generate("prompt", request_id="vertex-on")
+        GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-on")

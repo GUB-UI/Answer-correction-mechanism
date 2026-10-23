@@ -11,6 +11,7 @@ from harness_v2.storage.secrets import redact
 
 MODEL_ID = "gemma-4-31b-it"
 API_KEY_ENV = "GEMINI_API_KEY"
+AI_STUDIO_ENDPOINT = "https://generativelanguage.googleapis.com"
 MAX_ATTEMPTS = 3
 _TRANSIENT_STATUS = {408, 500, 502, 503, 504}
 _VERTEX_ENV = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_VERTEX_AI")
@@ -120,30 +121,36 @@ def _response_id(response: Any) -> str:
 
 
 class GemmaAIStudio:
-    """Calls `google-genai` only after GEMINI_API_KEY is present.
+    """AI Studio only, with an explicit free-tier project attestation.
 
     429 stops immediately. Other transient errors retry with backoff up to
     MAX_ATTEMPTS. The model id is fixed. No second project, key, or API.
+    client_factory is a test seam; it receives the same pinned SDK options.
     """
 
     def __init__(
         self,
         *,
-        client: Any | None = None,
+        free_tier_project: bool = False,
+        client_factory: Callable[..., Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.perf_counter,
         max_attempts: int = MAX_ATTEMPTS,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
-        self._client = client
+        self._client: Any | None = None
+        self._client_factory = client_factory
+        self.free_tier_project = free_tier_project
         self._sleep = sleep
         self._monotonic = monotonic
         self.max_attempts = max_attempts
 
     def _build_client(self) -> Any:
-        if self._client is not None:
-            return self._client
+        # This is an operator attestation, not remote billing verification.
+        # Fail closed before SDK construction; never make a verification call.
+        if self.free_tier_project is not True:
+            raise ProviderSetupError("free_tier_project=True requires an explicitly confirmed free-tier AI Studio project")
         if _vertex_requested():
             raise ProviderSetupError(
                 "Vertex routing is disabled; unset GOOGLE_GENAI_USE_VERTEXAI and use the Gemini API key"
@@ -151,13 +158,21 @@ class GemmaAIStudio:
         key = os.environ.get(API_KEY_ENV, "").strip()
         if not key:
             raise MissingAPIKey(f"{API_KEY_ENV} is not set")
-        try:
-            from google import genai
-        except ImportError as exc:
-            raise ProviderSetupError(
-                "google-genai is not installed; refusing to call any other API"
-            ) from exc
-        self._client = genai.Client(vertexai=False, api_key=key)
+        if self._client is not None:
+            return self._client
+        factory = self._client_factory
+        if factory is None:
+            try:
+                from google import genai
+            except ImportError as exc:
+                raise ProviderSetupError(
+                    "google-genai is not installed; refusing to call any other API"
+                ) from exc
+            factory = genai.Client
+        self._client = factory(
+            vertexai=False, api_key=key,
+            http_options={"base_url": AI_STUDIO_ENDPOINT},
+        )
         return self._client
 
     def generate(
@@ -168,9 +183,15 @@ class GemmaAIStudio:
         settings: dict[str, Any] | None = None,
     ) -> ProviderExchange:
         public = {key: value for key, value in dict(settings or {}).items() if key in _SETTINGS_KEYS}
-        recorded = redact(public)
-        recorded.setdefault("temperature", 0)
+        config = redact(public)
+        config.setdefault("temperature", 0)
         client = self._build_client()
+        recorded = {**config, "provider_policy": {
+            "free_tier_project": True,
+            "attestation_source": "caller_config",
+            "vertexai": False,
+            "base_url": AI_STUDIO_ENDPOINT,
+        }}
         last_error = ""
         for attempt in range(1, self.max_attempts + 1):
             started = self._monotonic()
@@ -178,7 +199,7 @@ class GemmaAIStudio:
                 response = client.models.generate_content(
                     model=MODEL_ID,
                     contents=prompt,
-                    config=recorded,
+                    config=config,
                 )
             except Exception as exc:
                 latency_ms = (self._monotonic() - started) * 1000
