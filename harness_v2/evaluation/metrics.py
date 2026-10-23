@@ -8,7 +8,6 @@ from harness_v2.evaluation.dataset import Dataset
 from harness_v2.evaluation.independent import prepare_independent_input
 from harness_v2.evaluation.reference import optional_score
 from harness_v2.grading.validator import evidence_traceable
-from harness_v2.storage.permissions import private_open
 
 
 def _distribution(values: list[float]) -> dict:
@@ -41,7 +40,7 @@ def compute_metrics(experiment: dict, dataset: Dataset) -> dict:
     cases = {case['case_id']: case for case in dataset.cases}
     answers = {}
     for key, case in cases.items():
-        with private_open(case['ocr_import_path'], 'rb') as handle:
+        with open(case['ocr_import_path'], 'rb') as handle:
             raw = handle.read().decode('utf-8')
         answers[key] = prepare_independent_input({'answer_text': raw})['answer_text']
     jobs = experiment.get('expected_runs', [])

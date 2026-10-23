@@ -1,5 +1,14 @@
 # Harness v2 changes
 
+## PR #10: preserve input and shared-directory permissions
+
+- Read-only `private_open()` calls preserve file and directory modes and do not create missing parents. Config, dataset, OCR text/metadata, artifact, and exchange-result reads now use plain reads; SQLite listing uses a read-only connection.
+- `private_directory()` preserves existing directories unless a write caller explicitly marks a harness output directory as managed. Creating or writing private outputs enforces 0600 files and 0700 new directories without chmodding pre-existing shared/user parents. Existing managed output files/directories are tightened on writes.
+- Audited `private_open`, `private_directory`, and chmod callers, including CLI, CPU OCR, legacy/comparison scripts, artifact storage, exchanges, and SQLite sidecars. Remaining permission changes apply to output creation/writes only.
+- Regression coverage checks 0644 inputs in 0755 directories, unchanged output ancestors, missing reads, text/binary modes, restrictive/permissive umasks, and private outputs. OCR provenance tests now require source permissions to remain unchanged.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **712 passed** (localhost mock servers permitted).
+
 The existing app under `math-answer-diagnosis/` is unchanged. PR #9's branch is unchanged. vLLM guided JSON is not part of this harness.
 
 FailureCase and ImprovementProposal use the field names in `docs/harness_v2/design_v0.1.md`. The summary is stored there: three grading states, the evaluation metrics, the development set (1-A 8/10, 2-B 4/10, 3-A 10/10), no special-casing of those formulas or scores, and one change type per cycle.

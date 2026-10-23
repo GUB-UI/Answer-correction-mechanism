@@ -28,7 +28,7 @@ def _json(data: bytes) -> Any:
 
 
 def _read(path: Path) -> bytes:
-    with private_open(path, 'rb') as handle:
+    with path.open('rb') as handle:
         return handle.read()
 
 
@@ -141,7 +141,7 @@ def load_dataset(manifest_path: Path) -> Dataset:
 def write_dataset(out: Path, *, dataset_id: str, version: str, cases: list[dict],
                   reference_scores: dict, reference_items: dict | None = None) -> Path:
     """Copy input bytes and rubrics into a portable manifest directory."""
-    out = private_directory(Path(out))
+    out = private_directory(Path(out), managed=True)
     def write(relative: str, data: bytes) -> dict:
         target = out / relative
         with private_open(target, 'wb') as handle:

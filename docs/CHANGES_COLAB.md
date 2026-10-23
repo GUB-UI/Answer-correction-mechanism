@@ -1,5 +1,14 @@
 # Colab / CUDA 対応の変更一覧
 
+## PR #10: 入力ファイルと共有親ディレクトリの権限を維持
+
+- `private_open()` の読み取りでは chmod や親ディレクトリの作成を行わない。設定・データセット・OCR 本文とメタデータ・成果物・交換結果は通常の読み取りを使い、SQLite の一覧取得も読み取り専用接続に変更した。
+- `private_directory()` は既存ディレクトリの権限を維持する。書き込み側が明示したハーネス管理下の出力ディレクトリだけを 0700 に制限し、既存の共有・ユーザー親ディレクトリには chmod しない。新規出力はファイル 0600、ディレクトリ 0700 とし、管理対象の既存出力は書き込み時に権限を制限する。
+- `private_open`・`private_directory`・chmod の呼び出しを監査し、CLI・CPU OCR・旧版比較スクリプト・成果物・ファイル交換・SQLite 関連ファイルまで確認した。
+- 0755 ディレクトリ内の 0644 入力が変化しないこと、既存の出力親ディレクトリの維持、新規出力の権限、存在しない入力、テキスト・バイナリ読み取り、umask の違いを回帰テストで確認する。OCR 来歴テストも入力の権限維持を検証するよう更新した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **712 件成功**（ローカルの模擬 HTTP サーバー起動を許可して実行）。
+
 Mac の oMLX + mlx-vlm 経路は残し、Google Colab（CUDA）でも同じ Streamlit アプリが動くようにした。
 GPU メモリは、モデルを別プロセスにして **GLM-OCR → UniMERNet → 診断LLM** の順に1つだけ載せることで空ける。
 答案と採点は `APP_DATA_DIR`（Google Drive を想定）に書く。
