@@ -528,3 +528,12 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 | `harness_v2/improvement/duplicates.py` | `change_identity`: byte-sensitive `change_id` (sha256 of changed paths + candidate blob ids) plus `git patch-id --stable` as a similarity hint; `find_duplicates` lists exact/similar earlier proposals with their decisions. | Design §8 (b): detect changes that repeat past failures/proposals from the actual artifacts, not proposer-supplied labels. |
 | `harness_v2/improvement/history.py` | `propose_change` records identity and duplicates; replay flags `duplicate_of_<decision>` or `retry_on_new_baseline`; flagged proposals cannot be promoted without an audited `override` (approver + reason). | Retrying a rejected change must be a deliberate, recorded decision. |
 | `harness_v2/tests/test_improvement_duplicates.py` | Whitespace sensitivity, duplicate-of-rejected override, retry on a new baseline. | |
+
+## Phase 5 / 09: Proposal review handoff bound to request and snapshot (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/handoff.py`, `harness_v2/providers/schemas/proposal_review_{request,result}.schema.json` | Writes request.json, issue.md, pr.md, branch.txt and non-executable commands.txt (0600) for a proposal; records a `review_requested` event. `record_review` validates the result schema and accepts it only for an issued, unanswered request_id with the same proposal and snapshot; reviews never count as approvals. Score text is scrubbed and image content rejected. | Design §8 (d): Grokbot request/confirmation flow via GitHub Issue/branch/PR without an HTTP model API. |
+| `harness_v2/providers/grokbot_exchange.py` | `_check` now enforces `enum` on string fields. | Sol plan review: enum was skipped after the string check. |
+| `harness_v2/improvement/history.py` | History directories are created as managed private outputs (`managed=True`); replay validates review requests/replays. | Align with the PR #10 permission rule. |
+| `harness_v2/tests/test_improvement_handoff.py` | Files/modes, enum, snapshot mismatch, unknown request, replay. | |

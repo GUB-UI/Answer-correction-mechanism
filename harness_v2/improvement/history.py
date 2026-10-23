@@ -33,7 +33,7 @@ from harness_v2.storage.permissions import private_directory, private_open
 DECISIONS = {"accepted", "rejected", "inconclusive"}
 VERDICTS = {"improved", "not_improved", "regressed", "incomparable"}
 EVENT_TYPES = {"version_registered", "proposed", "candidate_attached", "evaluated", "decided",
-               "teacher_review", "override", "approval", "promoted", "rolled_back"}
+               "review_requested", "teacher_review", "override", "approval", "promoted", "rolled_back"}
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -81,8 +81,8 @@ class History:
     def __init__(self, root: Path, *, repo: Path | None = None) -> None:
         self.root = Path(root)
         self.repo = Path(repo) if repo else None
-        private_directory(self.root)
-        private_directory(self.root / "objects")
+        private_directory(self.root, managed=True)
+        private_directory(self.root / "objects", managed=True)
         self.log = self.root / "history.jsonl"
         self.head = self.root / "head.json"
 
@@ -413,6 +413,7 @@ def _replay(events: list[dict]) -> dict:
     proposals: dict[str, dict] = {}
     active = None
     promoted_versions: set[str] = set()
+    requests: dict[str, dict] = {}
     for event in events:
         kind, pid, p = event["type"], event.get("proposal_id"), event["payload"]
         if kind == "version_registered":
@@ -453,7 +454,7 @@ def _replay(events: list[dict]) -> dict:
         if pid not in proposals:
             raise HistoryError(f"{kind} for unknown proposal")
         rec = proposals[pid]
-        if rec["decision"] == "rejected" and kind not in {"teacher_review"}:
+        if rec["decision"] == "rejected" and kind not in {"teacher_review", "review_requested", "override"}:
             raise HistoryError("proposal was rejected; file a new proposal")
         if kind == "override":
             if not p.get("approver") or not p.get("reason"):
@@ -479,7 +480,17 @@ def _replay(events: list[dict]) -> dict:
                     raise HistoryError("accepted requires the latest evaluation to be improved")
             rec["decision"] = p["decision"]
             rec["decision_snapshot"] = rec["evaluations"][-1]["snapshot_id"] if rec["evaluations"] else None
+        elif kind == "review_requested":
+            if p["request_id"] in requests:
+                raise HistoryError("request_id reused")
+            requests[p["request_id"]] = {"proposal_id": pid, "snapshot_id": p["snapshot_id"], "used": False}
         elif kind == "teacher_review":
+            req = requests.get(p.get("request_id"))
+            if req is None or req["proposal_id"] != pid or req["snapshot_id"] != p.get("snapshot_id"):
+                raise HistoryError("review does not match an issued request for this proposal/snapshot")
+            if req["used"]:
+                raise HistoryError("review replay: request already answered")
+            req["used"] = True
             rec["reviews"].append(p)
         elif kind == "approval":
             if rec["decision"] != "accepted":

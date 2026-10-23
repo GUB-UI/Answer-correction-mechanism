@@ -1,0 +1,7 @@
+{"type": "object", "additionalProperties": false,
+ "required": ["request_id", "proposal_id", "snapshot_id", "reviewer", "verdict", "comments"],
+ "properties": {
+  "request_id": {"type": "string", "minLength": 1}, "proposal_id": {"type": "string", "minLength": 1},
+  "snapshot_id": {"type": "string", "minLength": 64}, "reviewer": {"type": "string", "minLength": 1},
+  "verdict": {"type": "string", "enum": ["approve_for_human", "changes_requested", "reject"]},
+  "comments": {"type": "string"}}}

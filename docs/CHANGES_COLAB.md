@@ -639,3 +639,12 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 | `harness_v2/improvement/duplicates.py` | 変更されたファイルと内容（バイト単位）から `change_id` を作り、`git patch-id` を類似のヒントに使う。過去の提案と一致すれば判定結果つきで列挙。提案者の自己申告ではなく実物で判定するため。 |
 | `harness_v2/improvement/history.py` | 一致した提案には `duplicate_of_…` / `retry_on_new_baseline` の印を付け、承認者と理由を記録した override なしでは昇格不可。 |
 | `harness_v2/tests/test_improvement_duplicates.py` | 空白の違いの区別、却下済みの再提案、別ベースラインでの再試行。 |
+
+## Phase 5 / 09: 提案レビューの受け渡し（依頼IDと snapshot に結び付け）（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/handoff.py` ほかスキーマ2件 | 提案ごとに request.json・issue.md・pr.md・branch.txt・実行権限のない commands.txt（0600）を作成し、依頼を履歴に記録。結果は発行済み・未回答の依頼ID かつ同じ提案・snapshot の場合のみ受理。レビューは承認扱いにしない。HTTP のモデルAPIを使わず Issue/ブランチ/PR で受け渡すため。 |
+| `harness_v2/providers/grokbot_exchange.py` | 文字列の `enum` 検査が抜けていたのを修正（Sol 指摘）。 |
+| `harness_v2/improvement/history.py` | 履歴ディレクトリを管理対象の非公開出力として作成（PR #10 の権限方針に合わせる）。 |
+| `harness_v2/tests/test_improvement_handoff.py` | 権限、enum、snapshot 不一致、未発行ID、再送の拒否。 |
