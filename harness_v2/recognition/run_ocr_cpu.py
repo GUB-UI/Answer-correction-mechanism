@@ -34,7 +34,28 @@ class CPUOCRRefused(RuntimeError):
     pass
 
 
-def available_bytes() -> int:
+def _meminfo_available(path: str = "/proc/meminfo") -> int | None:
+    try:
+        with open(path, encoding="ascii") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        return int(parts[1]) * 1024
+    except OSError:
+        return None
+    return None
+
+
+def available_bytes(meminfo_path: str = "/proc/meminfo") -> int:
+    """Memory the model can use: MemAvailable (includes reclaimable cache).
+
+    MemFree (SC_AVPHYS_PAGES) ignores reclaimable page cache and refused runs
+    on hosts with plenty of usable memory. It is only the fallback.
+    """
+    value = _meminfo_available(meminfo_path)
+    if value is not None:
+        return value
     try:
         return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES"))
     except (AttributeError, OSError, ValueError):

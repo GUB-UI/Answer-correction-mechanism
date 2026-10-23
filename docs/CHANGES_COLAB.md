@@ -480,3 +480,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | 既存テスト3件 | 仮ラベル（`prompt-v0`・`p1`・`p2`）を登録済みの版に置換。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **704 passed in 22.43s**。
+
+## harness v2 Phase 5 / 01: OCR のメモリ確認を MemAvailable に変更（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | 空きメモリを /proc/meminfo の MemAvailable で判定（取れなければ従来の値）。しきい値 4.5 GiB は同じ。従来の値は解放可能なキャッシュを含まない MemFree で、実際は 7.6 GiB 使えるのに 3.5 GiB と見なして OCR を拒否していた（Sol 計画レビュー1回目の blocker）。 |
+| `harness_v2/tests/test_p5_ocr_memory.py` | 偽の meminfo、項目なし・ファイルなしの場合を検証。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **708 passed in 20.95s**。

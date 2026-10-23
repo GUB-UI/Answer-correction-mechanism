@@ -389,3 +389,12 @@ Improvement cycle 1, `changed_components = ["prompt"]`. Plan reviewed twice by G
 | `harness_v2/tests/test_pipeline.py`, `test_p3_runner.py`, `test_p3_durable_identity.py` | Replace ad-hoc labels (`prompt-v0`, `p1`, `p2`) with registered versions. | Test fixtures must use real prompt versions under the strict registry. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **704 passed in 22.43s**.
+
+## Phase 5 / 01: OCR memory check uses MemAvailable (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | `available_bytes()` reads `MemAvailable` from /proc/meminfo, falling back to `SC_AVPHYS_PAGES`. The 4.5 GiB threshold is unchanged. | `SC_AVPHYS_PAGES` is MemFree, which excludes reclaimable page cache: on the box MemFree was 3.5 GiB while MemAvailable was 7.6 GiB, so OCR was refused although memory was usable (Sol plan review round 1, blocker). |
+| `harness_v2/tests/test_p5_ocr_memory.py` | Fake meminfo, missing field and missing file fallbacks, threshold pinned. | Regression contract. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **708 passed in 20.95s**.
