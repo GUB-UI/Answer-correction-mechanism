@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +23,7 @@ from harness_v2.recognition.candidates import readings_from_ocr
 from harness_v2.recognition.ocr import OCRArtifact, XiaomiOCR
 from harness_v2.recognition.structure import structure_text
 from harness_v2.storage.sqlite_store import RunStore
+from harness_v2.storage.artifacts import ImmutableArtifactError
 
 
 def _now() -> str:
@@ -52,9 +54,62 @@ class Pipeline:
         self.codex_reviewer = codex_reviewer
         self.ocr = XiaomiOCR(store.artifacts)
 
+    def _allocate_attempt(self, request_id: str) -> tuple[str, int]:
+        key = hashlib.sha256(request_id.encode()).hexdigest()
+        attempt = 1
+        while True:
+            artifact_id = request_id if attempt == 1 else f"{request_id}--attempt-{attempt}"
+            try:
+                self.store.artifacts.write_json(f"attempts/{key}/{attempt}.json", {
+                    "request_id": request_id, "artifact_id": artifact_id, "run_attempt": attempt,
+                })
+            except ImmutableArtifactError:
+                attempt += 1
+                continue
+            # Old/crashed runs may predate reservation markers.
+            if any((self.store.artifacts.root / folder / f"{artifact_id}.txt").exists()
+                   for folder in ("ocr_private", "ocr", "grading_private", "prompts", "raw")):
+                attempt += 1
+                continue
+            return artifact_id, attempt
+
     def run(self, case: dict[str, Any], *, experiment_id: str, commit: str) -> RunRecord:
+        case = dict(case)
         request_id = str(case.get("request_id") or uuid.uuid4().hex)
-        artifact = self._answer_text(case, request_id)
+        case["request_id"] = request_id
+        artifact_id, attempt = self._allocate_attempt(request_id)
+        context = {"artifact_id": artifact_id, "run_attempt": attempt}
+        started = time.perf_counter()
+        try:
+            return self._run(case, experiment_id=experiment_id, commit=commit, context=context)
+        except QuotaExceeded as exc:
+            exc.record = self.record_quota(case, exc, experiment_id=experiment_id, commit=commit,
+                                           context=context)
+            raise
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            result = GradingResult(status="failed", items=[], total_score=None, max_points=None,
+                                   failure_reason=reason, request_id=request_id,
+                                   provider=type(self.provider).__name__,
+                                   model_id=str(getattr(self.provider, "model_id", "")))
+            proposal_link = self._maybe_propose(result, case, {}, experiment_id, commit,
+                                                request_id, context.get("raw_response_artifact", ""))
+            return self.store.save_run(RunRecord(
+                experiment_id=experiment_id, commit=commit, provider=type(self.provider).__name__,
+                model_id=result.model_id, rubric_version=str(case.get("rubric_version") or "v0"),
+                prompt_version=str(case.get("prompt_version") or "v0"),
+                input_ids=[str(case.get("input_id") or request_id)],
+                outputs={**context, "grading": result.to_dict(), "error_class": type(exc).__name__},
+                checks=[], latency_ms=(time.perf_counter() - started) * 1000,
+                input_tokens=None, output_tokens=None, failure_reason=reason,
+                proposal_link=proposal_link, request_id=request_id, created_at=_now(),
+            ))
+
+    def _run(self, case: dict[str, Any], *, experiment_id: str, commit: str,
+             context: dict[str, Any]) -> RunRecord:
+        request_id = case["request_id"]
+        artifact_id = context["artifact_id"]
+        artifact = self._answer_text(case, artifact_id)
         answer_text = artifact.raw_text if artifact is not None else ""
         if artifact is not None:
             self._verify_ocr(artifact)
@@ -72,12 +127,17 @@ class Pipeline:
         grading_name = artifact.artifact_name if artifact is not None else ""
         grading_hash = hashlib.sha256(prompt_answer.encode("utf-8")).hexdigest()
         if prompt_answer != answer_text:
-            grading_name = f"grading_private/{request_id}.txt"
+            grading_name = f"grading_private/{artifact_id}.txt"
             _, grading_hash = self.store.artifacts.write_private_text(grading_name, prompt_answer)
         prompt = build_prompt(str(view.get("problem_text") or ""), prompt_answer, rubric)
-        self.store.artifacts.write_text(f"prompts/{request_id}.txt", prompt)
+        prompt_name = f"prompts/{artifact_id}.txt"
+        context.update({"prompt_artifact": prompt_name,
+                        "ocr_artifact": artifact.artifact_name if artifact else "",
+                        "ocr_sha256": artifact.sha256 if artifact else "",
+                        "grading_input_artifact": grading_name, "grading_input_sha256": grading_hash})
+        self.store.artifacts.write_text(prompt_name, prompt)
         exchange = self.provider.generate(prompt, request_id=request_id)
-        raw_name = f"raw/{request_id}.txt"
+        raw_name = f"raw/{artifact_id}.txt"
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         result = self._grade(exchange, rubric, prompt_answer, request_id)
         review_payload = self._maybe_review(result, view, rubric, request_id)
@@ -91,6 +151,7 @@ class Pipeline:
             prompt_version=str(case.get("prompt_version") or "v0"),
             input_ids=[str(case.get("input_id") or request_id)],
             outputs={
+                **context,
                 "grading": result.to_dict(),
                 "ocr_artifact": artifact.artifact_name if artifact is not None else "",
                 "ocr_redacted": artifact.redacted_name if artifact is not None else "",
@@ -133,10 +194,16 @@ class Pipeline:
         *,
         experiment_id: str,
         commit: str,
+        context: dict[str, Any] | None = None,
     ) -> RunRecord:
+        if getattr(error, "record", None) is not None:
+            return error.record
         exchange = error.exchange
         request_id = exchange.request_id or str(case.get("request_id") or uuid.uuid4().hex)
-        raw_name = f"raw/{request_id}.txt"
+        if context is None:
+            artifact_id, attempt = self._allocate_attempt(request_id)
+            context = {"artifact_id": artifact_id, "run_attempt": attempt}
+        raw_name = f"raw/{context['artifact_id']}.txt"
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         record = RunRecord(
             experiment_id=experiment_id,
@@ -147,6 +214,7 @@ class Pipeline:
             prompt_version=str(case.get("prompt_version") or "v0"),
             input_ids=[str(case.get("input_id") or request_id)],
             outputs={
+                **context,
                 "exchange": exchange.to_dict(),
                 "raw_response_artifact": raw_name,
                 "grading": {"status": "failed", "failure_reason": "quota"},

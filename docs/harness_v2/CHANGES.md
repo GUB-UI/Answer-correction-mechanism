@@ -179,3 +179,12 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_requirements.py` | Compare parsed dependency names and lower bounds between harness and root requirements. | Prevent the Phase 2 missing-SDK setup failures from recurring. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **395 passed in 12.30s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 03: Persistent setup failures and retry-safe artifacts (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/core/pipeline.py` | Reserve per-request run attempts with exclusive markers; retain original first-attempt paths and suffix retries. Persist pre-return exceptions as failed records with error class/reason and artifact links. Persist quota before rethrow and reuse that record. | Setup failures must remain auditable and retryable even after crashes or orphaned write-once files. |
+| `harness_v2/tests/test_p3_setup.py` | Exercise missing key, SDK/setup/runtime errors, same-id retries, orphaned artifacts and quota persistence. | Ensure retry does not overwrite history or double-record quota. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **400 passed in 12.58s** (offline guard; loopback mocks allowed).

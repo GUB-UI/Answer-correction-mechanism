@@ -272,3 +272,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_requirements.py` | harness_v2/requirements.txt の全依存と下限がルートに含まれることを検証し、Phase 2のセットアップ失敗を防ぐ。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **395 passed in 12.30s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 03: セットアップ失敗の記録と再実行（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/pipeline.py` | 例外発生時もfailed・failure_reason・例外クラス・成果物リンクを保存。同じrequest_idの再実行は試行番号付きパスを使い、不変成果物を上書きしない。429も停止前に1件だけ記録する。 |
+| `harness_v2/tests/test_p3_setup.py` | キー未設定・準備失敗・返却前例外・孤立成果物・同一ID再試行・429の回帰テストを追加。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **400 passed in 12.58s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
