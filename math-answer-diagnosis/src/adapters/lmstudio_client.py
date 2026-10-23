@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -23,6 +24,33 @@ class LMStudioClient:
             # Colab の 27B 4bit は1件数分かかることがあるため既定を長めにする。
             timeout=float(os.environ.get("LLM_REQUEST_TIMEOUT_SEC", "600")),
         )
+
+    def backend_fingerprint(self) -> dict[str, Any] | None:
+        """Require loaded identity and effective settings from the actual endpoint.
+
+        An OpenAI model listing or response model alias cannot verify the weights
+        or server-side generation overrides. Unsupported servers disable reuse.
+        """
+        from http.client import HTTPException
+        from urllib.request import Request, urlopen
+
+        url = str(self._client.base_url).rstrip("/") + "/health"
+        request = Request(url, headers={"Authorization": f"Bearer {self.config.lmstudio.api_key}"})
+        try:
+            with urlopen(request, timeout=2) as response:
+                payload = json.load(response)
+        except (OSError, ValueError, HTTPException):
+            return None
+        if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("error"):
+            return None
+        fingerprint = payload.get("backend_fingerprint")
+        if not isinstance(fingerprint, dict):
+            return None
+        model = fingerprint.get("model_id")
+        settings = fingerprint.get("settings")
+        if not isinstance(model, str) or not model.strip() or not isinstance(settings, dict) or not settings:
+            return None
+        return fingerprint
 
     def chat_completion(
         self,

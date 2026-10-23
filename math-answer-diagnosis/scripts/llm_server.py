@@ -80,6 +80,25 @@ class TransformersChatBackend:
         self.model = None
         self.tokenizer = None
 
+    def backend_fingerprint(self) -> dict[str, Any] | None:
+        if self.model is None or self.tokenizer is None:
+            return None
+        quantization = getattr(self.model.config, "quantization_config", None)
+        if quantization is not None and hasattr(quantization, "to_dict"):
+            quantization = quantization.to_dict()
+        return {
+            "model_id": self.model_id,
+            "settings": {
+                "model_revision": getattr(self.model.config, "_commit_hash", None),
+                "generation_config": self.model.generation_config.to_dict(),
+                "max_new_tokens_cap": self.max_new_tokens_cap,
+                "quantization_config": quantization,
+                "dtype": str(self.model.dtype),
+                "device": str(self.model.device),
+                "chat_template": self.tokenizer.chat_template,
+            },
+        }
+
     def _model_config(self) -> Any:
         from transformers import AutoConfig
 

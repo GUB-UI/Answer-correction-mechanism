@@ -221,6 +221,7 @@ def run_batch(
     # フェーズ3: 診断LLM
     started = time.monotonic()
     adapter = diagnosis_adapter or create_diagnosis_adapter(opts.diagnosis_provider, config)
+    metadata_builder = getattr(adapter, "grading_metadata", None)
     model_name = config.diagnosis.model_name if opts.diagnosis_provider != "mock" else "mock"
     targets: list[tuple[DiagnosisRunContext, dict[str, Any] | None]] = []
     for answer in answers:
@@ -243,7 +244,6 @@ def run_batch(
             model_name=model_name,
             prompt_type=opts.prompt_type,
         )
-        metadata_builder = getattr(adapter, "grading_metadata", None)
         metadata = metadata_builder(context) if metadata_builder else None
         if opts.skip_existing_diagnosis:
             done = [
@@ -267,14 +267,17 @@ def run_batch(
             notify("diagnosis", index, len(targets), context.answer_id)
             item = items[context.answer_id]
             try:
+                # Startup or another answer may have changed the running backend.
+                metadata = metadata_builder(context) if metadata_builder else None
                 raw = adapter.run(context)
+                after = metadata_builder(context) if metadata_builder else None
                 diagnosis = adapter.to_diagnosis_result(
                     context,
                     raw,
                     diagnosis_id=storage.generate_id("diag"),
                     created_at=utc_now_iso(),
                 )
-                diagnosis.grading_metadata = metadata
+                diagnosis.grading_metadata = metadata if metadata == after else None
                 storage.save_diagnosis_result(diagnosis)
                 item.diagnosis_id = diagnosis.diagnosis_id
                 item.score, item.max_score = diagnosis.score, diagnosis.max_score

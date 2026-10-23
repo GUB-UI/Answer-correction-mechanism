@@ -18,6 +18,7 @@ try:
     import fcntl
 except ImportError:  # Windows には無い。managed 起動は Colab / Mac 向け。
     fcntl = None  # type: ignore[assignment]
+import hashlib
 import json
 import os
 import shlex
@@ -28,7 +29,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -138,6 +139,19 @@ class ServiceManager:
     def log_file(self, name: str) -> Path:
         return self.run_dir / f"{name}.log"
 
+    def launch_file(self, name: str) -> Path:
+        return self.run_dir / f"{name}.launch.json"
+
+    def _launch_identity(self, name: str, pid: int) -> dict[str, Any]:
+        spec = json.dumps(asdict(self.specs[name]), sort_keys=True, default=str)
+        return {"pid": pid, "spec_sha256": hashlib.sha256(spec.encode()).hexdigest()}
+
+    def _launch_matches(self, name: str, pid: int) -> bool:
+        try:
+            return json.loads(self.launch_file(name).read_text()) == self._launch_identity(name, pid)
+        except (OSError, ValueError):
+            return False
+
     def _record(self, action: str, name: str, **extra: Any) -> None:
         self.events.append({"time": time.time(), "action": action, "service": name, **extra})
 
@@ -184,8 +198,11 @@ class ServiceManager:
                 for other_name, other in self.specs.items():
                     if other_name != name and other.uses_gpu:
                         self._stop_unlocked(other_name)
-            if self.read_pid(name) is not None and self.is_healthy(name):
-                return
+            pid = self.read_pid(name)
+            if pid is not None:
+                if self._launch_matches(name, pid) and self.is_healthy(name):
+                    return
+                self._stop_unlocked(name)
             if self.read_pid(name) is None and self.is_healthy(name):
                 # 管理外で起動済み（手動起動など）。止められないがそのまま使う。
                 self._record("reuse_external", name)
@@ -213,6 +230,7 @@ class ServiceManager:
                 start_new_session=True,
             )
         self.pid_file(name).write_text(str(process.pid))
+        self.launch_file(name).write_text(json.dumps(self._launch_identity(name, process.pid)))
         self._record("start", name, pid=process.pid)
         deadline = time.monotonic() + spec.startup_timeout_sec
         while time.monotonic() < deadline:
@@ -431,13 +449,17 @@ def build_service_manager(config: AppConfig) -> ServiceManager:
     )
 
 
-_MANAGERS: dict[tuple[str, str], ServiceManager] = {}
+_MANAGERS: dict[tuple[str, str], tuple[AppConfig, ServiceManager]] = {}
+_MANAGERS_LOCK = threading.RLock()
 
 
 def get_service_manager(config: AppConfig) -> ServiceManager:
     key = (str(config.project_root), str(config.run_dir))
-    manager = _MANAGERS.get(key)
-    if manager is None:
-        manager = build_service_manager(config)
-        _MANAGERS[key] = manager
-    return manager
+    with _MANAGERS_LOCK:
+        entry = _MANAGERS.get(key)
+        if entry is None or entry[0] != config:
+            if entry is not None and entry[1].managed:
+                entry[1].stop_all()
+            manager = build_service_manager(config)
+            _MANAGERS[key] = (config, manager)
+        return _MANAGERS[key][1]

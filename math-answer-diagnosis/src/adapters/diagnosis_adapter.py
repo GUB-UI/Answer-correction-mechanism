@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from src.adapters.base import DiagnosisAdapter, DiagnosisRunContext
 from src.adapters.diagnosis_helpers import (
     build_diagnosis_result,
@@ -50,10 +48,16 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
             {"role": "user", "content": user_prompt},
         ]
 
-    def grading_metadata(self, context: DiagnosisRunContext) -> dict:
-        settings = {"request": self.generation_settings}
+    def grading_metadata(self, context: DiagnosisRunContext) -> dict | None:
         if self.config.services.mode == "managed":
-            settings["server"] = asdict(self.config.services.llm)
+            from src.runtime.services import LLM, get_service_manager
+
+            get_service_manager(self.config).ensure(LLM)
+        fingerprint_builder = getattr(self.lmstudio_client, "backend_fingerprint", None)
+        backend = fingerprint_builder() if fingerprint_builder else None
+        if not isinstance(backend, dict):
+            return None
+        settings = {"request": self.generation_settings, "backend": backend}
         return build_grading_metadata(
             context, provider=self.transport, messages=self._messages(context),
             generation_settings=settings,
