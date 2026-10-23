@@ -146,7 +146,9 @@ class DiagnosisResult(BaseModel):
     @model_validator(mode="after")
     def require_review_for_undetermined_scores(self) -> DiagnosisResult:
         if self.review_status != "failed" and (
-            self.score is None or any(item.get("score") is None for item in self.question_scores)
+            self.score is None
+            or not self.question_scores
+            or any(item.get("score") is None for item in self.question_scores)
         ):
             self.review_status = "review_required"
         return self

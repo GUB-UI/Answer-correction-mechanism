@@ -27,7 +27,14 @@ from src.storage import Storage
 def _formula_summary(replacements: list[dict[str, Any]]) -> dict[str, Any]:
     replaced = sum(1 for item in replacements if "unimernet" in item and "skipped" not in item)
     skipped = [str(item.get("skipped")) for item in replacements if item.get("skipped")]
-    return {"replaced": replaced, "skipped": skipped}
+    # A completed no-op is valid only when layout inspection found no formulas.
+    completed = bool(replacements) and all(
+        "error" not in item
+        and ("unimernet" in item or item.get("skipped") == "no_formula_regions")
+        and item.get("skipped") in {None, "no_formula_regions"}
+        for item in replacements
+    )
+    return {"replaced": replaced, "skipped": skipped, "completed": completed}
 
 
 def _import_glmocr() -> Any:
@@ -312,7 +319,7 @@ def refine_ocr_result_with_unimernet(
         page["result"] = parsed
         page["formula_replacements"] = replacements
         page["formula_summary"] = summary
-        page["formula_applied"] = True
+        page["formula_applied"] = summary["completed"]
         collected.extend(replacements)
         any_replaced = any_replaced or summary["replaced"] > 0
         texts.append(markdown)
@@ -326,6 +333,7 @@ def refine_ocr_result_with_unimernet(
     else:
         combined = texts[0].strip()
     summary = _formula_summary(collected)
+    summary["completed"] = summary["completed"] and len(texts) == len(page_outputs)
     if isinstance(pages, list):
         raw_output["pages"] = page_outputs
         raw_output["formula_summary"] = summary
