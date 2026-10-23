@@ -631,3 +631,11 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 | --- | --- |
 | `harness_v2/improvement/history.py` | ハッシュ連鎖・fsync・排他ロック付きの追記専用履歴。再生時に全遷移を検証（ID重複禁止、最新評価が improved でなければ採用不可、却下は確定）。評価は experiment.json と比較結果から snapshot（コミット・設定/データセットのハッシュ・プロンプト・OCR前処理・比較結果のハッシュ）を導出。承認はリポジトリ・ベースブランチ・PR・最新 snapshot を明記し、昇格は版が snapshot と完全一致する場合のみ。版は設定とデータセット一式を内容アドレスで保存し、最初の版が不変のベースライン。ロールバックはベースラインか過去に昇格した版のみ。`materialize` で worktree と入力を復元しハッシュ検証。改ざん「検知」と誤昇格の防止であり、セキュリティ境界ではない（実際のマージ制限は GitHub のブランチ保護）。 |
 | `harness_v2/tests/test_improvement_history.py` | 複数サイクル＋ロールバック、ベースライン不変、古い承認の無効化、証拠の結び付け、クラッシュ・途中切れ・欠落の検出など。 |
+
+## Phase 5 / 08: 提案の重複検出（実際の変更内容から判定）（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/duplicates.py` | 変更されたファイルと内容（バイト単位）から `change_id` を作り、`git patch-id` を類似のヒントに使う。過去の提案と一致すれば判定結果つきで列挙。提案者の自己申告ではなく実物で判定するため。 |
+| `harness_v2/improvement/history.py` | 一致した提案には `duplicate_of_…` / `retry_on_new_baseline` の印を付け、承認者と理由を記録した override なしでは昇格不可。 |
+| `harness_v2/tests/test_improvement_duplicates.py` | 空白の違いの区別、却下済みの再提案、別ベースラインでの再試行。 |

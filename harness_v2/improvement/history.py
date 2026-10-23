@@ -259,6 +259,16 @@ class History:
             "proposal": record, "content_sha256": sha256(canonical(record)),
             "change_id": change_id, "source": source or {}})
 
+    def propose_change(self, proposal: ImprovementProposal) -> dict:
+        """Propose with an identity derived from the actual git change; duplicates are flagged."""
+        from harness_v2.improvement.duplicates import change_identity, find_duplicates
+        self._check_commit(proposal.baseline_commit)
+        self._check_commit(proposal.candidate_commit)
+        identity = change_identity(self.repo, proposal.baseline_commit, proposal.candidate_commit)
+        dups = find_duplicates(self.state(), identity, proposal.baseline_commit)
+        return self.propose(proposal, change_id=identity["change_id"],
+                            source={"identity": identity, "duplicates": dups})
+
     def import_draft(self, path: Path) -> dict | None:
         record = json.loads(Path(path).read_text(encoding="utf-8"))
         proposal = ImprovementProposal(**record)
@@ -433,12 +443,12 @@ def _replay(events: list[dict]) -> dict:
             proposals[pid] = {"proposal": p["proposal"], "content_sha256": p["content_sha256"],
                               "change_id": change_id, "candidate_commit": p["proposal"].get("candidate_commit"),
                               "evaluations": [], "decision": "pending", "reviews": [],
-                              "approvals": [], "overrides": [], "promoted": None, "flags": []}
-            for q in prior:
-                if q["proposal"].get("baseline_commit") != base:
-                    proposals[pid]["flags"].append("retry_on_new_baseline")
-                elif q["decision"] in {"accepted", "rejected"}:
-                    proposals[pid]["flags"].append("duplicate_of_decided")
+                              "approvals": [], "overrides": [], "promoted": None, "flags": [],
+                              "identity": (p.get("source") or {}).get("identity")}
+            for q in prior:  # exact change seen before: any reuse needs an audited override
+                proposals[pid]["flags"].append(
+                    "retry_on_new_baseline" if q["proposal"].get("baseline_commit") != base
+                    else "duplicate_of_" + q["decision"])
             continue
         if pid not in proposals:
             raise HistoryError(f"{kind} for unknown proposal")
