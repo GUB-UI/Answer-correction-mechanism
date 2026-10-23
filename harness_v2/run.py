@@ -58,7 +58,7 @@ def load_config(path: Path) -> dict:
         if not isinstance(config.get(field), str) or not config[field].strip():
             raise ValueError(f'config {field} must be a nonempty string')
     from harness_v2.grading.scorer import prompt_suffix
-    prompt_suffix(config['prompt_version'])  # rejects unregistered harness_v2_* versions before any call
+    prompt_suffix(config['prompt_version'])  # rejects unregistered versions before any call
     if config['provider'] not in {'gemma', 'fixture'}:
         raise ValueError('provider must be gemma or fixture; no fallback')
     if config['provider'] == 'gemma' and not config['model'].startswith('gemma-'):

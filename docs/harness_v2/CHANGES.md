@@ -379,3 +379,13 @@ Improvement cycle 1, `changed_components = ["prompt"]`. Plan reviewed twice by G
 | `harness_v2/core/pipeline.py` | Pass the case `prompt_version` into `build_prompt`. | The configured version now selects the prompt, not only a label. |
 | `harness_v2/run.py` | `load_config` rejects unregistered `harness_v2_*` prompt versions before any provider call. | Fail before spending quota. |
 | `harness_v2/tests/test_p4_prompt_versions.py` | Pin default prompt hash; suffix-only difference; no problem/formula/score tokens in the suffix; legacy labels; typo rejection; uncertainty -> review_required and null -> failed without filling. | Regression contracts for the candidate. |
+
+## Phase 4 / 02: Strict prompt version registry (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/grading/scorer.py`, `harness_v2/run.py` | Only registered versions (`v0`, `harness_v2_default`, `harness_v2_ambiguity_aware_v1`) are accepted; any other name, including prefix typos and surrounding whitespace, raises before a provider call. | Sol diff review round 1 [major]: `harnes_v2_…` or ` harness_v2_…` silently rendered the default prompt under a misleading label. |
+| `harness_v2/tests/test_p4_prompt_versions.py` | Parametrized rejection cases; pipeline test asserting the provider receives the candidate suffix and the record carries the version. | Sol [minor]: protect pipeline dispatch, not just build_prompt. |
+| `harness_v2/tests/test_pipeline.py`, `test_p3_runner.py`, `test_p3_durable_identity.py` | Replace ad-hoc labels (`prompt-v0`, `p1`, `p2`) with registered versions. | Test fixtures must use real prompt versions under the strict registry. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **704 passed in 22.43s**.

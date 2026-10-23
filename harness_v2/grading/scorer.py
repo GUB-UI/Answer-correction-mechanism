@@ -156,9 +156,8 @@ AMBIGUITY_AWARE_V1 = (
     "Do not raise uncertainty for clear work, including clear mistakes."
 )
 
-# Registered instruction variants. "v0" and "harness_v2_default" (and any label outside the reserved
-# "harness_v2_" namespace, as used by older experiments) render the historical prompt byte for byte.
-# An unregistered "harness_v2_*" name is rejected so a typo cannot silently run the default prompt.
+# Registered instruction variants. "v0" and "harness_v2_default" render the historical prompt byte for
+# byte. Every other name is rejected, so a typo cannot silently run the default prompt.
 PROMPT_VERSIONS = {
     "v0": "",
     "harness_v2_default": "",
@@ -167,11 +166,9 @@ PROMPT_VERSIONS = {
 
 
 def prompt_suffix(prompt_version: str) -> str:
-    if prompt_version in PROMPT_VERSIONS:
-        return PROMPT_VERSIONS[prompt_version]
-    if prompt_version.startswith("harness_v2_"):
+    if prompt_version not in PROMPT_VERSIONS:
         raise ValueError(f"unregistered prompt_version: {prompt_version!r}")
-    return ""
+    return PROMPT_VERSIONS[prompt_version]
 
 
 def build_prompt(problem_text: str, answer_text: str, rubric: list[RubricItem],

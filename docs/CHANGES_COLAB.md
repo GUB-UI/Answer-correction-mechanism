@@ -470,3 +470,13 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/core/pipeline.py` | ケースの prompt_version を build_prompt に渡す。 |
 | `harness_v2/run.py` | 未登録の `harness_v2_*` 版を API 呼び出し前に拒否。 |
 | `harness_v2/tests/test_p4_prompt_versions.py` | 既定プロンプトのハッシュ固定、追記のみの差分、禁止語なし、旧ラベル、誤記拒否、uncertainty→review_required・null→failed（補完なし）を検証。 |
+
+## harness v2 Phase 4 / 02: プロンプト版の厳格な登録制（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/grading/scorer.py`, `harness_v2/run.py` | 登録済みの版（`v0`・`harness_v2_default`・`harness_v2_ambiguity_aware_v1`）以外は、接頭辞の誤記や前後の空白も含めて API 呼び出し前に拒否。Sol 差分レビュー1回目の major（誤記で既定プロンプトが別ラベルのまま実行される）への対応。 |
+| `harness_v2/tests/test_p4_prompt_versions.py` | 拒否ケースと、パイプラインが候補の追記文をプロバイダへ渡し版を記録するテストを追加（Sol minor）。 |
+| 既存テスト3件 | 仮ラベル（`prompt-v0`・`p1`・`p2`）を登録済みの版に置換。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **704 passed in 22.43s**。

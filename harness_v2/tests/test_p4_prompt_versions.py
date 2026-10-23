@@ -38,14 +38,11 @@ def test_suffix_names_no_problem_formula_or_score():
     assert not any(ch.isdigit() and ch not in '015' for ch in text)
 
 
-def test_legacy_labels_keep_default_prompt():
-    for label in ('p1', 'prompt-v2'):
-        assert build_prompt('problem', 'x+1', RUBRIC, label) == _default()
-
-
-def test_unregistered_harness_v2_version_rejected():
+@pytest.mark.parametrize('label', ['p1', 'prompt-v0', 'harness_v2_ambiguity_aware_v2',
+                                   'harnes_v2_ambiguity_aware_v1', ' harness_v2_ambiguity_aware_v1', ''])
+def test_unregistered_version_rejected(label):
     with pytest.raises(ValueError):
-        build_prompt('problem', 'x+1', RUBRIC, 'harness_v2_ambiguity_aware_v2')
+        build_prompt('problem', 'x+1', RUBRIC, label)
 
 
 def test_run_config_rejects_unregistered_prompt_version(tmp_path):
@@ -72,3 +69,27 @@ def test_uncertainty_routes_to_review_and_null_score_fails_without_filling():
         result = validate(RUBRIC, items, total, 'x+1')
         assert result.status == status
     assert result.items[0].score is None
+
+
+def test_pipeline_sends_candidate_suffix_and_records_version(tmp_path):
+    from harness_v2.core.pipeline import Pipeline
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.storage.artifacts import ArtifactStore
+    from harness_v2.storage.sqlite_store import RunStore
+    completion = json.dumps({'items': [{'item_id': 'R1', 'score': 4, 'evidence_spans': [{'text': 'x+1'}],
+                                        'math_reason': 'r', 'uncertainty': 0, 'review_reason': ''}],
+                             'total_score': 4})
+    seen = []
+    provider = FixtureProvider(completion)
+    original = provider.generate
+    def spy(prompt, **kw):
+        seen.append(prompt)
+        return original(prompt, **kw)
+    provider.generate = spy
+    pipe = Pipeline(RunStore(tmp_path / 'r.sqlite', ArtifactStore(tmp_path / 'a')), provider)
+    case = {'request_id': 'req-1', 'problem_text': 'p', 'answer_text': 'x+1',
+            'rubric': [{'item_id': 'R1', 'max_points': 4, 'description': 'desc'}],
+            'prompt_version': 'harness_v2_ambiguity_aware_v1', 'rubric_version': 'v1'}
+    record = pipe.run(case, experiment_id='e', commit='c' * 40)
+    assert 'do not reconstruct' in json.loads(seen[0])['instructions']
+    assert record.prompt_version == 'harness_v2_ambiguity_aware_v1'
