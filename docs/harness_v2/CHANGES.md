@@ -206,3 +206,13 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_ocr_metadata.py` | Pass case provenance to OCR import and persist the full metadata alongside canonical fields. Test all import modes, precedence, CRLF and SHA256. | Allow Phase 2 imported fp32 outputs to be evaluated with their actual provenance. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **407 passed in 12.34s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 06: Reusable post-inference reference FailureCases (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/reference.py` | Share reference_errors and failure_from_run for RunRecord or SQLite-loaded dictionaries; report total/item mismatches without changing grades. | Stored validated runs need the same FailureCase path as fresh inference, without post-hoc scripts or new model calls. |
+| `harness_v2/core/pipeline.py` | Use the shared evaluator for proposals and retain problem/input version metadata in run outputs. | Avoid divergent live/stored mismatch detection and preserve provenance. |
+| `harness_v2/tests/test_p3_reference.py` | Test stored validated mismatches/matches and zero/null scores; existing reference tests retain actual Codex/provider blinding coverage. | References remain evaluation-only and scores are never filled. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **409 passed in 12.23s** (offline guard; loopback mocks allowed).

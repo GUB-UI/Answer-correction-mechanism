@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import hashlib
-import math
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from harness_v2 import __version__
-from harness_v2.core.contracts import Check, FailureCase, GradingResult, RunRecord
+from harness_v2.core.contracts import Check, GradingResult, RunRecord
 from harness_v2.evaluation.independent import grading_allowlist, prepare_independent_input
 from harness_v2.evaluation.review import review_disagreement
+from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import ScoringParseError, build_prompt, items_from_completion
 from harness_v2.grading.validator import validate
@@ -28,15 +27,6 @@ from harness_v2.storage.artifacts import ImmutableArtifactError
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _optional_score(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    number = float(value)
-    if not math.isfinite(number):
-        return None
-    return number
 
 
 class Pipeline:
@@ -78,7 +68,9 @@ class Pipeline:
         request_id = str(case.get("request_id") or uuid.uuid4().hex)
         case["request_id"] = request_id
         artifact_id, attempt = self._allocate_attempt(request_id)
-        context = {"artifact_id": artifact_id, "run_attempt": attempt, "attempt_count": 0, "attempts": []}
+        context = {"artifact_id": artifact_id, "run_attempt": attempt, "attempt_count": 0, "attempts": [],
+                   "case_metadata": {"problem_id": str(case.get("problem_id") or case.get("input_id") or request_id),
+                                     "input_version": str(case.get("input_version") or "")}}
         started = time.perf_counter()
         try:
             return self._run(case, experiment_id=experiment_id, commit=commit, context=context)
@@ -327,52 +319,17 @@ class Pipeline:
         request_id: str,
         raw_name: str,
     ) -> str:
-        reference_errors = []
-        reference_total = _optional_score(case.get("reference_score"))
-        if reference_total is not None and result.total_score != reference_total:
-            reference_errors.append("reference_total_mismatch")
-        reference_items = case.get("reference_items")
-        if isinstance(reference_items, dict):
-            predicted = {item.item_id: item.score for item in result.items}
-            for item_id, value in reference_items.items():
-                reference = _optional_score(value)
-                if reference is not None and predicted.get(item_id) != reference:
-                    reference_errors.append(f"reference_item_mismatch:{item_id}")
-        if result.status == "validated" and not reference_errors:
+        failure = failure_from_run({
+            "request_id": request_id, "experiment_id": experiment_id,
+            "input_ids": [str(case.get("input_id") or request_id)], "model_id": result.model_id,
+            "rubric_version": str(case.get("rubric_version") or "v0"),
+            "failure_reason": result.failure_reason, "checks": [check.to_dict() for check in result.checks],
+            "outputs": {"grading": result.to_dict(), "raw_response_artifact": raw_name,
+                        "case_metadata": {"problem_id": str(case.get("problem_id") or case.get("input_id") or request_id),
+                                          "input_version": str(case.get("input_version") or "")}},
+        }, reference_score=case.get("reference_score"), reference_items=case.get("reference_items"))
+        if failure is None:
             return ""
-        errors = [check.name for check in result.checks if not check.ok]
-        if result.failure_reason and result.failure_reason not in errors:
-            errors.insert(0, result.failure_reason)
-        errors.extend(reference_errors)
-        uncertainties = [
-            float(item.uncertainty)
-            for item in result.items
-            if isinstance(item.uncertainty, (int, float))
-            and not isinstance(item.uncertainty, bool)
-            and math.isfinite(float(item.uncertainty))
-        ]
-        failure = FailureCase(
-            case_id=uuid.uuid4().hex,
-            problem_id=str(case.get("problem_id") or case.get("input_id") or request_id),
-            input_version=str(case.get("input_version") or ""),
-            model_version=result.model_id,
-            harness_version=__version__,
-            rubric_version=str(case.get("rubric_version") or "v0"),
-            predicted_score=result.total_score,
-            reference_score=reference_total,
-            rubric_results=[item.to_dict() for item in result.items],
-            evidence=[span.to_dict() for item in result.items for span in item.evidence_spans],
-            errors=errors,
-            uncertainty=max(uncertainties) if uncertainties else None,
-            execution_log=[
-                {
-                    "request_id": request_id,
-                    "experiment_id": experiment_id,
-                    "artifact": raw_name,
-                    "status": result.status,
-                }
-            ],
-        )
         proposal = build_proposal([failure], baseline_commit=commit)
         assert proposal is not None
         self.store.artifacts.write_json(f"failures/{failure.case_id}.json", failure.to_dict())

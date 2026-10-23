@@ -299,3 +299,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_ocr_metadata.py` | 来歴をocr_metadataへ永続化。3通りの取り込み・優先順位・CRLFとハッシュの保持を回帰テストにし、Phase 2のCPU出力を監査可能にする。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **407 passed in 12.34s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 06: 保存済み実行からの参照不一致FailureCase（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/reference.py, harness_v2/core/pipeline.py` | 既存の参照照合を共通化し、RunRecordとSQLite読込結果の両方からFailureCaseを生成。問題ID・入力版を記録し、予測得点と状態は変更しない。 |
+| `harness_v2/tests/test_p3_reference.py` | validatedの保存済み実行・項目不一致・一致・0点・欠落点を検証。既存のGemma/Codex境界テストも実行し、参照の送信と得点補完を防ぐ。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **409 passed in 12.23s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
