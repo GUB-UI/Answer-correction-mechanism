@@ -313,3 +313,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/conftest.py, harness_v2/tests/test_p3_commit_identity.py, harness_v2/tests/test_p3_runner.py` | Mock resolution independently of repository state; cover clean/dirty HEAD, Git failures, CLI/API defaults, explicit identities, legacy rejection and unchanged files on refused resumes. | Make revision binding reproducible without depending on the real checkout or sending references to models. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **506 passed in 14.31s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation).
+
+## Phase 3 review fix / 07: Validate settings on failed provider calls (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/comparison.py` | Validate recorded effective generation settings for current runs and historical attempts, including failed grades. Exempt only explicit setup errors with zero attempts and no response evidence; reject missing or invalid settings and uncertain call provenance. Continue excluding provider policy metadata from generation parameters. | Failed calls and retries contribute to comparison metrics, so their actual conditions must match the declared experiment settings. |
+| `harness_v2/tests/test_p3_failed_settings.py` | Cover parse/HTTP/quota failures, one/both-side mismatches, missing/invalid settings, successful resumes with incompatible failed history, genuine setup failures, uncertain counters and contradictory response evidence. Assert comparison preserves records and leaves failed scores unscored. | Prevent status-based validation bypasses while retaining the pre-call setup exemption, reference isolation and honest metrics. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **542 passed in 15.33s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation).

@@ -235,6 +235,43 @@ def _provenance_reasons(payload: dict) -> list[str]:
     return reasons
 
 
+def _generation_settings_reasons(payload: dict) -> list[str]:
+    """Validate every recorded call, including failures retained after resume."""
+    reasons = []
+    expected = payload['config'].get('generation_settings')
+    for field in ('runs', 'attempt_runs'):
+        if field not in payload:
+            continue
+        runs = payload[field]
+        if not isinstance(runs, list):
+            reasons.append(f'effective generation settings unavailable: invalid {field}')
+            continue
+        for run in runs:
+            outputs = run.get('outputs') if isinstance(run, dict) else None
+            if not isinstance(outputs, dict):
+                reasons.append(f'effective generation settings unavailable: invalid {field} run')
+                continue
+            # Only explicit setup errors with zero calls can lack effective
+            # settings. Missing counters or contradictory response evidence
+            # cannot establish that no provider call occurred.
+            setup_failure = (
+                outputs.get('grading', {}).get('status') == 'failed'
+                and outputs.get('error_class') in {'ProviderSetupError', 'MissingAPIKey'}
+                and type(outputs.get('attempt_count')) is int
+                and outputs['attempt_count'] == 0 and outputs.get('attempts') == []
+                and not any(outputs.get(key) for key in
+                            ('raw_response_artifact', 'exchange', 'provider_response_id'))
+            )
+            if setup_failure:
+                continue
+            settings = outputs.get('settings')
+            effective = ({k: v for k, v in settings.items() if k != 'provider_policy'}
+                         if isinstance(settings, dict) else None)
+            if effective is None or effective != expected:
+                reasons.append(f'effective generation settings differ or are missing: {run.get("request_id")}')
+    return reasons
+
+
 def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
     reasons = []
     for name, payload in (('baseline', baseline), ('candidate', candidate)):
@@ -244,6 +281,7 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
         return reasons
     for name, payload in (("baseline", baseline), ("candidate", candidate)):
         reasons.extend(f"{name}: {reason}" for reason in _provenance_reasons(payload))
+        reasons.extend(f"{name}: {reason}" for reason in _generation_settings_reasons(payload))
     left, right = baseline['config'], candidate['config']
     for key, label in (('model', 'model'), ('provider', 'provider'),
                        ('rubric_version', 'rubric version'), ('generation_settings', 'generation settings')):
@@ -292,12 +330,6 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
             for field in ('engine', 'revision', 'dtype', 'source_sha256', 'sidecar_sha256'):
                 if xm.get(field) != ym.get(field):
                     reasons.append(f'run OCR {field} differs between counterparts: {key}')
-        for run, cfg in ((x, left), (y, right)):
-            settings = run.get('outputs', {}).get('settings', {})
-            if run.get('outputs', {}).get('grading', {}).get('status') != 'failed':
-                effective = {k: v for k, v in settings.items() if k != 'provider_policy'}
-                if effective != cfg.get('generation_settings'):
-                    reasons.append(f'effective generation settings differ: {key}')
     return list(dict.fromkeys(reasons))
 
 
