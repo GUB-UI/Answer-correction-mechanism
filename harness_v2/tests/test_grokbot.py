@@ -47,6 +47,32 @@ def test_file_exchange_shares_request_id(tmp_path) -> None:
         )
 
 
+def test_request_id_cannot_escape_and_results_are_validated(tmp_path) -> None:
+    exchange = FileExchange(tmp_path)
+    escaped = _request()
+    escaped["request_id"] = "../../escaped"
+    with pytest.raises(SchemaError):
+        exchange.publish_request(escaped)
+    assert not (tmp_path.parent / "escaped.json").exists()
+    assert list(tmp_path.rglob("*escaped*")) == []
+    exchange.publish_request(_request())
+    (tmp_path / "results" / "req-1.json").write_text('{"request_id":"req-1"}', encoding="utf-8")
+    with pytest.raises(SchemaError):
+        exchange.read_result("req-1")
+
+
+def test_image_data_uris_are_stripped_from_committed_files(tmp_path) -> None:
+    payload = _request()
+    payload["payload"] = {"answer_text": "see data:image/png;base64,AAAA data"}
+    path = FileExchange(tmp_path).publish_request(payload)
+    text = path.read_text(encoding="utf-8")
+    assert "data:image" not in text
+    assert "AAAA" not in text
+    assert "[stripped-image]" in text
+    folder = GitHubHandoff(tmp_path / "gh").write(payload)
+    assert "data:image" not in (folder / "request.json").read_text(encoding="utf-8")
+
+
 def test_github_handoff_is_files_only(tmp_path) -> None:
     folder = GitHubHandoff(tmp_path).write(_request())
     assert (folder / "issue.md").is_file()
