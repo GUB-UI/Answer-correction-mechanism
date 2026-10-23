@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from src.adapters.base import OCRAdapter, OCRRunContext
-from src.models import OCRResult, utc_now_iso
+from src.models import OCRProvenance, OCRResult, utc_now_iso
+from src.ocr_provenance import image_hashes, ocr_provenance
 from src.storage import Storage
 
 GLMOCR_SDK_ERROR_MESSAGE = """GLM-OCR SDKの実行に失敗しました。
@@ -20,10 +21,21 @@ def run_ocr_for_images(
     source_id: str,
     image_paths: list[str],
     engine: str,
+    provenance: OCRProvenance | None = None,
 ) -> OCRResult:
     if not image_paths:
         raise ValueError("OCRする画像がありません。")
 
+    if provenance is None:
+        provider = {
+            "MockOCRAdapter": "mock",
+            "GLMOCRSdkAdapter": "glmocr_sdk",
+            "XiaomiOCRAdapter": "xiaomi_ocr",
+        }.get(type(adapter).__name__, storage.config.ocr.provider)
+        provenance = ocr_provenance(
+            storage.config, image_paths, provider=provider, adapter=adapter,
+            apply_formula=bool(getattr(adapter, "apply_formula", False)),
+        )
     page_texts: list[str] = []
     page_raw: list[dict[str, Any]] = []
     engine_names: list[str] = []
@@ -53,6 +65,7 @@ def run_ocr_for_images(
 
     combined = "\n\n".join(page_texts).strip()
     result = OCRResult(
+        provenance=(provenance if image_hashes(storage.config, image_paths) == provenance.image_sha256 else None),
         ocr_id=storage.generate_id("ocr"),
         answer_id=answer_id,
         ocr_engine="+".join(dict.fromkeys(engine_names)) or engine,

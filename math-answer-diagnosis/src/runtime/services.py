@@ -350,6 +350,12 @@ def build_service_specs(
             services.xiaomi_ocr.model_id,
         ]
 
+    if config.ocr.revision:
+        if not services.glm_ocr.command:
+            glm_command.extend(["--revision", config.ocr.revision])
+        if not services.xiaomi_ocr.command:
+            xiaomi_command.extend(["--revision", config.ocr.revision])
+
     unimernet_port = _port_from_url(config.formula.base_url, 8091)
     unimernet_env = {"UNIMERNET_PORT": str(unimernet_port)}
     if services.unimernet.model_dir:

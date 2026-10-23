@@ -350,7 +350,7 @@ def refine_ocr_result_with_unimernet(
 
 
 class ManualCorrectionOCRAdapter:
-    """既存 OCR 結果の used_text を人間が修正するための Adapter。"""
+    """元の OCR を残し、手動転記を別の入力として保存する。"""
 
     def __init__(self, storage: Storage | None = None) -> None:
         self.storage = storage or Storage()
@@ -369,15 +369,21 @@ class ManualCorrectionOCRAdapter:
 
         updated = existing.model_copy(
             update={
+                "ocr_id": self.storage.generate_id("transcription"),
+                "created_at": utc_now_iso(),
+                "parent_ocr_id": existing.ocr_id,
+                "input_type": "manual_transcription",
+                "provenance": None,
                 "used_text": used_text,
-                "human_corrected": used_text != existing.raw_text,
+                "human_corrected": True,
                 "ocr_suspect": (
                     existing.ocr_suspect if ocr_suspect is None else ocr_suspect
                 ),
                 "correction_note": correction_note,
             }
         )
-        return self.storage.update_ocr_result(updated)
+        self.storage.save_ocr_result(updated)
+        return updated
 
 
 def _post_chat_completion(url: str, payload: dict[str, Any], timeout: float = 600.0) -> str:

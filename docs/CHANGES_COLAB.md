@@ -182,3 +182,11 @@ A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み�
 - UniMERNet が手書きの数式を実際に良く読めるか
 - `GLMOCR_MIN_EDGE` などを変えたときの読み取り品質
 - `SeerRay-Lab/Xiaomi-OCR-0` を A100 に載せたときの VRAM と、この手書き答案での読み取り精度
+
+## PR #9 修正1: OCR 再利用の条件と手動転記の分離
+
+OCR 結果にエンジン、モデル ID・revision、OCR 設定、入力画像ごとの SHA-256（ページ順）を保存し、現在の実行とすべて一致するときだけ再利用する。情報のない旧レコード、画像の変更・欠落、設定の変更では再利用しない。数式置換が失敗した結果を、置換済みとして再利用しない。`OCR_MODEL_REVISION` は managed サーバーの processor・重みの読み込みにも渡す。
+
+人の修正は元の OCR を残して別レコードの `manual_transcription` として保存する。旧 `human_corrected` レコードもこの入力型として読み込む。一括処理で手動転記を使うときは `--input-type manual_transcription`、テキスト答案は `--input-type typed_text` を明示する。OCR キャッシュとしては扱わない。
+
+検証: `tests/test_ocr_reuse.py` に一致時の再利用、各条件の不一致、複数画像の順序・枚数、旧レコード、手動転記・テキスト入力の分離、数式置換失敗、revision の受け渡しを追加。全テストを指定の Python・pytest コマンドで実行し、147 件成功（既存の HTTP mock 用に localhost 接続を許可）。

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -71,10 +71,21 @@ class AnswerRecord(BaseModel):
         return self
 
 
+class OCRProvenance(BaseModel):
+    engine: str
+    model_id: str
+    model_revision: str
+    settings: dict[str, Any]
+    image_sha256: list[str]
+
+
 class OCRResult(BaseModel):
     ocr_id: str
     answer_id: str = ""
     ocr_engine: str
+    input_type: Literal["ocr_output", "manual_transcription", "typed_text"] = "ocr_output"
+    parent_ocr_id: str | None = None
+    provenance: OCRProvenance | None = None
     raw_text: str
     used_text: str
     uncertain_parts: list[str] = Field(default_factory=list)
@@ -89,6 +100,11 @@ class OCRResult(BaseModel):
 
     @model_validator(mode="after")
     def sync_source_fields(self) -> OCRResult:
+        # Legacy corrections and typed inputs must never enter the OCR cache.
+        if self.human_corrected:
+            self.input_type = "manual_transcription"
+        elif self.ocr_engine == "typed_text":
+            self.input_type = "typed_text"
         if not self.source_id:
             self.source_id = self.answer_id
         if (
