@@ -1,4 +1,4 @@
-"""OCR notation equivalence must preserve radicals and exponent operators."""
+"""OCR notation equivalence must preserve operators and expression scope."""
 
 import pytest
 
@@ -92,3 +92,65 @@ def test_exponent_notations_match(latex, unicode, expected):
 def test_dropping_operators_or_changing_root_scope_increases_cer(ocr, reference):
     assert skeleton(ocr) != skeleton(reference)
     assert cer(ocr, reference) > 0
+
+
+@pytest.mark.parametrize("left,right", [
+    ("a+b/c", "(a+b)/c"),
+    (r"\frac{a+b}{c}", r"a+\frac{b}{c}"),
+    (r"\frac{a}{b+c}", r"\frac{a}{b}+c"),
+    (r"\frac{a}{\frac{b}{c}}", r"\frac{\frac{a}{b}}{c}"),
+    ("a/(b*c)", "a/b*c"),
+    ("a/(bc)", "a/bc"),
+    ("a*(b+c)", "a*b+c"),
+    ("a-(b-c)", "a-b-c"),
+    ("a+(b+c)", "(a+b)+c"),
+    (r"x^{a+b}", "x^a+b"),
+    ("(x^a)^b", "x^(a^b)"),
+    ("(x+y)^2", "x+y^2"),
+    (r"x^\frac{a}{b}", "x^a/b"),
+    (r"\frac{a}{b}^c", "a/b^c"),
+    (r"a/\frac{b}{c}", "a/b/c"),
+    ("(12)(34)", "1234"),
+    ("(12).34", "12.34"),
+    (r"\sqrt{(a+b)/c}", r"\sqrt{a+b/c}"),
+])
+def test_expression_grouping_collisions_are_rejected(left, right):
+    assert skeleton(left) != skeleton(right)
+    assert cer(left, right) > 0
+
+
+@pytest.mark.parametrize("latex,plain", [
+    (r"\frac{a+b}{c}", "(a+b)/c"),
+    (r"a+\frac{b}{c}", "a+b/c"),
+    (r"\frac{a}{b+c}", "a/(b+c)"),
+    (r"\frac{ab}{c}", "ab/c"),
+    (r"\frac{a}{bc}", "a/(bc)"),
+    (r"\frac{a}{\frac{b}{c}}", "a/(b/c)"),
+    (r"\frac{\frac{a}{b}}{c}", "(a/b)/c"),
+    (r"\frac{a+b}{\frac{c}{d+e}}", "(a+b)/(c/(d+e))"),
+    (r"\left(a+b\right)\cdot c", "(a+b)*c"),
+    (r"\frac{(a+b)c}{d}", "(a+b)c/d"),
+    (r"x^{a+b}", "x^(a+b)"),
+    (r"x^\frac{a}{b}", "x^(a/b)"),
+    (r"\frac{a}{b}^c", "(a/b)^c"),
+    (r"a/\frac{b}{c}", "a/(b/c)"),
+    (r"\sqrt{\frac{a+b}{c}}", "sqrt((a+b)/c)"),
+    (r"\frac{\sqrt{a+b}}{c}", "sqrt(a+b)/c"),
+    ("（ａ＋ｂ）／ｃ", "(a+b)/c"),
+])
+def test_grouped_notations_match_and_are_idempotent(latex, plain):
+    normalized = skeleton(latex)
+    assert normalized == skeleton(plain)
+    assert cer(latex, plain) == 0
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("text", [
+    "((a+b)/c)", "a/(b/(c+d))", "a*(b+c)", "a-(b-c)",
+    "(x^a)^b", "x^(a^b)", "x^{a+b}", "x^{-12}", "(12)(34)",
+    r"\frac{\frac{a+b}{c}}{\frac{d}{e+f}}", r"-\frac{a+b}{c}",
+    r"\sqrt{\frac{a+b}{\sqrt{c+d}}}^2",
+])
+def test_grouping_normalization_is_idempotent(text):
+    normalized = skeleton(text)
+    assert skeleton(normalized) == normalized

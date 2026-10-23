@@ -683,3 +683,10 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 |---|---|
 | `harness_v2/improvement/history.py` | 各実行に記録された実験ID（experiment_case.experiment_identity）がヘッダーと一致することも確認。Sol 3回目の指摘。上限後の修正のため再レビューなし。 |
 | テスト | 別実験の実行を混ぜた場合の拒否。 |
+
+## PR #12 / 修正A: skeleton の分数・括弧・演算子の範囲を保持（2026-10-24）
+
+`harness_v2/recognition/skeleton.py` で通常の括弧と分数全体の範囲を保持し、演算子の優先順位・結合方向から不要と判断できる括弧だけを除去する。分子・分母、乗除算、加減算、累乗の異なる構造を区別し、LaTeX・Unicode・通常表記は同じ構造なら一致させる。既存の `sqrt(...)` と `^` の動作を維持する。
+
+`test_skeleton_semantics.py` に構造の衝突防止、同値表記、正規化の冪等性の回帰テストを追加。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **166 件成功**。追加のローカル検証では生成した算術式 10,000 件で演算子の構造と冪等性を確認。ネットワーク・API 呼び出しなし。

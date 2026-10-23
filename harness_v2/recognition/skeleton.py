@@ -34,7 +34,9 @@ _COMMANDS = [
 _UNICODE = {"≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
             "×": "*", "·": "*", "±": "+-"}
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
-_DROP = set("$\\{}()[]_") | {"（", "）", "\u0304", "\u0305"}
+_DROP = set("$\\_") | {"\u0304", "\u0305"}
+_PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1,
+               "*": 2, "/": 2, "^": 4}
 
 
 def _group(text: str, start: int, *, delimiters: str = "{") -> tuple[str, int] | None:
@@ -69,7 +71,7 @@ def _fractions(text: str) -> str:
             pos = match.end()
             continue
         out.append(text[pos:match.start()])
-        out.append(f"({_fractions(numerator[0])})/({_fractions(denominator[0])})")
+        out.append(f"(({_fractions(numerator[0])})/({_fractions(denominator[0])}))")
         pos = denominator[1]
 
 
@@ -92,7 +94,7 @@ def _radicand(text: str, start: int) -> tuple[str, int] | None:
 
 
 def _content(text: str) -> str:
-    """Strip formatting while retaining the delimiters of canonical roots."""
+    """Strip formatting, retaining root scope and expression grouping."""
     out, pos = [], 0
     while pos < len(text):
         root = _ROOT_HEAD.match(text, pos)
@@ -103,9 +105,68 @@ def _content(text: str) -> str:
         else:
             ch = text[pos]
             if not ch.isspace() and ch not in _DROP:
-                out.append(ch)
+                out.append({"{": "(", "}": ")", "[": "(", "]": ")"}.get(ch, ch))
             pos += 1
     return "".join(out)
+
+
+def _precedence(text: str) -> int:
+    """Weakest top-level operation; adjacency is implicit multiplication."""
+    weakest, operand, pos = 5, False, 0
+    while pos < len(text):
+        ch = text[pos]
+        if ch in _PRECEDENCE:
+            unary = ch in "+-" and not operand
+            weakest = min(weakest, 3 if unary else _PRECEDENCE[ch])
+            operand = False
+            pos += 1
+            continue
+        if operand:
+            weakest = min(weakest, 2)
+        root = _ROOT_HEAD.match(text, pos)
+        start = root.end() if root else pos
+        group = _group(text, start, delimiters="(") if text[start:start + 1] == "(" else None
+        number = _NUMBER.match(text, pos)
+        pos = group[1] if group else number.end() if number else pos + 1
+        operand = True
+    return weakest
+
+
+def _grouping(text: str) -> str:
+    """Remove only parentheses redundant under precedence and associativity.
+
+    Keep right operands of subtraction/division (and other left-associative
+    operators) grouped at equal precedence. Powers associate to the right.
+    Root delimiters always remain. No algebraic simplification is performed.
+    """
+    out, pos = "", 0
+    while pos < len(text):
+        root = _ROOT_HEAD.match(text, pos)
+        start = root.end() if root else pos
+        group = _group(text, start, delimiters="(") if text[start:start + 1] == "(" else None
+        if not group:
+            out += text[pos]
+            pos += 1
+            continue
+        inner = _grouping(group[0])
+        end = group[1]
+        if root:
+            out += f"sqrt({inner})"
+        else:
+            strength = _precedence(inner)
+            left, right = out[-1:], text[end:end + 1]
+            lp = _PRECEDENCE.get(left, 2) if left else -1
+            if left in ("+", "-") and (len(out) == 1 or out[-2] in "(=<>!+-*/^"):
+                lp = 3  # unary sign
+            rp = _PRECEDENCE.get(right, 2) if right else -1
+            left_ok = strength > lp or (left == "^" and strength >= 3)
+            right_ok = strength > rp if right == "^" else strength >= rp
+            # Removing a numeric atom must not concatenate distinct numbers.
+            joins_number = (((left.isdigit() or left == ".") and inner[:1] in "0123456789.")
+                            or ((right.isdigit() or right == ".") and inner[-1:] in "0123456789."))
+            out += inner if inner and left_ok and right_ok and not joins_number else f"({inner})"
+        pos = end
+    return out
 
 
 def skeleton(text: str) -> str:
@@ -119,7 +180,7 @@ def skeleton(text: str) -> str:
     text = _COMMAND_WORD.sub(lambda m: m.group() if m.group() == r"\sqrt" else "", text)
     for key, value in _UNICODE.items():
         text = text.replace(key, value)
-    return _content(text)
+    return _grouping(_content(text))
 
 
 def levenshtein(a: str, b: str) -> int:

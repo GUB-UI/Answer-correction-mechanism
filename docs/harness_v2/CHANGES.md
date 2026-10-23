@@ -572,3 +572,10 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 |---|---|---|
 | `harness_v2/improvement/history.py` | Each run and attempt run must also carry `outputs.experiment_case.experiment_identity` equal to the header identity. | Sol round-3 blocker: runs from another experiment with matching header fields passed. Fixed after the 3-round cap; not re-reviewed. |
 | tests | `test_foreign_run_in_results_is_rejected` covers a run with a foreign experiment identity. | |
+
+## PR #12 / Fix A: Preserve fraction and operator grouping in skeleton CER (2026-10-24)
+
+`harness_v2/recognition/skeleton.py` retains ordinary parentheses and whole-fraction scope, removing parentheses only when precedence and associativity permit it. Different numerator, denominator, product, sum, and power structures stay distinct; equivalent LaTeX, Unicode, and plain notation share an idempotent form. Existing `sqrt(...)` and `^` behavior is preserved.
+
+`test_skeleton_semantics.py` adds collision, notation-equivalence, and idempotence regressions.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **166 passed**. An additional local check preserved operator trees and idempotence for 10,000 generated arithmetic expressions. No network or API calls.
