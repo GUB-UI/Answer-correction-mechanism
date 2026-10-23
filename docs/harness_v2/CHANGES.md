@@ -1,5 +1,10 @@
 # Harness v2 changes
 
+## PR #10: exclude agent debug logs
+
+- Removed `codex_fix_stderr.log` from the tree going forward; existing commit history is not rewritten.
+- Added `.gitignore` rules for `codex_*.log`, `*_stderr.log`, and `*_stdout.log`, with tests checking tracked filenames via `git ls-files` and ignore behavior at the root and in subdirectories.
+
 ## Fix 1: open existing run databases without changing permissions
 
 - Added `RunStore(..., readonly=True)` for listing and analysis of existing databases. Construction skips schema initialization and permission enforcement; every connection uses SQLite `mode=ro`, including attempted writes. Writable stores retain private output permissions.
