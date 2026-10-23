@@ -447,3 +447,16 @@ Sol diff review round 2 (REJECT: 2 major, 1 minor). Corrects the 03 entry: missi
 | `harness_v2/tests/test_p5_challenge.py` | Missing variants and originals, failed/duplicate/NaN/unexpected items, per-source separation of C0/C1. | Regression contract. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **748 passed in 20.31s**.
+
+## Phase 5 / 06: Challenge report requires rubric item ids (2026-10-24)
+
+Sol diff review round 3 (REJECT: 1 major). Corrects the 05 entry: rubric ids were optional.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/challenge.py` | `rubric_items` is a required argument and `--dataset` a required CLI option; a scheduled problem without rubric ids raises. | [major] equally truncated O/F scores or matching unexpected item ids counted as agreement when rubric ids were omitted. |
+| `harness_v2/tests/test_p5_challenge.py` | Omitted metadata, uncovered problem, truncated scores, unexpected ids. | Regression contract. |
+
+Review cap (3 rounds) reached; this fix was not re-reviewed by Sol.
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **750 passed in 20.75s**.

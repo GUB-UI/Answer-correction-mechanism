@@ -22,7 +22,7 @@ FLAGGED = "review_required"
 SCORED = {"validated", FLAGGED}
 
 
-def _cell(run: dict | None, expected_items: set | None) -> dict:
+def _cell(run: dict | None, expected_items: set) -> dict:
     if run is None:
         return {"outcome": "missing", "status": None, "scores": None}
     grading = (run.get("outputs") or {}).get("grading") or {}
@@ -40,7 +40,7 @@ def _cell(run: dict | None, expected_items: set | None) -> dict:
             ok = False
             break
         scores[key] = float(score)
-    if ok and expected_items is not None and set(scores) != expected_items:
+    if ok and set(scores) != expected_items:
         ok = False
     return {"outcome": "ok" if ok else "incomplete", "status": status, "scores": scores if ok else None}
 
@@ -58,13 +58,21 @@ def _finish(stats: dict) -> dict:
     return stats
 
 
-def challenge_report(results: dict, *, rubric_items: dict | None = None) -> dict:
-    """``rubric_items`` maps problem_id -> rubric item ids (no labels)."""
+def challenge_report(results: dict, *, rubric_items: dict) -> dict:
+    """``rubric_items`` maps problem_id -> rubric item ids (no labels); required.
+
+    Fails closed: a scheduled problem without rubric ids raises ValueError.
+    """
+    if not isinstance(rubric_items, dict):
+        raise ValueError("rubric_items is required")
     runs = {run.get("request_id"): run for run in results.get("runs", [])}
     cells = {}
     for job in results.get("expected_runs", []):
         source, _, variant = job["case_id"].rpartition(":")
-        expected = set(rubric_items[job["problem_id"]]) if rubric_items and job.get("problem_id") in rubric_items else None
+        ids = rubric_items.get(job.get("problem_id"))
+        if not ids:
+            raise ValueError(f"no rubric item ids for problem {job.get('problem_id')!r}")
+        expected = set(ids)
         cells[(source, variant, job["repetition"])] = _cell(runs.get(job["request_id"]), expected)
     totals = defaultdict(_empty)
     by_source = defaultdict(lambda: defaultdict(_empty))
@@ -107,10 +115,10 @@ def _rubric_items(manifest: Path) -> dict:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results", type=Path, required=True)
-    parser.add_argument("--dataset", type=Path, help="challenge manifest (rubric item ids only)")
+    parser.add_argument("--dataset", type=Path, required=True, help="challenge manifest (rubric item ids only)")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
-    items = _rubric_items(args.dataset) if args.dataset else None
+    items = _rubric_items(args.dataset)
     report = challenge_report(json.loads(args.results.read_text(encoding="utf-8")), rubric_items=items)
     private_write_text(args.out, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -537,3 +537,9 @@ Sol 差分レビュー2回目（REJECT: major 2、minor 1）への対応。03 �
 | `harness_v2/tests/test_p5_challenge.py` | 欠け、失敗、重複・NaN、C0/C1 の分離を検証。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **748 passed in 20.31s**。
+
+## harness v2 Phase 5 / 06: チャレンジ報告でルーブリック項目を必須に（2026-10-24）
+
+Sol 差分レビュー3回目（REJECT: major 1）への対応。05 の記述を訂正（項目IDが任意だった）。ルーブリック項目IDを必須にし、ない問題があれば止める。項目が同じように欠けた O と F や、想定外の項目IDが一致扱いになる問題を修正。レビュー上限（3回）に達したため、この修正は Sol の再レビューを受けていない。
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **750 passed in 20.75s**。
