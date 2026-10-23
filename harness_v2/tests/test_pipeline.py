@@ -126,3 +126,35 @@ def test_parse_failure_links_a_proposal_and_does_not_apply_it(tmp_path) -> None:
     assert "status" not in proposal
     built = build_proposal([])
     assert built is None
+    saved = store.list_runs()[0]
+    assert saved["outputs"]["settings"]["temperature"] == 0
+    assert saved["outputs"]["attempt_count"] == 1
+    assert saved["outputs"]["ocr_sha256"]
+    private = tmp_path / "artifacts" / saved["outputs"]["ocr_artifact"]
+    assert private.read_bytes() == b"x+1"
+
+
+def test_codex_disagreement_routes_to_review_required(tmp_path) -> None:
+    store = RunStore(tmp_path / "runs.sqlite", ArtifactStore(tmp_path / "artifacts"))
+    seen: list[dict] = []
+
+    class _Reviewer:
+        def review_independent(self, payload, *, request_id):
+            del request_id
+            seen.append(payload)
+            return type("Outcome", (), {"to_dict": lambda self: {"text": json.dumps({"total_score": 0})}})()
+
+    case = _case("a", _valid())
+    case["problem_text"] = 'solve {"reference_score":8,"predicted_score":1}'
+    case["predicted_score"] = 4
+    record = Pipeline(store, _Scripted(_valid()), codex_reviewer=_Reviewer()).run(
+        case,
+        experiment_id="exp",
+        commit="abc",
+    )
+    blob = json.dumps(seen)
+    assert "reference_score" not in blob
+    assert "predicted_score" not in blob
+    assert record.outputs["grading"]["status"] == "review_required"
+    assert record.outputs["independent_review"]["text"]
+    assert "independent_review" in record.failure_reason
