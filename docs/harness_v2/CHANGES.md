@@ -331,3 +331,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_commit_identity.py` | Mock all Git resolution; cover clean and distinct dirty diffs, raw binary bytes, deterministic resolution, diff failures and refusal to resume another dirty tree before writes or provider calls. | Verify the revision boundary without depending on the real repository. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **544 passed in 16.79s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes.
+
+## Phase 3 review fix / 09: Validate durable resume identity before metadata (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/run.py` | Read existing SQLite rows in read-only mode before writing experiment metadata. Validate every attempt's commit, experiment name and available case/config/dataset provenance; persist the full experiment identity in new row provenance. Reject mismatches, unreadable identities and legacy rows without sufficient metadata. Matching durable identities can recover missing experiment.json without inference; matching metadata still supports legacy provenance repair. | Missing or rewritten JSON checkpoints must not relabel durable results or mix implementation/experiment identities on resume. |
+| `harness_v2/tests/test_p3_durable_identity.py` | Cover removed/rewritten metadata, unknown/different durable commits, corrupt databases/JSON/schema, experiment and case identity mismatches, historical failed rows, safe metadata recovery and private permissions. Assert rejected resumes preserve all files and never call a provider. | SQLite remains the durable source of truth and validation precedes checkpoint writes. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **571 passed in 15.71s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes.

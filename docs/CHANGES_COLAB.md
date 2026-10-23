@@ -422,3 +422,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_commit_identity.py` | Git解決をすべてモックし、クリーン状態・異なる変更・バイナリの生バイト・決定性・diff失敗・別の変更状態での再開拒否を検証。拒否時は保存もプロバイダ呼出しも行わず、実リポジトリ状態に依存しない。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **544 passed in 16.79s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 09: メタデータ保存前に永続行の再開識別子を検証（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | experimentメタデータを書き込む前にSQLiteを読取り専用で開き、全試行のcommit・実験名・利用可能なcase/config/dataset来歴を照合。新規行には完全な実験識別子も保存する。不一致・読取り不能・裏付けのない旧行は拒否。一致する永続識別子があればexperiment.jsonを推論なしで復元し、一致する既存メタデータがあれば旧来歴の修復を維持する。JSONの削除・書換えによる永続結果の付替えを防ぐ。 |
+| `harness_v2/tests/test_p3_durable_identity.py` | メタデータの削除/書換え、未知/異なるcommit、DB・JSON・スキーマ破損、実験/case来歴の不一致、過去の失敗行、安全な復元と私有権限を検証。拒否時の全ファイル不変性とプロバイダ未呼出しを確認し、SQLiteを再開時の正とする。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **571 passed in 15.71s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。

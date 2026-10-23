@@ -6,9 +6,11 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import subprocess
 import time
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable
 
@@ -110,6 +112,48 @@ def resolve_implementation_commit() -> str | None:
     return head + ('+dirty-' + hashlib.sha256(diff).hexdigest() if diff else '')
 
 
+def validate_durable_identity(db_path: Path, *, commit: str, experiment_identity: str,
+                              config: dict, dataset: Dataset, metadata_exists: bool) -> None:
+    """Read existing rows without creating/updating the database or checkpoints."""
+    if not db_path.exists():
+        return
+    try:
+        with closing(sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+            rows = conn.execute('SELECT commit_sha, experiment_id, request_id, outputs_json FROM runs').fetchall()
+        cases = {case['case_id']: case for case in dataset.cases}
+        for row_commit, experiment_id, request_id, raw_outputs in rows:
+            if row_commit != commit:
+                raise ValueError('durable row implementation commit differs or cannot be established')
+            if experiment_id != config['name']:
+                raise ValueError('durable row experiment identity differs or cannot be established')
+            outputs = json.loads(raw_outputs)
+            if not isinstance(outputs, dict):
+                raise ValueError('durable row experiment identity cannot be established: invalid outputs')
+            provenance = outputs.get('experiment_case')
+            if 'experiment_case' not in outputs and metadata_exists:
+                # Legacy rows can be repaired only with matching experiment metadata.
+                continue
+            if not isinstance(provenance, dict):
+                raise ValueError('durable row experiment identity cannot be established: missing provenance')
+            recorded_identity = provenance.get('experiment_identity')
+            if (('experiment_identity' in provenance and recorded_identity != experiment_identity)
+                    or (recorded_identity is None and not metadata_exists)):
+                raise ValueError('durable row experiment identity differs or cannot be established')
+            case = cases.get(provenance.get('case_id'))
+            rep = provenance.get('repetition')
+            if case is None or type(rep) is not int or rep < 1:
+                raise ValueError('durable row experiment identity cannot be established: invalid case/repetition')
+            expected = {'request_id': request_id_for(dataset, case, config, rep),
+                        'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
+                        'config_id': identity(config), 'problem_id': case['problem_id'],
+                        'input_version': case['input_version'], 'input_sha256': case['input_sha256'],
+                        'rubric_sha256': case['rubric_sha256']}
+            if request_id != expected['request_id'] or any(provenance.get(k) != v for k, v in expected.items()):
+                raise ValueError('durable row experiment identity differs or cannot be established: case provenance')
+    except (sqlite3.Error, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError('durable row commit/experiment identity cannot be established') from exc
+
+
 class _LazyProvider:
     """Construction failures occur inside Pipeline's recorded exception boundary."""
     def __init__(self, config, case, repetition, factory):
@@ -147,6 +191,8 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
             raise ValueError('output directory implementation commit differs; use a new output directory')
         if stored.get('identity') != experiment_identity:
             raise ValueError('output directory experiment identity differs; use a new output directory')
+    validate_durable_identity(out / 'runs.sqlite', commit=commit, experiment_identity=experiment_identity,
+                              config=config, dataset=dataset, metadata_exists=experiment_path.exists())
     write_json(experiment_path, metadata)
     store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
     previous = store.list_runs()
@@ -163,6 +209,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
                  'input_sha256': case['input_sha256'], 'rubric_sha256': case['rubric_sha256']}
                 for case, rep, rid in jobs]
     provenance = {job['request_id']: {**job,
+        'experiment_identity': experiment_identity,
         'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
         'config_id': identity(config)} for job in expected}
     cases_by_request = {rid: case for case, _, rid in jobs}
