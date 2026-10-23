@@ -28,6 +28,8 @@ def repo(tmp_path):
     commit("ws", "a\nB \n", out["base"])     # whitespace-only difference
     commit("base2", "other\n", out["base"], path="q.txt")  # new baseline, same p.txt
     commit("cand2", "a\nB\n", out["base2"])
+    commit("cand_plus", "a\nB\n", out["base"])
+    commit("cand_plus", "readme\n", None, path="README")  # same edit + unrelated edit
     return r, out
 
 
@@ -63,3 +65,23 @@ def test_same_edit_on_new_baseline_is_similar(tmp_path, repo):
     dups = ev["payload"]["source"]["duplicates"]
     assert dups and not dups[0]["same_baseline"]
     assert h.state()["proposals"]["P2"]["flags"] == ["retry_on_new_baseline"]
+
+
+def test_rejected_edit_plus_unrelated_edit_is_flagged(tmp_path, repo):
+    r, c = repo
+    h = History(tmp_path / "h", repo=r)
+    h.propose_change(_proposal("P1", c["base"], c["cand"]))
+    h.decide("P1", "rejected", reason="no gain")
+    ev = h.propose_change(_proposal("P2", c["base"], c["cand_plus"]))
+    assert ev["payload"]["source"]["duplicates"][0]["kind"] == "contains"
+    assert h.state()["proposals"]["P2"]["flags"] == ["contains_change_of_rejected"]
+
+
+def test_attach_candidate_derives_identity_and_flags(tmp_path, repo):
+    r, c = repo
+    h = History(tmp_path / "h", repo=r)
+    h.propose_change(_proposal("P1", c["base"], c["cand"]))
+    h.decide("P1", "rejected", reason="no gain")
+    h.propose(_proposal("D", c["base"]))  # draft without candidate
+    h.attach_candidate("D", c["cand"])
+    assert h.state()["proposals"]["D"]["flags"] == ["duplicate_of_rejected"]

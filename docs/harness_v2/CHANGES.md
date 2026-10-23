@@ -545,3 +545,13 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 | `scripts/improvement_history.py` | `status`, `verify`, `approve` (the only approval writer; requires approver + verbatim quote), `override`, `rollback`, and read-only advisory `check-merge` (gh pr view; exit 1 unless the PR head equals the evaluated candidate and an approval binds repository/base/PR/latest snapshot). | Design §8 (e): no merge without a recorded approval; the actual merge boundary remains GitHub branch protection (owner action). |
 | `scripts/register_history.py` | Idempotently registers the Phase 4 prompt cycle (evaluated improved from experiment/comparison evidence; decision pending human review) and the Phase 5 OCR-preprocess cycle (skeleton-CER gate evidence; rejected). | Design §8 (a)(c): keep successful and non-improving proposals with their evidence. |
 | `harness_v2/tests/test_improvement_cli.py` | check-merge before/after approval and after the PR head moves; promote then rollback; verify; status. | Rollback demonstration. |
+
+## Phase 5 / 11: Loop review fixes (Sol diff round 1) (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/history.py` | `record_evaluation` now takes both `results.json` files, recomputes the comparison with `compare_experiments` and retains results + comparison as objects (no trusted verdict file). A new evaluation resets an `accepted` decision to `pending`; approval and promotion use one shared eligibility predicate that requires acceptance of the latest snapshot. `attach_candidate` derives the change identity and recomputes duplicate flags. Torn-tail repair validates the remaining chain against head.json before replacing anything. | Sol blocker 1 (evidence not bound), majors 2, 3, 5. |
+| `harness_v2/improvement/duplicates.py` | Identity keeps (path, blob) pairs; `overlaps` flags a proposal that contains a prior proposal's exact edits plus unrelated edits (`contains_change_of_<decision>`). | Sol major 4: unrelated edits evaded detection. |
+| `harness_v2/improvement/handoff.py` | Apply `redact()` (secrets) before score scrubbing and render every file from the cleaned request. | Sol major 6. |
+| `scripts/register_history.py` | Resumes each missing step (candidate, evaluation, decision) instead of skipping an existing proposal. | Sol minor 7. |
+| tests | Comparison not comparable / evidence objects retained; re-evaluation invalidates acceptance; refused repair keeps bytes; contains-change and attach-candidate duplicates; secret redaction. | |

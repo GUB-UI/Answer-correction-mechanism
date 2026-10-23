@@ -96,10 +96,11 @@ class History:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    def _read_raw(self) -> list[dict]:
-        if not self.log.exists():
-            return []
-        data = self.log.read_bytes()
+    def _read_raw(self, data: bytes | None = None) -> list[dict]:
+        if data is None:
+            if not self.log.exists():
+                return []
+            data = self.log.read_bytes()
         if data and not data.endswith(b"\n"):
             raise HistoryCorrupt("torn final record (no trailing newline)")
         events, prev = [], ""
@@ -158,11 +159,17 @@ class History:
             return self._checked_events()
 
     def repair_drop_torn_tail(self) -> None:
+        """Drop an unterminated final record, only if the remaining chain matches head.json."""
         with self._locked():
             data = self.log.read_bytes()
             if data.endswith(b"\n"):
                 raise HistoryError("no torn tail")
             keep = data[: data.rfind(b"\n") + 1]
+            events = self._read_raw(keep)  # validate before touching anything
+            head = self._read_head()
+            last = (events[-1]["seq"], events[-1]["sha256"]) if events else (0, "")
+            if head is None or (head.get("seq"), head.get("sha256")) != last:
+                raise HistoryCorrupt("remaining records do not match head.json; refusing to repair")
             tmp = self.root / "history.jsonl.tmp"
             with private_open(tmp, "wb") as handle:
                 handle.write(keep)
@@ -170,7 +177,6 @@ class History:
                 os.fsync(handle.fileno())
             os.replace(tmp, self.log)
             _fsync_dir(self.root)
-            self._checked_events()
 
     def _append(self, kind: str, proposal_id: str | None, payload: dict) -> dict:
         if kind not in EVENT_TYPES:
@@ -283,35 +289,47 @@ class History:
     def attach_candidate(self, proposal_id: str, candidate_commit: str, *,
                          change_id: str | None = None) -> dict:
         self._check_commit(candidate_commit)
+        identity = None
+        if self.repo is not None:
+            from harness_v2.improvement.duplicates import change_identity
+            base = self.state()["proposals"][proposal_id]["proposal"]["baseline_commit"]
+            self._check_commit(base)
+            identity = change_identity(self.repo, base, candidate_commit)
+            change_id = identity["change_id"]
         return self._append("candidate_attached", proposal_id,
-                            {"candidate_commit": candidate_commit, "change_id": change_id})
+                            {"candidate_commit": candidate_commit, "change_id": change_id,
+                             "identity": identity})
 
-    def record_evaluation(self, proposal_id: str, *, baseline_experiment: Path,
-                          candidate_experiment: Path, comparison: Path, ocr_preprocess: str,
-                          regressions: list | None = None) -> dict:
-        """Derive the snapshot from run evidence; the verdict comes from the comparison file."""
-        base = json.loads(Path(baseline_experiment).read_bytes())
-        cand = json.loads(Path(candidate_experiment).read_bytes())
-        comp_bytes = Path(comparison).read_bytes()
-        comp = json.loads(comp_bytes)
-        if canonical(base["dataset"]) != canonical(cand["dataset"]):
+    def record_evaluation(self, proposal_id: str, *, baseline_results: Path, candidate_results: Path,
+                          ocr_preprocess: str, regressions: list | None = None, compare=None) -> dict:
+        """Recompute the comparison from the retained run results; never trust a verdict file.
+
+        ``results.json`` carries commit, config, dataset manifest and every run, so
+        the snapshot and the verdict are both derived from the same retained bytes.
+        """
+        if compare is None:
+            from harness_v2.evaluation.comparison import compare_experiments as compare
+        base_bytes, cand_bytes = Path(baseline_results).read_bytes(), Path(candidate_results).read_bytes()
+        base, cand = json.loads(base_bytes), json.loads(cand_bytes)
+        if canonical(base.get("dataset")) != canonical(cand.get("dataset")):
             raise HistoryError("baseline and candidate ran on different datasets")
-        if comp.get("comparable") is not True:
-            raise HistoryError("comparison is not comparable")
         for exp in (base, cand):
-            if exp.get("commit") and len(exp["commit"]) == 40:
-                self._check_commit(exp["commit"])
-            else:
+            if not isinstance(exp.get("commit"), str) or not _SHA40.match(exp["commit"]):
                 raise HistoryError("experiment commit must be a full 40-hex sha")
+            self._check_commit(exp["commit"])
+        comp = compare(base, cand)
+        comp_bytes = canonical(comp)
+        if comp.get("comparable") is not True:
+            raise HistoryError("comparison is not comparable: " + "; ".join(map(str, comp.get("reasons", []))))
         snapshot = {"baseline_commit": base["commit"], "candidate_commit": cand["commit"],
                     "config_sha256": sha256(canonical(cand["config"])),
                     "dataset_manifest_sha256": sha256(canonical(cand["dataset"])),
                     "prompt_version": cand["config"]["prompt_version"], "ocr_preprocess": ocr_preprocess,
                     "evaluation_digest": sha256(comp_bytes)}
         evidence = {"baseline_identity": base.get("identity"), "candidate_identity": cand.get("identity"),
-                    "comparison_object": self._store_object(comp_bytes),
-                    "baseline_experiment_sha256": sha256(Path(baseline_experiment).read_bytes()),
-                    "candidate_experiment_sha256": sha256(Path(candidate_experiment).read_bytes())}
+                    "baseline_results_object": self._store_object(base_bytes),
+                    "candidate_results_object": self._store_object(cand_bytes),
+                    "comparison_object": self._store_object(comp_bytes)}
         verdict = {"improved": "improved", "regressed": "regressed"}.get(comp.get("verdict"), "not_improved")
         return self._append("evaluated", proposal_id, {
             "snapshot": snapshot, "snapshot_id": snapshot_id(snapshot), "verdict": verdict,
@@ -382,30 +400,57 @@ class History:
         return out
 
 
+def _eligibility(rec: dict) -> list[str]:
+    problems = []
+    if not rec["evaluations"]:
+        return ["no evaluation"]
+    latest = rec["evaluations"][-1]
+    if latest["verdict"] != "improved":
+        problems.append("latest evaluation is not improved")
+    if rec["decision"] != "accepted" or rec.get("decision_snapshot") != latest["snapshot_id"]:
+        problems.append(f"latest snapshot is not accepted (decision {rec['decision']})")
+    if not any(a["snapshot_id"] == latest["snapshot_id"] for a in rec["approvals"]):
+        problems.append("no approval of the latest snapshot")
+    if rec["flags"] and not rec["overrides"]:
+        problems.append(f"flags {rec['flags']} need an audited override")
+    return problems
+
+
+def _duplicate_flags(proposals: dict, pid: str, change_id, identity) -> list[str]:
+    from harness_v2.improvement.duplicates import overlaps
+    flags = []
+    me = proposals[pid]
+    for qid, q in proposals.items():
+        if qid == pid:
+            continue
+        exact = bool(change_id) and q.get("change_id") == change_id
+        if not exact and not overlaps(identity, q.get("identity")):
+            continue
+        if q["proposal"].get("baseline_commit") != me["proposal"].get("baseline_commit"):
+            flag = "retry_on_new_baseline"
+        else:
+            flag = ("duplicate_of_" if exact else "contains_change_of_") + q["decision"]
+        if flag not in flags:
+            flags.append(flag)
+    return flags
+
+
 def promotion_blockers(state: dict, proposal_id: str, *, repository: str, base_branch: str,
                        pr_number: int, head_commit: str) -> list[str]:
     """Shared eligibility predicate for promote() and the merge check (advisory)."""
     rec = state["proposals"].get(proposal_id)
     if rec is None:
         return ["unknown proposal"]
-    problems = []
-    if rec["decision"] != "accepted":
-        problems.append(f"decision is {rec['decision']}, not accepted")
-    if not rec["evaluations"]:
-        return problems + ["no evaluation"]
-    latest = rec["evaluations"][-1]
-    if latest["verdict"] != "improved":
-        problems.append("latest evaluation is not improved")
-    if latest["snapshot"]["candidate_commit"] != head_commit:
-        problems.append("PR head differs from the evaluated candidate commit")
-    if not any(a["snapshot_id"] == latest["snapshot_id"] and a["repository"] == repository
-               and a["base_branch"] == base_branch and a["pr_number"] == pr_number
-               for a in rec["approvals"]):
-        problems.append("no approval of the latest snapshot for this repository/base/PR")
-    if rec["flags"] and not rec["overrides"]:
-        problems.append(f"flags {rec['flags']} need an audited override")
+    problems = _eligibility(rec)
+    if rec["evaluations"]:
+        latest = rec["evaluations"][-1]
+        if latest["snapshot"]["candidate_commit"] != head_commit:
+            problems.append("PR head differs from the evaluated candidate commit")
+        if not any(a["snapshot_id"] == latest["snapshot_id"] and a["repository"] == repository
+                   and a["base_branch"] == base_branch and a["pr_number"] == pr_number
+                   for a in rec["approvals"]):
+            problems.append("no approval for this repository/base/PR")
     return problems
-
 
 def _replay(events: list[dict]) -> dict:
     """Fold events into state, validating every transition (writes and replay)."""
@@ -438,18 +483,13 @@ def _replay(events: list[dict]) -> dict:
         if kind == "proposed":
             if pid in proposals:
                 raise HistoryError("duplicate proposal_id")
-            change_id = p.get("change_id")
-            base = p["proposal"].get("baseline_commit")
-            prior = [q for q in proposals.values() if change_id and q["change_id"] == change_id]
             proposals[pid] = {"proposal": p["proposal"], "content_sha256": p["content_sha256"],
-                              "change_id": change_id, "candidate_commit": p["proposal"].get("candidate_commit"),
+                              "change_id": p.get("change_id"), "candidate_commit": p["proposal"].get("candidate_commit"),
                               "evaluations": [], "decision": "pending", "reviews": [],
                               "approvals": [], "overrides": [], "promoted": None, "flags": [],
                               "identity": (p.get("source") or {}).get("identity")}
-            for q in prior:  # exact change seen before: any reuse needs an audited override
-                proposals[pid]["flags"].append(
-                    "retry_on_new_baseline" if q["proposal"].get("baseline_commit") != base
-                    else "duplicate_of_" + q["decision"])
+            proposals[pid]["flags"] = _duplicate_flags(proposals, pid, p.get("change_id"),
+                                                       proposals[pid]["identity"])
             continue
         if pid not in proposals:
             raise HistoryError(f"{kind} for unknown proposal")
@@ -464,14 +504,17 @@ def _replay(events: list[dict]) -> dict:
             if rec["evaluations"]:
                 raise HistoryError("candidate cannot change after evaluation; file a new proposal")
             rec["candidate_commit"] = p["candidate_commit"]
-            if p.get("change_id"):
-                rec["change_id"] = p["change_id"]
+            rec["change_id"] = p.get("change_id")
+            rec["identity"] = p.get("identity")
+            rec["flags"] = _duplicate_flags(proposals, pid, rec["change_id"], rec["identity"])
         elif kind == "evaluated":
             if p["verdict"] not in VERDICTS:
                 raise HistoryError("unknown verdict")
             if rec["candidate_commit"] and p["snapshot"]["candidate_commit"] != rec["candidate_commit"]:
                 raise HistoryError("evaluation snapshot is for a different candidate")
             rec["evaluations"].append(p)
+            if rec["decision"] == "accepted":  # a new snapshot invalidates the earlier acceptance
+                rec["decision"] = "pending"
         elif kind == "decided":
             if p["decision"] not in DECISIONS:
                 raise HistoryError("unknown decision")
@@ -493,8 +536,8 @@ def _replay(events: list[dict]) -> dict:
             req["used"] = True
             rec["reviews"].append(p)
         elif kind == "approval":
-            if rec["decision"] != "accepted":
-                raise HistoryError("approval requires an accepted decision")
+            if rec["decision"] != "accepted" or rec.get("decision_snapshot") != rec["evaluations"][-1]["snapshot_id"]:
+                raise HistoryError("approval requires acceptance of the latest snapshot")
             if not p.get("approver") or not p.get("quote") or p.get("source") != "user-instruction":
                 raise HistoryError("approval needs approver, quote and source=user-instruction")
             if not isinstance(p.get("pr_number"), int) or not p.get("repository") or not p.get("base_branch"):
@@ -503,11 +546,9 @@ def _replay(events: list[dict]) -> dict:
                 raise HistoryError("approval snapshot is not the latest evaluated snapshot")
             rec["approvals"].append(p)
         elif kind == "promoted":
-            latest = rec["evaluations"][-1]["snapshot_id"] if rec["evaluations"] else None
-            if rec["decision"] != "accepted" or not any(a["snapshot_id"] == latest for a in rec["approvals"]):
-                raise HistoryError("promotion requires an accepted decision and an approval of the latest snapshot")
-            if rec["flags"] and not rec["overrides"]:
-                raise HistoryError("duplicate/retry of an earlier proposal needs an audited override")
+            problems = _eligibility(rec)
+            if problems:
+                raise HistoryError("promotion blocked: " + "; ".join(problems))
             version = versions.get(p["version_id"])
             snap = rec["evaluations"][-1]["snapshot"]
             if version is None or (version["commit"], version["config_sha256"],

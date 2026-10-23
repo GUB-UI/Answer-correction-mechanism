@@ -47,6 +47,7 @@ def _proposal(pid, base, cand=""):
 
 
 def _experiments(tmp_path, h, base, cand, inputs, verdict="improved", tag="e"):
+    """Synthetic results.json pair plus a stub comparator (real one is tested in Phase 3)."""
     from harness_v2.evaluation.dataset import load_dataset
     from harness_v2.run import load_config
     cfg, manifest = inputs
@@ -54,11 +55,14 @@ def _experiments(tmp_path, h, base, cand, inputs, verdict="improved", tag="e"):
     paths = []
     for name, commit in (("base", base), ("cand", cand)):
         p = tmp_path / f"{tag}_{name}.json"
-        p.write_text(json.dumps({"identity": name, "config": config, "dataset": ds, "commit": commit}))
+        p.write_text(json.dumps({"identity": name + tag, "config": config, "dataset": ds, "commit": commit,
+                                 "runs": []}))
         paths.append(p)
-    comp = tmp_path / f"{tag}_comp.json"
-    comp.write_text(json.dumps({"comparable": True, "verdict": verdict, "reasons": [], "deltas": {"tag": tag}}))
-    return dict(baseline_experiment=paths[0], candidate_experiment=paths[1], comparison=comp, ocr_preprocess="none")
+
+    def compare(b, c):
+        assert b["commit"] == base and c["commit"] == cand
+        return {"comparable": True, "verdict": verdict, "reasons": [], "deltas": {"tag": tag}}
+    return dict(baseline_results=paths[0], candidate_results=paths[1], ocr_preprocess="none", compare=compare)
 
 
 def _cycle(tmp_path, h, inputs, pid, base, cand, version, verdict="improved"):
@@ -173,14 +177,38 @@ def test_evaluation_evidence_binding(tmp_path, repo, inputs):
     h = History(tmp_path / "h", repo=r)
     h.propose(_proposal("P", c0))
     kw = _experiments(tmp_path, h, c0, c1, inputs)
-    cand = json.loads(kw["candidate_experiment"].read_text())
+    cand = json.loads(kw["candidate_results"].read_text())
     cand["dataset"] = {"different": True}
-    kw["candidate_experiment"].write_text(json.dumps(cand))
+    kw["candidate_results"].write_text(json.dumps(cand))
     with pytest.raises(HistoryError, match="different datasets"):
         h.record_evaluation("P", **kw)
     kw = _experiments(tmp_path, h, c0, "f" * 40, inputs, tag="z")
     with pytest.raises(HistoryError, match="unknown commit"):
         h.record_evaluation("P", **kw)
+    kw = _experiments(tmp_path, h, c0, c1, inputs, tag="y")
+    kw["compare"] = lambda b, c: {"comparable": False, "verdict": "incomparable", "reasons": ["x"]}
+    with pytest.raises(HistoryError, match="not comparable"):
+        h.record_evaluation("P", **kw)
+    ev = h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs, tag="w"))
+    objs = ev["payload"]["evidence"]
+    for key in ("baseline_results_object", "candidate_results_object", "comparison_object"):
+        assert (tmp_path / "h" / "objects" / objs[key]).exists()
+
+
+def test_reevaluation_invalidates_acceptance(tmp_path, repo, inputs):
+    r, (c0, c1, _) = repo
+    h = History(tmp_path / "h", repo=r)
+    _base(h, c0, inputs)
+    h.propose(_proposal("P", c0))
+    h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs, tag="a"))
+    h.decide("P", "accepted", reason="ok")
+    ev = h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs, verdict="regressed", tag="b"))
+    assert h.state()["proposals"]["P"]["decision"] == "pending"
+    with pytest.raises(HistoryError):
+        h.approve("P", approver="o", snapshot_id_=ev["payload"]["snapshot_id"], quote="q", **REPO_ARGS)
+    h.register_version("v1", commit=c1, config_path=inputs[0], dataset_manifest=inputs[1], ocr_preprocess="none")
+    with pytest.raises(HistoryError):
+        h.promote("P", "v1")
 
 
 def test_accept_requires_improved_and_rejected_is_final(tmp_path, repo, inputs):
@@ -219,6 +247,14 @@ def test_corruption_and_crash_recovery(tmp_path, repo):
     with pytest.raises(HistoryCorrupt, match="torn"):
         h.verify()
     h.repair_drop_torn_tail()
+    assert h.verify() == 2
+    # committed last record missing only its newline: repair must refuse and keep bytes
+    raw = (root / "history.jsonl").read_bytes()
+    (root / "history.jsonl").write_bytes(raw[:-1])
+    with pytest.raises(HistoryCorrupt):
+        h.repair_drop_torn_tail()
+    assert (root / "history.jsonl").read_bytes() == raw[:-1]
+    (root / "history.jsonl").write_bytes(raw)
     assert h.verify() == 2
     # edited record
     lines = (root / "history.jsonl").read_text().splitlines()

@@ -656,3 +656,13 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 | `scripts/improvement_history.py` | `status`・`verify`・`approve`（承認を書く唯一の経路。承認者とオーナー指示の原文が必須）・`override`・`rollback`・読み取り専用の `check-merge`（PR の head が評価済み候補と一致し、リポジトリ/ベース/PR/最新 snapshot に結び付いた承認がなければ終了コード1）。実際のマージ制限は GitHub のブランチ保護（オーナー操作）。 |
 | `scripts/register_history.py` | Phase 4 のプロンプト改善（improved、採否は人の確認待ち）と Phase 5 の OCR 前処理（ゲート不合格で却下）を、根拠ファイルのハッシュつきで冪等に登録。 |
 | `harness_v2/tests/test_improvement_cli.py` | 承認前後・head 変更後の check-merge、昇格→ロールバック、検証。 |
+
+## Phase 5 / 11: 改善ループのレビュー修正（Sol 差分1回目）（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/history.py` | 評価は2つの results.json から比較を再計算し、結果と比較を保存（判定ファイルを信用しない）。新しい評価で採用を「保留」に戻し、承認・昇格は最新 snapshot の採用を共通の判定で要求。候補の追加時にも重複判定。途中切れの修復は head.json と照合してから置き換え。 |
+| `harness_v2/improvement/duplicates.py` | 却下済みの変更に無関係な変更を足しても検出（`contains_change_of_…`）。 |
+| `harness_v2/improvement/handoff.py` | 秘密情報の伏せ字（redact）を適用してからファイルを作成。 |
+| `scripts/register_history.py` | 途中で止まった登録を手順ごとに再開。 |
+| テスト | 上記の各ケース。 |

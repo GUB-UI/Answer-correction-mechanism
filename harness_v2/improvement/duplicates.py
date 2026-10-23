@@ -32,7 +32,19 @@ def change_identity(repo: Path, baseline: str, candidate: str) -> dict:
     diff = _git(repo, "diff", "--no-renames", f"{baseline}..{candidate}")
     patch = _git(repo, "patch-id", "--stable", stdin=diff).split()
     return {"change_id": hashlib.sha256(json.dumps(pairs).encode()).hexdigest(),
-            "patch_id": patch[0] if patch else "", "paths": [p for p, _ in pairs]}
+            "patch_id": patch[0] if patch else "", "paths": [p for p, _ in pairs], "pairs": pairs}
+
+
+def overlaps(a: dict | None, b: dict | None) -> bool:
+    """True if one change contains the other's exact (path, blob) edits.
+
+    Catches a rejected edit resubmitted together with unrelated edits, while
+    staying byte-sensitive (a whitespace change yields a different blob id).
+    """
+    if not a or not b or not a.get("pairs") or not b.get("pairs"):
+        return False
+    pa, pb = {tuple(x) for x in a["pairs"]}, {tuple(x) for x in b["pairs"]}
+    return pa <= pb or pb <= pa
 
 
 def find_duplicates(state: dict, identity: dict, baseline: str) -> list[dict]:
@@ -41,6 +53,7 @@ def find_duplicates(state: dict, identity: dict, baseline: str) -> list[dict]:
     for pid, rec in state["proposals"].items():
         other = rec.get("identity") or {}
         kind = ("exact" if rec.get("change_id") == identity["change_id"]
+                else "contains" if overlaps(identity, other)
                 else "similar" if identity.get("patch_id") and other.get("patch_id") == identity["patch_id"]
                 else None)
         if kind:

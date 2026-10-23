@@ -44,6 +44,18 @@ def test_handoff_files_and_bound_review(tmp_path, repo, inputs):
     assert len(st["reviews"]) == 1 and st["approvals"] == []
 
 
+def test_handoff_redacts_secrets(tmp_path, repo, inputs):
+    r, (c0, c1, _) = repo
+    h = History(tmp_path / "h", repo=r)
+    p = _proposal("P", c0)
+    p.cause = "leaked key sk-abcdefghijklmnopqrstuvwxyz0123456789 in config"
+    h.propose(p)
+    h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs))
+    folder = write_review_request(h, "P", tmp_path / "out")
+    for name in ("request.json", "issue.md", "pr.md", "commands.txt"):
+        assert "sk-abcdefghijklmnop" not in (folder / name).read_text()
+
+
 def test_enum_checked_on_strings():
     from harness_v2.providers.grokbot_exchange import _check
     assert _check("x", {"type": "string", "enum": ["a"]}, "v")

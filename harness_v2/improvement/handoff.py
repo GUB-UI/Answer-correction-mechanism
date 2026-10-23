@@ -16,6 +16,7 @@ from pathlib import Path
 from harness_v2.improvement.history import History, HistoryError
 from harness_v2.providers.grokbot_exchange import (SchemaError, _check, _load_schema, _reject_images,
                                                    _blind_text, safe_request_id)
+from harness_v2.storage.secrets import redact
 from harness_v2.storage.permissions import private_directory, private_write_text
 
 
@@ -39,7 +40,8 @@ def write_review_request(history: History, proposal_id: str, out_root: Path) -> 
                "cause": proposal["cause"], "changed_components": list(proposal["changed_components"]),
                "expected_effect": proposal["expected_effect"], "verdict": latest["verdict"],
                "reasons": [str(r) for r in (latest["evaluation_results"].get("reasons") or [])]}
-    request = _blind_text(request)  # no score text leaves the box
+    _validate(request, "proposal_review_request.schema.json")
+    request = _blind_text(redact(request))  # secrets and score text never leave the box
     _validate(request, "proposal_review_request.schema.json")
     rid = safe_request_id(request["request_id"])
     folder = private_directory(Path(out_root) / rid, managed=True)
