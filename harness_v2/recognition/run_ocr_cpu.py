@@ -9,6 +9,7 @@ only inside ``main``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -28,6 +29,44 @@ PROMPT = """この画像は高校数学の手書き答案です。ページ全�
 ヘッダーとフッターは無視してください。
 採点、解説、誤りの指摘はしないでください。
 読めない箇所は [不明] と書いてください。"""
+
+
+PREPROCESS_CHOICES = ("none", "gray_autocontrast_x1.5")
+PREPROCESS_PARAMS = {
+    "none": {},
+    "gray_autocontrast_x1.5": {"mode": "L", "autocontrast_cutoff": 1, "scale": 1.5,
+                               "max_long_edge": 4096, "resample": "LANCZOS", "output_mode": "RGB"},
+}
+
+
+def preprocess_image(image, name: str):
+    """Apply one preregistered, image-independent preprocessing bundle.
+
+    ``none`` returns the RGB image unchanged. The bundle is applied identically
+    to every image; nothing here depends on the image content beyond PIL's
+    autocontrast histogram.
+    """
+    from PIL import Image, ImageOps
+
+    if name not in PREPROCESS_PARAMS:
+        raise ValueError(f"unknown preprocess {name!r}")
+    image = image.convert("RGB")
+    if name == "none":
+        return image
+    params = PREPROCESS_PARAMS[name]
+    gray = ImageOps.autocontrast(image.convert(params["mode"]), cutoff=params["autocontrast_cutoff"])
+    scale = min(params["scale"], params["max_long_edge"] / max(gray.size))
+    size = (max(1, round(gray.width * scale)), max(1, round(gray.height * scale)))
+    if size != gray.size:
+        gray = gray.resize(size, Image.Resampling.LANCZOS)
+    return gray.convert(params["output_mode"])
+
+
+def image_sha256(image) -> str:
+    """Hash of the decoded pixels plus mode and size (format independent)."""
+    digest = hashlib.sha256(f"{image.mode}:{image.width}x{image.height}:".encode())
+    digest.update(image.tobytes())
+    return digest.hexdigest()
 
 
 class CPUOCRRefused(RuntimeError):
@@ -97,6 +136,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-new-tokens", type=int, default=MAX_NEW_TOKENS)
     parser.add_argument("--max-edge", type=int, default=0)
     parser.add_argument("--dtype", default="float32")
+    parser.add_argument("--preprocess", choices=PREPROCESS_CHOICES, default="none")
     parser.add_argument("--threads", type=int, default=os.cpu_count() or 1)
     return parser
 
@@ -117,6 +157,7 @@ def _run_model(args: argparse.Namespace) -> int:
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
     torch.set_num_threads(args.threads)
+    preprocess = getattr(args, "preprocess", "none")
     out_dir = Path(args.out)
     private_directory(out_dir)
     started = time.perf_counter()
@@ -130,7 +171,8 @@ def _run_model(args: argparse.Namespace) -> int:
     ).eval()
     load_s = time.perf_counter() - started
     for image_path in args.images:
-        image = Image.open(image_path).convert("RGB")
+        original_bytes = Path(image_path).read_bytes()
+        image = preprocess_image(Image.open(image_path), preprocess)
         if args.max_edge and max(image.size) > args.max_edge:
             scale = args.max_edge / max(image.size)
             image = image.resize(
@@ -179,6 +221,12 @@ def _run_model(args: argparse.Namespace) -> int:
             "wall_s": round(elapsed, 3),
             "load_s": round(load_s, 3),
             "model": MODEL_ID,
+            "original_image_sha256": hashlib.sha256(original_bytes).hexdigest(),
+            "preprocess": {"name": preprocess, "params": PREPROCESS_PARAMS[preprocess]},
+            "model_image_sha256": image_sha256(image),
+            "model_image_size": list(image.size),
+            "prompt_sha256": hashlib.sha256(PROMPT.encode("utf-8")).hexdigest(),
+            "prompt_tokens": prompt_len,
         }
         with private_open(out_dir / "stats.jsonl", "a") as handle:
             handle.write(json.dumps(stats) + "\n")

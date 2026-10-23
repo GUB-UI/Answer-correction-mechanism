@@ -489,3 +489,15 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p5_ocr_memory.py` | 偽の meminfo、項目なし・ファイルなしの場合を検証。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **708 passed in 20.95s**。
+
+## harness v2 Phase 5 / 02: 事前登録した OCR 前処理と表記に依存しない CER（2026-10-24）
+
+改善サイクル2（Cycle A）、変更コンポーネントは recognition のみ。計画は GPT-6.1 Sol が3回レビュー。最後に残った指摘（LaTeX と普通の表記の違いで CER が変わる）は、表記をそろえてから記号を除く方式で対応。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | `--preprocess` を追加（既定 none は従来と同じ）。前処理はグレースケール→autocontrast(cutoff 1)→1.5倍拡大（長辺最大4096px）→RGB で、全画像に同じ設定。stats.jsonl に元画像の sha256、前処理名と値、モデルに渡した画像のハッシュとサイズ、OCR プロンプトの sha256 を記録。画像ごとの調整はしない。 |
+| `harness_v2/recognition/skeleton.py` | 分数・不等号・マイナス・掛け算・根号などの表記をそろえてから書式記号と空白を除く `skeleton()`、CER、事前登録した判定 `gate_a1()`（対象画像で 0.02 以上改善、他の画像が 0.01 超悪化しない）。手書き答案の手動書き起こしと比べる（点数ラベルではない）。 |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | none は無変化、決定性、サイズ上限、未知の名前の拒否、同じ式は同じ・違う式は違う、CER と判定のしきい値。候補 OCR を作る前に固定。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **730 passed in 22.46s**。

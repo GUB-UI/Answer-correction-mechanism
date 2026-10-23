@@ -398,3 +398,15 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p5_ocr_memory.py` | Fake meminfo, missing field and missing file fallbacks, threshold pinned. | Regression contract. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **708 passed in 20.95s**.
+
+## Phase 5 / 02: Preregistered OCR preprocessing bundle and notation-neutral CER (2026-10-24)
+
+Improvement cycle 2 (Cycle A), `changed_components = ["recognition"]`. Plan reviewed by GPT-6.1 Sol in three rounds; the last remaining finding (CER sensitive to LaTeX vs plain notation) is fixed here by canonicalizing notation before stripping.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | `--preprocess {none,gray_autocontrast_x1.5}` (default `none`, byte-identical behaviour). The bundle is grayscale, autocontrast (cutoff 1), LANCZOS x1.5 capped at a 4096 px long edge, back to RGB; one setting for every image. stats.jsonl now records the original image sha256, the preprocessing name and parameters, the pixel hash and size of the image given to the model, the OCR prompt sha256 and prompt tokens. | One generic, image-independent recognition change chosen before seeing outputs; full provenance so control and candidate OCR runs can be compared. |
+| `harness_v2/recognition/skeleton.py` | `skeleton()`: fences removed; \\frac/\\dfrac/\\tfrac → (A)/(B), \\leq/≤/≦ → <=, \\geq/≥/≧ → >=, \\neq/≠, U+2212 → -, \\times/\\cdot/×/· → *, \\pm/±, \\sqrt/√ dropped; then other command words, $ \\ { } ( ) [ ] ^ _ and whitespace removed after NFKC. `cer()`, `gate_a1()` (target image gain ≥ 0.02, no other image worse by > 0.01). | OCR-only gate before any grading. Manual transcriptions are human transcripts, not score labels. Sol round 3 [major]: notation-only differences must not pass the gate. |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | Identity of `none`, determinism, size cap, unknown names rejected; equivalent notations equal, different mathematics different; CER and gate thresholds. | Regression contract frozen before candidate OCR is generated. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **730 passed in 22.46s**.
