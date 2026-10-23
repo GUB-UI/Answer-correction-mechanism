@@ -16,7 +16,7 @@ def _request() -> dict:
         "rubric_version": "v0",
         "prompt_version": "v0",
         "input_ids": ["input-1"],
-        "payload": {"answer_text": "x+1", "api_key": "secret-value"},
+        "payload": {"answer_text": 'x+1 {"api_key":"secret-value"}' },
         "created_at": "2026-10-23T00:00:00Z",
         "independent_evaluation": True,
     }
@@ -26,7 +26,7 @@ def test_file_exchange_shares_request_id(tmp_path) -> None:
     exchange = FileExchange(tmp_path)
     exchange.publish_request(_request())
     written = json.loads((tmp_path / "requests" / "req-1.json").read_text(encoding="utf-8"))
-    assert written["payload"]["api_key"] == "[redacted]"
+    assert "secret-value" not in written["payload"]["answer_text"]
     exchange.write_result(
         {
             "request_id": "req-1",
@@ -61,16 +61,13 @@ def test_request_id_cannot_escape_and_results_are_validated(tmp_path) -> None:
         exchange.read_result("req-1")
 
 
-def test_image_data_uris_are_stripped_from_committed_files(tmp_path) -> None:
+def test_image_data_uris_are_rejected_from_committed_files(tmp_path) -> None:
     payload = _request()
     payload["payload"] = {"answer_text": "see data:image/png;base64,AAAA data"}
-    path = FileExchange(tmp_path).publish_request(payload)
-    text = path.read_text(encoding="utf-8")
-    assert "data:image" not in text
-    assert "AAAA" not in text
-    assert "[stripped-image]" in text
-    folder = GitHubHandoff(tmp_path / "gh").write(payload)
-    assert "data:image" not in (folder / "request.json").read_text(encoding="utf-8")
+    with pytest.raises(SchemaError):
+        FileExchange(tmp_path).publish_request(payload)
+    with pytest.raises(SchemaError):
+        GitHubHandoff(tmp_path / "gh").write(payload)
 
 
 def test_github_handoff_is_files_only(tmp_path) -> None:

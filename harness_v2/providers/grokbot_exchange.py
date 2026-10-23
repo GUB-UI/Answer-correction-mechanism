@@ -8,14 +8,21 @@ step and is not done here.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
 
 from harness_v2.storage.secrets import redact
+from harness_v2.evaluation.independent import scrub_score_text
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DATA_URI = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+", re.IGNORECASE)
+_IMAGE_CONTENT = re.compile(
+    r"data\s*:\s*image/|!\[[^\]]*\]\(|<\s*(?:img|svg)\b|"
+    r"https?://[^\s\"<>]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg)(?:\b|\?)|"
+    r"(?:iVBORw0KGgo|/9j/|R0lGOD|UklGR)[A-Za-z0-9+/=]{8,}", re.IGNORECASE,
+)
 
 _SCHEMAS = Path(__file__).resolve().parent / "schemas"
 
@@ -67,6 +74,11 @@ def _check(value: Any, schema: dict[str, Any], path: str) -> list[str]:
         return errors
     if expected == "boolean" and not isinstance(value, bool):
         return [f"{path} must be a boolean"]
+    if expected == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return [f"{path} must be a finite number"]
+        if "minimum" in schema and value < schema["minimum"]:
+            return [f"{path} is below minimum"]
     return errors
 
 
@@ -98,6 +110,39 @@ def validate_request(payload: dict[str, Any]) -> None:
     errors = _check(payload, _load_schema("grokbot_request.schema.json"), "")
     if errors:
         raise SchemaError("; ".join(errors))
+    _reject_images(payload)
+
+
+def _reject_images(value: Any) -> None:
+    if isinstance(value, str) and _IMAGE_CONTENT.search(value):
+        raise SchemaError("image-bearing content cannot be published")
+    if isinstance(value, dict):
+        for item in value.values():
+            _reject_images(item)
+    elif isinstance(value, list):
+        for item in value:
+            _reject_images(item)
+
+
+def _blind_text(value: Any) -> Any:
+    if isinstance(value, str):
+        return scrub_score_text(value)
+    if isinstance(value, dict):
+        return {key: _blind_text(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_blind_text(item) for item in value]
+    return value
+
+
+def _publishable_request(payload: dict[str, Any]) -> dict[str, Any]:
+    # Validate before redaction: unsupported/image fields must not be hidden by
+    # cleanup and then published under an unrestricted payload object.
+    validate_request(payload)
+    cleaned = redact(payload)
+    if cleaned.get("independent_evaluation"):
+        cleaned["payload"] = _blind_text(cleaned["payload"])
+    validate_request(cleaned)
+    return cleaned
 
 
 def validate_result(payload: dict[str, Any]) -> None:
@@ -117,8 +162,7 @@ class FileExchange:
         return _inside(self.root / folder, self.root / folder / f"{token}.json")
 
     def publish_request(self, payload: dict[str, Any]) -> Path:
-        cleaned = redact(strip_image_data(payload))
-        validate_request(cleaned)
+        cleaned = _publishable_request(payload)
         path = self._path("requests", cleaned["request_id"])
         path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
@@ -151,8 +195,7 @@ class GitHubHandoff:
         self.root = Path(root)
 
     def write(self, payload: dict[str, Any]) -> Path:
-        cleaned = redact(strip_image_data(payload))
-        validate_request(cleaned)
+        cleaned = _publishable_request(payload)
         request_id = safe_request_id(cleaned["request_id"])
         folder = _inside(self.root, self.root / "handoff" / request_id)
         folder.mkdir(parents=True, exist_ok=True)
