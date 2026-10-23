@@ -1,5 +1,6 @@
 from dataclasses import replace
 import hashlib
+import json
 
 import pytest
 
@@ -22,7 +23,26 @@ class CountingOCR(MockOCRAdapter):
 
 
 @pytest.fixture
-def case(tmp_path):
+def backend(monkeypatch):
+    # Only backend-reported identity is trusted; extra health fields are ignored.
+    state = {"payload": {"ok": True, "model": "loaded-ocr", "revision": "commit-a",
+                         "settings": {"max_edge": 1024, "dtype": "float16"}}}
+
+    def health(url, timeout):
+        from io import BytesIO
+        assert url.endswith("/health")
+        if state.get("error"):
+            raise state["error"]
+        if "body" in state:
+            return BytesIO(state["body"])
+        return BytesIO(json.dumps(state["payload"]).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", health)
+    return state
+
+
+@pytest.fixture
+def case(tmp_path, backend):
     config = load_config(tmp_path)
     storage = Storage(config)
     storage.save_problem(ProblemRecord(problem_id="p", title="test", created_at=utc_now_iso()))
@@ -226,4 +246,98 @@ def test_legacy_formula_provenance_without_success_is_not_reused(case):
     storage.update_ocr_result(legacy)
     retried = run(config=config, options=options, formula_refiner=lambda r: r).items[0]
     assert retried.ocr_id != first.ocr_id
+    assert adapter.calls == 4
+
+
+@pytest.mark.parametrize("provider", ["glmocr_sdk", "glm-ocr", "xiaomi_ocr", "xiaomi-ocr"])
+def test_external_provenance_includes_backend_reported_identity(case, backend, provider):
+    storage, config, answer, options, adapter, run = case
+    backend["payload"]["uptime"] = 10
+    options = replace(options, ocr_provider=provider)
+    first = run(options=options).items[0]
+    saved = storage.get_ocr_result(first.ocr_id)
+    assert saved.provenance.settings["backend"] == {
+        "model": "loaded-ocr", "revision": "commit-a",
+        "settings": {"max_edge": 1024, "dtype": "float16"},
+    }
+    backend["payload"]["uptime"] = 20
+    assert run(options=options).items[0].ocr_id == first.ocr_id
+    assert adapter.calls == 2
+
+
+@pytest.mark.parametrize("change", ["model", "revision", "settings", "missing_model", "missing_revision",
+                                    "missing_settings", "empty_settings", "bad_settings", "model_only",
+                                    "unavailable", "timeout", "http_error", "invalid_json", "bad_payload",
+                                    "empty_revision", "bad_model", "not_ready", "error"])
+def test_external_backend_changes_or_unknown_identity_prevent_reuse(case, backend, change):
+    storage, config, answer, options, adapter, run = case
+    first = run().items[0]
+    payload = backend["payload"]
+    if change == "model":
+        payload["model"] = "different-loaded-model"
+    elif change == "revision":
+        payload["revision"] = "commit-b"
+    elif change == "settings":
+        payload["settings"]["max_edge"] = 2048
+    elif change.startswith("missing_"):
+        payload.pop(change.removeprefix("missing_"))
+    elif change == "empty_settings":
+        payload["settings"] = {}
+    elif change == "bad_settings":
+        payload["settings"] = "unknown"
+    elif change == "model_only":
+        backend["payload"] = {"ok": True, "model": "loaded-ocr"}
+    elif change == "unavailable":
+        backend["error"] = OSError("backend unavailable")
+    elif change == "timeout":
+        backend["error"] = TimeoutError("health timed out")
+    elif change == "http_error":
+        from http.client import IncompleteRead
+        backend["error"] = IncompleteRead(b"partial")
+    elif change == "bad_payload":
+        backend["payload"] = []
+    elif change == "empty_revision":
+        payload["revision"] = " "
+    elif change == "bad_model":
+        payload["model"] = 123
+    elif change == "invalid_json":
+        backend["body"] = b"not JSON"
+    elif change == "not_ready":
+        payload["ok"] = False
+    elif change == "error":
+        payload["error"] = "load failed"
+    second = run().items[0]
+    assert second.ocr_id and second.ocr_id != first.ocr_id
+    saved = storage.get_ocr_result(second.ocr_id)
+    verified = change in {"model", "revision", "settings"}
+    assert (saved.provenance is not None) is verified
+    third = run().items[0]
+    assert (third.ocr_id == second.ocr_id) is verified
+    assert adapter.calls == (4 if verified else 6)
+
+
+def test_external_backend_change_during_ocr_discards_provenance(case, backend, monkeypatch):
+    storage, config, answer, options, adapter, run = case
+    original_run = adapter.run
+
+    def change_backend(context):
+        result = original_run(context)
+        if adapter.calls == 2:
+            backend["payload"]["revision"] = "commit-b"
+        return result
+
+    monkeypatch.setattr(adapter, "run", change_backend)
+    first = run().items[0]
+    assert storage.get_ocr_result(first.ocr_id).provenance is None
+    assert run().items[0].ocr_id != first.ocr_id
+    assert adapter.calls == 4
+
+
+def test_external_legacy_client_only_provenance_is_not_reused(case):
+    storage, config, answer, options, adapter, run = case
+    first = run().items[0]
+    saved = storage.get_ocr_result(first.ocr_id)
+    saved.provenance.settings.pop("backend", None)
+    storage.update_ocr_result(saved)
+    assert run().items[0].ocr_id != first.ocr_id
     assert adapter.calls == 4

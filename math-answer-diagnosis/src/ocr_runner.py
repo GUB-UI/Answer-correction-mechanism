@@ -13,6 +13,13 @@ OCRサーバー（既定: http://127.0.0.1:8080。Mac は mlx-vlm、Colab は sc
 Colab（SERVICE_MODE=managed）ではサーバーは自動起動されます。ログは .run/ 以下を確認してください。"""
 
 
+class _AutomaticProvenance:
+    """Distinguish omitted provenance from explicitly unverifiable identity."""
+
+
+_AUTOMATIC_PROVENANCE = _AutomaticProvenance()
+
+
 def run_ocr_for_images(
     adapter: OCRAdapter,
     storage: Storage,
@@ -21,12 +28,12 @@ def run_ocr_for_images(
     source_id: str,
     image_paths: list[str],
     engine: str,
-    provenance: OCRProvenance | None = None,
+    provenance: OCRProvenance | None | _AutomaticProvenance = _AUTOMATIC_PROVENANCE,
 ) -> OCRResult:
     if not image_paths:
         raise ValueError("OCRする画像がありません。")
 
-    if provenance is None:
+    if isinstance(provenance, _AutomaticProvenance):
         provider = {
             "MockOCRAdapter": "mock",
             "GLMOCRSdkAdapter": "glmocr_sdk",
@@ -64,8 +71,19 @@ def run_ocr_for_images(
             suspect_reasons.extend(part.raw_output.get("ocr_suspect_reasons") or ["ocr_suspect"])
 
     combined = "\n\n".join(page_texts).strip()
+    # Confirm the external backend did not change while processing the pages.
+    if provenance is not None:
+        if storage.config.services.mode == "external" and provenance.engine in {"glmocr_sdk", "xiaomi_ocr"}:
+            current = ocr_provenance(
+                storage.config, image_paths, provider=provenance.engine, adapter=adapter,
+                apply_formula=bool(provenance.settings.get("formula_enabled")),
+            )
+            if current != provenance:
+                provenance = None
+        elif image_hashes(storage.config, image_paths) != provenance.image_sha256:
+            provenance = None
     result = OCRResult(
-        provenance=(provenance if image_hashes(storage.config, image_paths) == provenance.image_sha256 else None),
+        provenance=provenance,
         ocr_id=storage.generate_id("ocr"),
         answer_id=answer_id,
         ocr_engine="+".join(dict.fromkeys(engine_names)) or engine,
