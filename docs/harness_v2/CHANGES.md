@@ -6,6 +6,11 @@
 - Added 36 regression cases for notation equivalence, radical scope, and idempotence, including nested roots, fractions, exponents, and full-width notation. Before the fix, 31 of the new cases failed.
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **902 passed** (localhost mock servers permitted).
+## PR #10: exclude agent debug logs
+
+- Removed `codex_fix_stderr.log` from the tree going forward; existing commit history is not rewritten.
+- Added `.gitignore` rules for `codex_*.log`, `*_stderr.log`, and `*_stdout.log`, with tests checking tracked filenames via `git ls-files` and ignore behavior at the root and in subdirectories.
+
 ## Fix 1: open existing run databases without changing permissions
 
 - Added `RunStore(..., readonly=True)` for listing and analysis of existing databases. Construction skips schema initialization and permission enforcement; every connection uses SQLite `mode=ro`, including attempted writes. Writable stores retain private output permissions.

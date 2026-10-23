@@ -6,6 +6,11 @@
 - 表記の同値性、根号の範囲、正規化の冪等性について回帰テストを36件追加した。入れ子、分数、指数、全角表記も含み、修正前は新規テストの31件が失敗することを確認した。
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **902 件成功**（ローカルの模擬 HTTP サーバー起動を許可して実行）。
+## PR #10: エージェントのデバッグログを追跡対象から除外
+
+- `codex_fix_stderr.log` を今後のツリーから削除した。過去のコミット履歴は書き換えていない。
+- `.gitignore` に `codex_*.log`、`*_stderr.log`、`*_stdout.log` を追加。`git ls-files` による追跡ログの検出と、ルート・サブディレクトリでの無視規則をテストする。
+
 ## 修正 1: 既存の実行データベースを権限変更なしで開く
 
 - 一覧取得・分析用に `RunStore(..., readonly=True)` を追加。生成時のスキーマ初期化と権限制限を省略し、書き込みを試みる場合も含め、すべての接続で SQLite の `mode=ro` を使う。書き込み用ストアは出力の非公開権限を維持する。
@@ -697,3 +702,8 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 
 `test_p5_challenge.py` に重複（原本・変形、記録順の両方）、欠落、予定外、複数の異常、正常系、CLI の出力・終了コードの検証を追加。
 検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **19 件成功、1 件除外**。`references.json` を読む既存の dataset-builder テストは指示に従い除外。修正Aの関連テストと合わせて **185 件成功、1 件除外**。ネットワーク・API 呼び出しなし。
+## PR #9 修正4: 採点設定が完全一致する診断だけを再利用する
+
+一括処理で新しい診断に `grading_metadata` を保存する。モデル ID、provider、実際のプロンプト全文の SHA-256（内容に基づくバージョン）、ルーブリック・配点・問題文・模範解答・問題 ID の SHA-256、生成設定がすべて一致する場合だけ再利用する。生成設定は API 呼び出しと共通化し、managed モードではサーバーのモデル・量子化・生成上限なども記録する。メタデータ全体または一部がない旧診断と、設定を特定できないアダプターの診断は再採点する。得点の補完や状態名の変更は行わない。
+
+検証: `tests/test_diagnosis_reuse.py` に完全一致時の保存・再利用、モデル・プロンプト本文・テンプレート・種別・ルーブリック・配点・問題文・模範解答・生成設定の変更、旧診断と部分的なメタデータ、再実行指定、設定不明時の回帰テストを追加。新規テストは通信を禁止し、クライアントとサービス管理をモック化した。関連テストを `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider` で実行し、161 件成功。ネットワーク・API 通信は実施していない。`docs/harness_v2/CHANGES.md` はこの worktree に存在しないため追加していない。

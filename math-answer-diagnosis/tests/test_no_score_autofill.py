@@ -218,7 +218,7 @@ def test_legacy_empty_question_scores_require_review(context, scores_present, re
 
 @pytest.mark.parametrize("scores_present", [False, True])
 @pytest.mark.parametrize("review_status", [None, "", "validated", "failed"])
-def test_batch_cache_reuses_legacy_empty_scores_with_review_status(
+def test_batch_cache_reuses_matching_metadata_with_legacy_empty_scores(
     context, tmp_path, scores_present, review_status,
 ):
     from src.batch_pipeline import BatchOptions, run_batch
@@ -249,7 +249,7 @@ def test_batch_cache_reuses_legacy_empty_scores_with_review_status(
         payload.pop("review_status")
     else:
         payload["review_status"] = review_status
-    # Write a legacy record directly so model validation happens on cache load.
+    # Keep grading metadata; only the score/status fields use the legacy format.
     (config.records_dir / "diagnosis_results.jsonl").write_text(json.dumps(payload) + "\n")
     reused = run_batch(storage, config, [answer], options, diagnosis_adapter=adapter).items[0]
     assert reused.ocr_id == first.ocr_id
