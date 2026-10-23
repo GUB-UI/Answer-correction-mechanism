@@ -19,6 +19,12 @@ def test_foreign_run_in_results_is_rejected(tmp_path, repo, inputs):
     kw["candidate_results"].write_text(json.dumps(cand))
     with pytest.raises(HistoryError, match="does not belong"):
         h.record_evaluation("P", **kw)
+    good = {"commit": c1, "experiment_id": "x", "prompt_version": "harness_v2_default", "model_id": "fixture",
+            "rubric_version": "r1", "outputs": {"experiment_case": {"experiment_identity": "other-experiment"}}}
+    cand["runs"] = [good]
+    kw["candidate_results"].write_text(json.dumps(cand))
+    with pytest.raises(HistoryError, match="does not belong"):
+        h.record_evaluation("P", **kw)
     cand["runs"], cand["identity"] = [], "forged"
     kw["candidate_results"].write_text(json.dumps(cand))
     with pytest.raises(HistoryError, match="identity does not match"):

@@ -565,3 +565,10 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 | `harness_v2/improvement/handoff.py` | Refuses a proposal_id that sanitization would change, so every file uses the same validated id. | Sol major 5. |
 | `scripts/register_history.py` | Attaches a missing candidate independently of proposal creation. | Sol minor 6. |
 | tests | `test_improvement_review2.py`; fixtures now carry real experiment identities and attach candidates. | |
+
+## Phase 5 / 13: Run identity check (Sol diff round 3) (2026-10-24)
+
+| File | Change | Why |
+|---|---|---|
+| `harness_v2/improvement/history.py` | Each run and attempt run must also carry `outputs.experiment_case.experiment_identity` equal to the header identity. | Sol round-3 blocker: runs from another experiment with matching header fields passed. Fixed after the 3-round cap; not re-reviewed. |
+| tests | `test_foreign_run_in_results_is_rejected` covers a run with a foreign experiment identity. | |

@@ -68,7 +68,9 @@ def _check_provenance(exp: dict) -> None:
             "prompt_version": cfg.get("prompt_version"), "model_id": cfg.get("model"),
             "rubric_version": cfg.get("rubric_version")}
     for run in list(exp.get("runs") or []) + list(exp.get("attempt_runs") or []):
-        if not isinstance(run, dict) or any(run.get(k) != v for k, v in want.items()):
+        case = ((run.get("outputs") or {}).get("experiment_case") or {}) if isinstance(run, dict) else {}
+        if (not isinstance(run, dict) or any(run.get(k) != v for k, v in want.items())
+                or case.get("experiment_identity") != exp["identity"]):
             raise HistoryError("a contributing run does not belong to this experiment")
 
 

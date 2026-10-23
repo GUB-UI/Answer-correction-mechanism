@@ -676,3 +676,10 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 | `harness_v2/improvement/handoff.py` | 伏せ字で変わる提案IDは受け渡しを拒否。 |
 | `scripts/register_history.py` | 途中で止まった登録で、候補の登録だけを再開。 |
 | テスト | `test_improvement_review2.py` ほか。 |
+
+## Phase 5 / 13: 実行の実験ID確認（Sol 差分3回目）（2026-10-24）
+
+| ファイル | 変更 |
+|---|---|
+| `harness_v2/improvement/history.py` | 各実行に記録された実験ID（experiment_case.experiment_identity）がヘッダーと一致することも確認。Sol 3回目の指摘。上限後の修正のため再レビューなし。 |
+| テスト | 別実験の実行を混ぜた場合の拒否。 |
