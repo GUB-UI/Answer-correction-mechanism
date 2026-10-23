@@ -13,6 +13,16 @@ MODEL_ID = "gemma-4-31b-it"
 API_KEY_ENV = "GEMINI_API_KEY"
 MAX_ATTEMPTS = 3
 _TRANSIENT_STATUS = {408, 500, 502, 503, 504}
+_VERTEX_ENV = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_VERTEX_AI")
+_SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k")
+
+
+def _vertex_requested() -> bool:
+    for name in _VERTEX_ENV:
+        value = os.environ.get(name, "").strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+    return False
 
 
 class MissingAPIKey(RuntimeError):
@@ -134,6 +144,10 @@ class GemmaAIStudio:
     def _build_client(self) -> Any:
         if self._client is not None:
             return self._client
+        if _vertex_requested():
+            raise ProviderSetupError(
+                "Vertex routing is disabled; unset GOOGLE_GENAI_USE_VERTEXAI and use the Gemini API key"
+            )
         key = os.environ.get(API_KEY_ENV, "").strip()
         if not key:
             raise MissingAPIKey(f"{API_KEY_ENV} is not set")
@@ -143,7 +157,7 @@ class GemmaAIStudio:
             raise ProviderSetupError(
                 "google-genai is not installed; refusing to call any other API"
             ) from exc
-        self._client = genai.Client(api_key=key)
+        self._client = genai.Client(vertexai=False, api_key=key)
         return self._client
 
     def generate(
@@ -153,15 +167,7 @@ class GemmaAIStudio:
         request_id: str,
         settings: dict[str, Any] | None = None,
     ) -> ProviderExchange:
-        public = {
-            key: value
-            for key, value in dict(settings or {}).items()
-            if key != "model"
-            and not any(
-                part in key.lower()
-                for part in ("api_key", "apikey", "secret", "token", "password", "authorization")
-            )
-        }
+        public = {key: value for key, value in dict(settings or {}).items() if key in _SETTINGS_KEYS}
         recorded = redact(public)
         recorded.setdefault("temperature", 0)
         client = self._build_client()
