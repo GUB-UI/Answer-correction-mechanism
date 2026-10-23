@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from harness_v2 import __version__
 from harness_v2.core.contracts import FailureCase, GradingResult, RunRecord
 from harness_v2.evaluation.independent import prepare_independent_input, scrub_score_text
 from harness_v2.grading.rubric import rubric_from_data
@@ -22,6 +23,12 @@ from harness_v2.storage.sqlite_store import RunStore
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _optional_score(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
 
 
 class Pipeline:
@@ -172,25 +179,36 @@ class Pipeline:
     ) -> str:
         if result.status == "validated":
             return ""
+        errors = [check.name for check in result.checks if not check.ok]
+        if result.failure_reason and result.failure_reason not in errors:
+            errors.insert(0, result.failure_reason)
+        uncertainties = [
+            item.uncertainty for item in result.items if isinstance(item.uncertainty, (int, float))
+        ]
         failure = FailureCase(
             case_id=uuid.uuid4().hex,
-            experiment_id=experiment_id,
-            request_id=request_id,
-            input_id=str(public.get("input_id") or request_id),
-            provider=type(self.provider).__name__,
-            model_id=result.model_id,
+            problem_id=str(case.get("problem_id") or public.get("input_id") or request_id),
+            input_version=str(case.get("input_version") or ""),
+            model_version=result.model_id,
+            harness_version=__version__,
             rubric_version=str(public.get("rubric_version") or "v0"),
-            prompt_version=str(public.get("prompt_version") or "v0"),
-            failure_kind=result.failure_reason or result.status,
-            observed=result.failure_reason,
-            expected_check="validated",
-            artifact_ref=raw_name,
-            commit=commit,
-            created_at=_now(),
+            predicted_score=result.total_score,
+            reference_score=_optional_score(case.get("reference_score")),
+            rubric_results=[item.to_dict() for item in result.items],
+            evidence=[span.to_dict() for item in result.items for span in item.evidence_spans],
+            errors=errors,
+            uncertainty=max(uncertainties) if uncertainties else None,
+            execution_log=[
+                {
+                    "request_id": request_id,
+                    "experiment_id": experiment_id,
+                    "artifact": raw_name,
+                    "status": result.status,
+                }
+            ],
         )
-        proposal = build_proposal([failure])
+        proposal = build_proposal([failure], baseline_commit=commit)
         assert proposal is not None
         self.store.artifacts.write_json(f"failures/{failure.case_id}.json", failure.to_dict())
         self.store.artifacts.write_json(f"proposals/{proposal.proposal_id}.json", proposal.to_dict())
-        del case
         return proposal.proposal_id

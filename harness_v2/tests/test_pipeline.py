@@ -119,7 +119,10 @@ def test_parse_failure_links_a_proposal_and_does_not_apply_it(tmp_path) -> None:
     proposal = json.loads(
         (tmp_path / "artifacts" / "proposals" / f"{record.proposal_link}.json").read_text(encoding="utf-8")
     )
-    assert proposal["status"] == "proposed"
-    assert "person reviews" in proposal["recommended_action"]
+    assert proposal["decision"] == "pending"
+    assert proposal["changed_components"] == ["prompt"]
+    assert proposal["baseline_commit"] == "abc"
+    assert proposal["candidate_commit"] == ""
+    assert "status" not in proposal
     built = build_proposal([])
     assert built is None

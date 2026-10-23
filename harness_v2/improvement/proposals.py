@@ -1,34 +1,52 @@
-"""Draft a proposal from failure cases. The proposal is not applied."""
+"""Draft one proposal from failure cases. The proposal is not applied.
+
+A cycle names one changed component. evaluation_results stays empty until a
+later evaluation fills the design metrics.
+"""
 
 from __future__ import annotations
 
 import uuid
-from collections import Counter
-from datetime import datetime, timezone
 
 from harness_v2.core.contracts import FailureCase, ImprovementProposal
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def _cause(cases: list[FailureCase]) -> str:
+    counts: dict[str, int] = {}
+    for case in cases:
+        label = case.errors[0] if case.errors else "unspecified"
+        counts[label] = counts.get(label, 0) + 1
+    return max(counts, key=lambda label: (counts[label], label))
 
 
-def build_proposal(cases: list[FailureCase]) -> ImprovementProposal | None:
+def _one_component(cause: str) -> str:
+    text = cause.lower()
+    if "json" in text or "parse" in text:
+        return "prompt"
+    if "evidence" in text:
+        return "recognition"
+    if "sympy" in text or "math" in text:
+        return "validator"
+    return "rubric"
+
+
+def build_proposal(
+    cases: list[FailureCase],
+    *,
+    baseline_commit: str = "",
+) -> ImprovementProposal | None:
     if not cases:
         return None
-    counts = Counter(case.failure_kind for case in cases)
-    kind, count = counts.most_common(1)[0]
-    matched = [case.case_id for case in cases if case.failure_kind == kind]
-    target = "prompt" if "parse" in kind or "json" in kind else "rubric"
+    cause = _cause(cases)
     return ImprovementProposal(
         proposal_id=uuid.uuid4().hex,
-        source_case_ids=matched,
-        target=target,
-        problem=f"{count} case(s) failed check {kind}",
-        recommended_action="A person reviews these cases before any prompt or rubric change.",
-        severity="high" if count >= 3 else "medium",
-        pattern_count=count,
-        status="proposed",
-        experiment_id=cases[0].experiment_id,
-        created_at=_now(),
+        baseline_commit=baseline_commit,
+        candidate_commit="",
+        cause=cause,
+        changed_components=[_one_component(cause)],
+        expected_effect="One component change, reviewed by a person before it is applied.",
+        evaluation_results={},
+        regressions=[],
+        teacher_reviews=[],
+        decision="pending",
     )

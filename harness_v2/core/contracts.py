@@ -1,9 +1,7 @@
 """Frozen v0.1 records for grading, failures, and experiment runs.
 
-ItemResult field names are the ones the workstream named. FailureCase and
-ImprovementProposal are the v0.1 set used by this harness: the design file
-was not in the repository, so these fields are the contract until a design
-doc replaces them. Nothing here invents a numeric score for a missing item.
+FailureCase and ImprovementProposal field names match docs/harness_v2/design_v0.1.md.
+Nothing here invents a numeric score for a missing item.
 """
 
 from __future__ import annotations
@@ -12,7 +10,35 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
 GradingStatus = Literal["validated", "review_required", "failed"]
-ProposalStatus = Literal["proposed", "accepted", "rejected"]
+
+FAILURE_CASE_FIELDS = (
+    "case_id",
+    "problem_id",
+    "input_version",
+    "model_version",
+    "harness_version",
+    "rubric_version",
+    "predicted_score",
+    "reference_score",
+    "rubric_results",
+    "evidence",
+    "errors",
+    "uncertainty",
+    "execution_log",
+)
+
+IMPROVEMENT_PROPOSAL_FIELDS = (
+    "proposal_id",
+    "baseline_commit",
+    "candidate_commit",
+    "cause",
+    "changed_components",
+    "expected_effect",
+    "evaluation_results",
+    "regressions",
+    "teacher_reviews",
+    "decision",
+)
 
 
 def _jsonable(value: Any) -> Any:
@@ -110,20 +136,18 @@ class GradingResult:
 @dataclass
 class FailureCase:
     case_id: str
-    experiment_id: str
-    request_id: str
-    input_id: str
-    provider: str
-    model_id: str
+    problem_id: str
+    input_version: str
+    model_version: str
+    harness_version: str
     rubric_version: str
-    prompt_version: str
-    failure_kind: str
-    observed: str
-    expected_check: str
-    item_id: str = ""
-    artifact_ref: str = ""
-    commit: str = ""
-    created_at: str = ""
+    predicted_score: float | None
+    reference_score: float | None
+    rubric_results: list[dict[str, Any]]
+    evidence: list[dict[str, Any]]
+    errors: list[str]
+    uncertainty: float | None
+    execution_log: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -132,15 +156,15 @@ class FailureCase:
 @dataclass
 class ImprovementProposal:
     proposal_id: str
-    source_case_ids: list[str]
-    target: str
-    problem: str
-    recommended_action: str
-    severity: str
-    pattern_count: int
-    status: ProposalStatus = "proposed"
-    experiment_id: str = ""
-    created_at: str = ""
+    baseline_commit: str
+    candidate_commit: str
+    cause: str
+    changed_components: list[str]
+    expected_effect: str
+    evaluation_results: dict[str, Any]
+    regressions: list[dict[str, Any]]
+    teacher_reviews: list[dict[str, Any]]
+    decision: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from harness_v2.core.contracts import FailureCase, ImprovementProposal, ItemResult
+from pathlib import Path
+
+from harness_v2.core.contracts import (
+    FAILURE_CASE_FIELDS,
+    IMPROVEMENT_PROPOSAL_FIELDS,
+    FailureCase,
+    ImprovementProposal,
+    ItemResult,
+)
+
+_DESIGN = Path(__file__).resolve().parents[2] / "docs" / "harness_v2" / "design_v0.1.md"
 
 
 def test_item_result_keeps_a_missing_score_as_none() -> None:
@@ -8,29 +18,61 @@ def test_item_result_keeps_a_missing_score_as_none() -> None:
     assert item.to_dict()["score"] is None
 
 
-def test_failure_and_proposal_fields_round_trip() -> None:
+def test_failure_and_proposal_fields_match_design_v0_1() -> None:
     case = FailureCase(
         case_id="c",
-        experiment_id="e",
-        request_id="r",
-        input_id="i",
-        provider="p",
-        model_id="m",
+        problem_id="1-A",
+        input_version="in-1",
+        model_version="gemma-4-31b-it",
+        harness_version="0.1.0",
         rubric_version="rv",
-        prompt_version="pv",
-        failure_kind="missing_score",
-        observed="R2 absent",
-        expected_check="items_present",
+        predicted_score=4,
+        reference_score=8,
+        rubric_results=[{"item_id": "R1", "score": 4}],
+        evidence=[{"text": "x+1"}],
+        errors=["score_range"],
+        uncertainty=0.2,
+        execution_log=[{"step": "validate"}],
     )
     proposal = ImprovementProposal(
         proposal_id="p1",
-        source_case_ids=["c"],
-        target="rubric",
-        problem="missing item",
-        recommended_action="review",
-        severity="medium",
-        pattern_count=1,
+        baseline_commit="abc",
+        candidate_commit="",
+        cause="score_range",
+        changed_components=["rubric"],
+        expected_effect="one rubric edit",
+        evaluation_results={},
+        regressions=[],
+        teacher_reviews=[],
+        decision="pending",
     )
-    assert case.to_dict()["failure_kind"] == "missing_score"
-    assert proposal.to_dict()["status"] == "proposed"
-    assert proposal.to_dict()["pattern_count"] == 1
+    assert tuple(case.to_dict()) == FAILURE_CASE_FIELDS
+    assert tuple(proposal.to_dict()) == IMPROVEMENT_PROPOSAL_FIELDS
+    assert len(proposal.changed_components) == 1
+    assert "status" not in proposal.to_dict()
+    assert "failure_kind" not in case.to_dict()
+
+
+def test_design_summary_records_metrics_and_dev_set() -> None:
+    text = _DESIGN.read_text(encoding="utf-8")
+    for status in ("validated", "review_required", "failed"):
+        assert status in text
+    for metric in (
+        "MAE vs reference",
+        "item agreement",
+        "evidence accuracy",
+        "wrong grading",
+        "review detection",
+        "success rate",
+        "latency",
+        "usage",
+    ):
+        assert metric in text
+    assert "1-A" in text and "8/10" in text
+    assert "2-B" in text and "4/10" in text
+    assert "3-A" in text and "10/10" in text
+    assert "one change type" in text.lower() or "One change type" in text
+    for name in FAILURE_CASE_FIELDS:
+        assert name in text
+    for name in IMPROVEMENT_PROPOSAL_FIELDS:
+        assert name in text
