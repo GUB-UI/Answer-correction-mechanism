@@ -337,3 +337,15 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/evaluation/compare.py, harness_v2/tests/test_p3_comparison.py, docs/harness_v2/phase3_usage.md` | 保存済みディレクトリから比較するCLIを追加。各拒否条件・同条件・CLIをテストし、manifest検証付きの実行例を記載。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **432 passed in 13.28s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 10: 評価指標と重大退行の判定（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/metrics.py` | MAE・項目一致・根拠追跡率・誤加点/誤減点・要確認検出/誤警告・成功率・合計/試行別遅延・再試行を含む要求数/既知トークンを集計。欠落点は未採点、適用不能な率はnullとし、分母と不明使用量を表示する。 |
+| `harness_v2/evaluation/comparison.py` | 両側の指標と差分を計算。新しいケース/繰返し/項目の誤採点、または根拠精度の低下はMAEが改善してもregressedとする。期待ケースと実行の来歴、生/採点入力ハッシュをmanifestと照合する。 |
+| `harness_v2/core/pipeline.py, harness_v2/evaluation/independent.py` | 反復中の入力改変をモデル呼出し前に拒否し、失敗時も来歴を保持。最終確認で再現したreference_scores複数形の漏れも修正し、Gemma/Codex境界で参照を除去する。 |
+| `harness_v2/tests/test_p3_metrics.py, harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_runner.py, harness_v2/tests/test_p3_reference.py` | 数値fixtureで全指標・未採点・履歴使用量・誤警告・MAE改善に隠れた新規誤採点・入力改変・両側共通の不正来歴を検証。実際のCodex turnをローカル台本で検査し、外部呼出しは行わない。 |
+| `docs/harness_v2/phase3_usage.md` | 分母・null・履歴・判定規則と07/08/09の再現コマンドを記載する。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **447 passed in 13.54s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。

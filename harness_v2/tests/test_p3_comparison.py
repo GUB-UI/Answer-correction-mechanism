@@ -59,3 +59,26 @@ def test_comparison_cli_works_on_run_directories(tmp_path):
     proc = subprocess.run(cmd, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     assert json.loads(report.read_text())['comparable'] is True
+
+
+@pytest.mark.parametrize('mutation', [
+    lambda c: c['expected_runs'][0].update(input_sha256='0'*64),
+    lambda c: c['expected_runs'][0].update(case_id='other'),
+    lambda c: c['runs'][0]['outputs'].update(ocr_sha256='0'*64),
+    lambda c: c['runs'][0]['outputs']['experiment_case'].update(input_sha256='0'*64),
+])
+def test_comparison_rejects_inconsistent_run_provenance_even_on_both_sides(tmp_path, mutation):
+    from harness_v2.evaluation.comparison import compare_experiments
+    baseline, candidate, _ = result_pair(tmp_path)
+    mutation(baseline); mutation(candidate)
+    result = compare_experiments(baseline, candidate)
+    assert result['verdict'] == 'incomparable'
+
+
+def test_comparison_rejects_both_runs_claiming_another_derived_grading_input(tmp_path):
+    from harness_v2.evaluation.comparison import compare_experiments
+    baseline, candidate, _ = result_pair(tmp_path)
+    for payload in [baseline, candidate]:
+        payload['runs'][0]['outputs']['grading_input_sha256'] = '0'*64
+    result = compare_experiments(baseline, candidate)
+    assert result['verdict'] == 'incomparable'

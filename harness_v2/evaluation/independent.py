@@ -50,7 +50,7 @@ _POINT_TEXT = re.compile(
     r"(?:\d+(?:[.．]\d+)?\s*[/／]\s*\d+(?:[.．]\d+)?\s*点|"
     r"(?:採点(?:結果)?|参照得点|教師採点|得点|点数|評価点|合計点|スコア)\s*[:：=は]?\s*\d+(?:[.．]\d+)?\s*点?)"
 )
-_REFERENCE_ITEMS = re.compile(r"(?i)(?<!\w)[\"']?reference[_\s-]*items[\"']?\s*[:=：]\s*")
+_REFERENCE_MAPS = re.compile(r"(?i)(?<!\w)[\"']?reference[_\s-]*(?:items|scores)[\"']?\s*[:=：]\s*")
 
 
 def _drop_key(key: str) -> bool:
@@ -102,7 +102,7 @@ def scrub_score_text(text: str) -> str:
     text = _scrub_embedded(text)
     # Item labels can be a map without any nested key containing "score".
     decoder = json.JSONDecoder()
-    for match in reversed(list(_REFERENCE_ITEMS.finditer(text))):
+    for match in reversed(list(_REFERENCE_MAPS.finditer(text))):
         try:
             _, end = decoder.raw_decode(text, match.end())
         except ValueError:

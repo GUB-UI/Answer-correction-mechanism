@@ -101,3 +101,23 @@ def test_runner_rejects_changed_resume_identity_and_rubric_version(tmp_path):
         run_experiment(changed, manifest, repeats=1, out=out)
     with pytest.raises(ValueError, match='rubric_version'):
         run_experiment(config_at(tmp_path, rubric_version='wrong'), manifest, repeats=1, out=tmp_path / 'wrong')
+
+
+def test_dataset_input_mutation_between_repetitions_fails_before_provider(tmp_path):
+    from harness_v2.run import run_experiment
+    from harness_v2.evaluation.dataset import load_dataset
+    manifest = make_dataset(tmp_path)
+    source = load_dataset(manifest).cases[0]['ocr_import_path']
+    calls = []
+    class Mutating(FixtureProvider):
+        def generate(self, prompt, **kwargs):
+            calls.append(prompt)
+            from pathlib import Path
+            Path(source).write_text('changed')
+            return super().generate(prompt, **kwargs)
+    out = tmp_path / 'runs'
+    result = run_experiment(config_at(tmp_path), manifest, repeats=2, out=out,
+                            provider_factory=lambda *a: Mutating(_valid()))
+    assert len(calls) == 1
+    assert result['failed'] == 1
+    assert 'hash' in json.loads((out / 'results.json').read_text())['runs'][1]['failure_reason']

@@ -246,3 +246,15 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_comparison.py, docs/harness_v2/phase3_usage.md` | Exercise each refusal boundary, returned model, effective settings, incomplete cases, same-condition metrics and the real offline CLI. | Prevent accidental apples-to-oranges comparisons. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **432 passed in 13.28s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 10: Complete metrics and severe regression verdicts (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/metrics.py` | Compute MAE/coverage, item agreement, traceable-span evidence accuracy, wrong grading with item/total addition-deduction split, review recall/false flags, success, total/per-attempt latency and retry/history usage. Keep missing scores unscored and undefined rates null. | The Phase 2 measurements must be reproducible inside evaluation, with honest denominators and unknown-token accounting. |
+| `harness_v2/evaluation/comparison.py` | Compute both metric sets/deltas and quality verdicts. Any new wrong case/repetition/item or lower evidence accuracy forces regressed. Verify each expected/stored case and actual raw/derived hashes against the dataset, not just against the other report. | Aggregate MAE gains or identical corrupted provenance must not conceal severe regressions. |
+| `harness_v2/core/pipeline.py, harness_v2/evaluation/independent.py` | Guard the manifest input hash before inference on every repetition; retain provenance/history on failure. Strip plural reference_scores maps from free text as well as JSON at both model boundaries. | Final regression checks reproduced between-repetition source changes and a plural-label leak; neither may contaminate metrics or prompts. |
+| `harness_v2/tests/test_p3_metrics.py, harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_runner.py, harness_v2/tests/test_p3_reference.py` | Use numerical fixtures for all metrics, unknown retries, empty/missing results, false flags, per-repetition severe errors despite lower MAE, mutated inputs and inconsistent provenance. Verify plural labels against a mocked provider and actual scripted Codex turn. | Regression tests cover quality, execution accounting and reference isolation offline. |
+| `docs/harness_v2/phase3_usage.md` | Document metric denominators, nulls, latency/history semantics, unknown usage, verdict rules and the 07/08/09 commands. | Keep results interpretable and the workflow repeatable. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **447 passed in 13.54s** (offline guard; loopback mocks allowed).

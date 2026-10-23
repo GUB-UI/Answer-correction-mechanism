@@ -105,6 +105,14 @@ class Pipeline:
         answer_text = artifact.raw_text if artifact is not None else ""
         if artifact is not None:
             self._verify_ocr(artifact)
+            context.update({"ocr_artifact": artifact.artifact_name, "ocr_sha256": artifact.sha256,
+                            "ocr_redacted": artifact.redacted_name,
+                            "ocr_metadata": {**artifact.metadata, "engine": artifact.engine,
+                                "revision": artifact.revision, "dtype": artifact.dtype,
+                                "elapsed_s": artifact.elapsed_s,
+                                "source": artifact.metadata.get("source", artifact.source_name)}})
+            if case.get("input_sha256") and artifact.sha256 != case["input_sha256"]:
+                raise RuntimeError("grading input hash changed after dataset verification")
         raw_view = {
             "problem_text": case.get("problem_text") or case.get("problem") or "",
             "answer_text": answer_text,
@@ -131,6 +139,8 @@ class Pipeline:
         kwargs = {"settings": case["generation_settings"]} if "generation_settings" in case else {}
         exchange = self.provider.generate(prompt, request_id=request_id, **kwargs)
         raw_name = f"raw/{artifact_id}.txt"
+        context.update({"raw_response_artifact": raw_name, "attempt_count": exchange.attempt_count,
+                        "attempts": exchange.attempts, "settings": exchange.settings})
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         result = self._grade(exchange, rubric, prompt_answer, request_id)
         review_payload = self._maybe_review(result, view, rubric, request_id)

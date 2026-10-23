@@ -148,6 +148,57 @@ def experiment_index(payload: dict) -> tuple[dict, list[str]]:
     return indexed, reasons
 
 
+def _provenance_reasons(payload: dict) -> list[str]:
+    reasons = []
+    manifest = payload.get('dataset', {})
+    rows = manifest.get('cases', [])
+    if not isinstance(rows, list) or any(not isinstance(c, dict) or not isinstance(c.get('case_id'), str) for c in rows):
+        return ['invalid manifest case list']
+    cases = {c['case_id']: c for c in rows}
+    if not cases or len(cases) != len(rows):
+        reasons.append('empty or duplicate manifest cases')
+    jobs = payload.get('expected_runs', [])
+    if not isinstance(jobs, list):
+        return reasons + ['invalid expected cases']
+    seen = set()
+    indexed, _ = experiment_index(payload)
+    for job in jobs:
+        if not isinstance(job, dict):
+            reasons.append('invalid expected case')
+            continue
+        case_id, rep = job.get('case_id'), job.get('repetition')
+        if isinstance(rep, bool) or not isinstance(rep, int) or rep < 1:
+            reasons.append('invalid repetition')
+            continue
+        seen.add((case_id, rep))
+        case = cases.get(case_id)
+        if case is None:
+            reasons.append(f'unknown expected problem/case: {case_id}')
+            continue
+        expected = {'problem_id': case.get('problem_id'), 'input_version': case.get('input_version'),
+                    'input_sha256': case.get('grading_input', {}).get('sha256'),
+                    'rubric_sha256': case.get('rubric', {}).get('sha256')}
+        for field, value in expected.items():
+            if not value or job.get(field) != value:
+                reasons.append(f'expected case {field} differs from manifest: {case_id}')
+        run = indexed.get((case_id, rep))
+        if run is None:
+            continue
+        outputs = run.get('outputs', {})
+        actual = outputs.get('experiment_case')
+        if not isinstance(actual, dict) or any(actual.get(k) != v for k, v in job.items()):
+            reasons.append(f'run case provenance differs from expected case: {case_id}')
+        observed = outputs.get('ocr_sha256')
+        if observed is not None and observed != expected['input_sha256']:
+            reasons.append(f'run OCR/input hash differs from manifest: {case_id}')
+        if outputs.get('grading', {}).get('status') != 'failed' and not observed:
+            reasons.append(f'run OCR/input hash is missing: {case_id}')
+    repetitions = {rep for _, rep in seen}
+    if seen != {(case_id, rep) for case_id in cases for rep in repetitions}:
+        reasons.append('incomplete problem/case/repetition plan')
+    return reasons
+
+
 def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
     reasons = []
     for name, payload in (('baseline', baseline), ('candidate', candidate)):
@@ -155,6 +206,8 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
             reasons.append(f'{name}: missing configuration or dataset manifest')
     if reasons:
         return reasons
+    for name, payload in (("baseline", baseline), ("candidate", candidate)):
+        reasons.extend(f"{name}: {reason}" for reason in _provenance_reasons(payload))
     left, right = baseline['config'], candidate['config']
     for key, label in (('model', 'model'), ('provider', 'provider'),
                        ('rubric_version', 'rubric version'), ('generation_settings', 'generation settings')):
@@ -207,15 +260,6 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
-def _basic_experiment_metrics(payload: dict) -> dict:
-    import statistics
-    rows = payload['runs']
-    complete = sum(row['outputs']['grading']['status'] != 'failed' for row in rows)
-    latency = [row['latency_ms'] for row in rows if isinstance(row.get('latency_ms'), (int, float))]
-    return {'success_rate': complete / len(payload['expected_runs']) if payload['expected_runs'] else None,
-            'mean_latency_ms': statistics.mean(latency) if latency else None}
-
-
 def metric_deltas(baseline: dict, candidate: dict) -> dict:
     deltas = {}
     for key in baseline.keys() & candidate.keys():
@@ -231,16 +275,75 @@ def metric_deltas(baseline: dict, candidate: dict) -> dict:
 
 
 def compare_experiments(baseline: dict, candidate: dict, *, dataset=None) -> dict:
+    from harness_v2.evaluation.dataset import load_dataset
+    from harness_v2.evaluation.metrics import compute_metrics
     reasons = compatibility_reasons(baseline, candidate)
+    if dataset is None and not reasons:
+        try:
+            dataset = load_dataset(Path(baseline['dataset_path']))
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            reasons.append(f'dataset unavailable for metrics: {exc}')
     if dataset is not None:
+        import hashlib
+        from harness_v2.storage.permissions import private_open
+        derived = {}
+        for case in dataset.cases:
+            with private_open(case['ocr_import_path'], 'rb') as handle:
+                raw = handle.read()
+            if hashlib.sha256(raw).hexdigest() != case['input_sha256']:
+                reasons.append(f"dataset input hash changed: {case['case_id']}")
+            text = prepare_independent_input({'answer_text': raw.decode('utf-8')})['answer_text']
+            derived[case['case_id']] = hashlib.sha256(text.encode('utf-8')).hexdigest()
         for name, payload in (('baseline', baseline), ('candidate', candidate)):
             if payload.get('dataset') != dataset.manifest:
                 reasons.append(f'{name}: supplied dataset manifest differs')
+            indexed, _ = experiment_index(payload)
+            for (case_id, _), run in indexed.items():
+                outputs = run.get('outputs', {})
+                actual = outputs.get('grading_input_sha256')
+                if (actual is not None or outputs.get('grading', {}).get('status') != 'failed') and actual != derived.get(case_id):
+                    reasons.append(f'{name}: derived grading input hash differs: {case_id}')
     if reasons:
         return {'comparable': False, 'verdict': 'incomparable', 'reasons': reasons,
                 'baseline': None, 'candidate': None, 'deltas': {}}
-    before, after = _basic_experiment_metrics(baseline), _basic_experiment_metrics(candidate)
-    verdict = ('improved' if after['success_rate'] > before['success_rate'] else
-               'regressed' if after['success_rate'] < before['success_rate'] else 'not_improved')
+    before, after = compute_metrics(baseline, dataset), compute_metrics(candidate, dataset)
+    new_wrong = sorted(set(after['wrong_units']) - set(before['wrong_units']))
+    x, y = before['evidence_accuracy'], after['evidence_accuracy']
+    lower_evidence = x is not None and (y is None or y < x)
+    severe = {'new_wrong_grading': new_wrong, 'lower_evidence_accuracy': lower_evidence}
+    # Quality determines the verdict; latency and usage remain reported tradeoffs.
+    quality = [('mae', -1), ('item_agreement', 1), ('evidence_accuracy', 1),
+               ('success_rate', 1), ('unscored_totals', -1), ('unscored_items', -1)]
+    gains, losses = [], []
+    for field, direction in quality:
+        x, y = before[field], after[field]
+        if x is None or y is None:
+            if x is not None and y is None:
+                losses.append(field)
+            continue
+        change = (y - x) * direction
+        if change > 1e-12:
+            gains.append(field)
+        elif change < -1e-12:
+            losses.append(field)
+    for field in ('count', 'unjust_addition', 'unjust_deduction'):
+        change = after['wrong_grading'][field] - before['wrong_grading'][field]
+        if change < 0:
+            gains.append('wrong_grading.' + field)
+        elif change > 0:
+            losses.append('wrong_grading.' + field)
+    # False flags are measured only among correct grades; detection only among
+    # wrong grades. No wrong grades means recall is undefined, not zero.
+    for field, direction in (('recall', 1), ('false_flag_rate', -1)):
+        x, y = before['review_detection'][field], after['review_detection'][field]
+        if x is not None and y is not None:
+            change = (y - x) * direction
+            if change > 1e-12:
+                gains.append('review_detection.' + field)
+            elif change < -1e-12:
+                losses.append('review_detection.' + field)
+    verdict = ('regressed' if new_wrong or lower_evidence or losses else
+               'improved' if gains else 'not_improved')
     return {'comparable': True, 'verdict': verdict, 'reasons': [],
-            'baseline': before, 'candidate': after, 'deltas': metric_deltas(before, after)}
+            'baseline': before, 'candidate': after, 'deltas': metric_deltas(before, after),
+            'severe_regressions': severe, 'quality_gains': gains, 'quality_losses': losses}
