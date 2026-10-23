@@ -6,6 +6,7 @@ A missing score stays None. This module does not copy a 0 or a max into it.
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any
 
@@ -65,7 +66,10 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool]:
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return number
 
 
 def _spans(value: Any) -> list[EvidenceSpan]:
@@ -106,24 +110,31 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
         item_id = str(row.get("item_id") or "")
         if not item_id:
             continue
-        max_points = row.get("max_points", row.get("max_score"))
-        if _number(max_points) is None:
-            max_points = maxima.get(item_id, 0)
+        claimed = _number(row.get("max_points", row.get("max_score")))
+        rubric_max = maxima.get(item_id)
+        max_points = float(rubric_max if rubric_max is not None else (claimed if claimed is not None else 0))
+        reasons: list[str] = []
+        supplied_reason = str(row.get("review_reason") or "")
+        if supplied_reason:
+            reasons.append(supplied_reason)
+        if claimed is not None and rubric_max is not None and abs(claimed - float(rubric_max)) > 1e-6:
+            reasons.append("item_max_mismatch")
+        if "score" in row and row["score"] is not None and _number(row["score"]) is None:
+            reasons.append("score_not_number")
+            score = None
         else:
-            max_points = _number(max_points)
-        score = row["score"] if "score" in row else None
-        if score is not None:
-            score = _number(score)
+            raw_score = row["score"] if "score" in row else None
+            score = _number(raw_score) if raw_score is not None else None
         uncertainty = row.get("uncertainty")
         items.append(
             ItemResult(
                 item_id=item_id,
-                max_points=float(max_points or 0),
+                max_points=max_points,
                 score=score,
                 evidence_spans=_spans(row.get("evidence_spans", row.get("evidence"))),
                 math_reason=str(row.get("math_reason") or row.get("reason") or ""),
                 uncertainty=_number(uncertainty) if uncertainty is not None else None,
-                review_reason=str(row.get("review_reason") or ""),
+                review_reason="; ".join(reasons),
             )
         )
     total = payload.get("total_score", payload.get("score"))
@@ -145,8 +156,17 @@ def build_prompt(problem_text: str, answer_text: str, rubric: list[RubricItem]) 
                 for item in rubric
             ],
             "instructions": (
-                "Return a JSON object with items. "
-                "If you cannot grade an item, omit it. Do not invent a score."
+                "Return one JSON object and no other text. "
+                "The object has items and total_score. "
+                "items is an array of objects with item_id, score, evidence_spans, "
+                "math_reason, uncertainty, and review_reason. "
+                "score is a finite number, or null when the item cannot be graded. Do not invent a score. "
+                "evidence_spans is an array of objects with text and optional start, end, and source. "
+                "math_reason is a string. "
+                "uncertainty is a number from 0 to 1, or null. "
+                "review_reason is a string and is empty when the item is clear. "
+                "total_score is the sum of the item scores, or null if any score is null. "
+                "Rubric max_points is the point allocation. Do not return a different maximum."
             ),
         },
         ensure_ascii=False,
