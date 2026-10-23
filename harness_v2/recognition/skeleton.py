@@ -14,6 +14,11 @@ import unicodedata
 
 _FENCE = re.compile(r"```[A-Za-z]*")
 _FRAC_HEAD = re.compile(r"\\[dt]?frac(?![A-Za-z])\s*")
+_ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|√|\bsqrt(?=\s*\()")
+_SUPERSCRIPTS = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+")
+_SUPERSCRIPT_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_BARRED = re.compile(r"(?:[^\s\u0304\u0305][\u0304\u0305]+)+")
 _COMMANDS = [
     (r"\\leqq|\\leq|\\le(?![A-Za-z])", "<="),
     (r"\\geqq|\\geq|\\ge(?![A-Za-z])", ">="),
@@ -23,25 +28,26 @@ _COMMANDS = [
     (r"\\minus(?![A-Za-z])", "-"),
     (r"\\times|\\cdot(?![A-Za-z])", "*"),
     (r"\\pm(?![A-Za-z])", "+-"),
-    (r"\\sqrt(?![A-Za-z])", ""),
 ]
 _UNICODE = {"≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
-            "×": "*", "·": "*", "±": "+-", "√": ""}
+            "×": "*", "·": "*", "±": "+-"}
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
-_DROP = set("$\\{}()[]^_") | {"（", "）"}
+_DROP = set("$\\{}()[]_") | {"（", "）", "\u0304", "\u0305"}
 
 
-def _group(text: str, start: int) -> tuple[str, int] | None:
-    """Balanced ``{...}`` group (or a single token) starting at ``start``."""
+def _group(text: str, start: int, *, delimiters: str = "{") -> tuple[str, int] | None:
+    """Balanced group (or a single token) starting at ``start``."""
     while start < len(text) and text[start].isspace():
         start += 1
     if start >= len(text):
         return None
-    if text[start] != "{":
+    if text[start] not in delimiters:
         return text[start], start + 1
+    opening = text[start]
+    closing = {"{": "}", "(": ")", "[": "]"}[opening]
     depth = 0
     for index in range(start, len(text)):
-        depth += {"{": 1, "}": -1}.get(text[index], 0)
+        depth += {opening: 1, closing: -1}.get(text[index], 0)
         if depth == 0:
             return text[start + 1:index], index + 1
     return None
@@ -65,15 +71,53 @@ def _fractions(text: str) -> str:
         pos = denominator[1]
 
 
+def _radicand(text: str, start: int) -> tuple[str, int] | None:
+    """Read a grouped expression, nested root, number, or single variable."""
+    while start < len(text) and text[start].isspace():
+        start += 1
+    root = _ROOT_HEAD.match(text, start)
+    if root:
+        inner = _radicand(text, root.end())
+        end = inner[1] if inner else root.end()
+        return text[start:end], end
+    barred = _BARRED.match(text, start)
+    if barred:
+        return barred.group(), barred.end()
+    number = _NUMBER.match(text, start)
+    if number:
+        return number.group(), number.end()
+    return _group(text, start, delimiters="{([")
+
+
+def _content(text: str) -> str:
+    """Strip formatting while retaining the delimiters of canonical roots."""
+    out, pos = [], 0
+    while pos < len(text):
+        root = _ROOT_HEAD.match(text, pos)
+        if root:
+            argument = _radicand(text, root.end())
+            inner, pos = argument if argument else ("", root.end())
+            out.append(f"sqrt({_content(inner)})")
+        else:
+            ch = text[pos]
+            if not ch.isspace() and ch not in _DROP:
+                out.append(ch)
+            pos += 1
+    return "".join(out)
+
+
 def skeleton(text: str) -> str:
-    text = unicodedata.normalize("NFKC", _FENCE.sub("", text))
+    # NFKC alone would flatten superscripts into ordinary baseline digits.
+    text = _SUPERSCRIPTS.sub(lambda m: "^" + m.group().translate(_SUPERSCRIPT_MAP),
+                             _FENCE.sub("", text))
+    text = unicodedata.normalize("NFKC", text)
     text = _fractions(text)
     for pattern, repl in _COMMANDS:
         text = re.sub(pattern, repl, text)
-    text = _COMMAND_WORD.sub("", text)
+    text = _COMMAND_WORD.sub(lambda m: m.group() if m.group() == r"\sqrt" else "", text)
     for key, value in _UNICODE.items():
         text = text.replace(key, value)
-    return "".join(ch for ch in text if not ch.isspace() and ch not in _DROP)
+    return _content(text)
 
 
 def levenshtein(a: str, b: str) -> int:

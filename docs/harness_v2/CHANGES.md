@@ -460,3 +460,21 @@ Sol diff review round 3 (REJECT: 1 major). Corrects the 05 entry: rubric ids wer
 Review cap (3 rounds) reached; this fix was not re-reviewed by Sol.
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **750 passed in 20.75s**.
+
+## PR #12: Preserve radicals and exponents in skeleton CER (2026-10-24)
+
+`harness_v2/recognition/skeleton.py` now keeps square roots as `sqrt(...)`,
+canonicalizing LaTeX and Unicode roots, grouped or bare radicands, and vinculum
+marks. Nested roots retain their scope. Superscript digit runs are converted
+before NFKC; LaTeX and Unicode powers keep the same `^` operator. Losing a root,
+an exponent, or its operator therefore contributes to OCR CER. The shared CER
+normalizer is used by the OCR gate; preprocessing still defaults to `none`.
+
+`harness_v2/tests/test_skeleton_semantics.py` adds 47 regression cases for
+equivalent notation, nested roots and fractions, root scope, all superscript
+digits, multi-digit and signed powers, and CER errors when operators are lost.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests --deselect=harness_v2/tests/test_contracts.py::test_design_summary_records_metrics_and_dev_set`.
+The design-summary test is excluded because it reads a file forbidden for this
+fix. App tests require loopback socket access outside the restricted sandbox.
+Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).

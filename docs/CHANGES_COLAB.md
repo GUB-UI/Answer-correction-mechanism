@@ -543,3 +543,21 @@ Sol 差分レビュー2回目（REJECT: major 2、minor 1）への対応。03 �
 Sol 差分レビュー3回目（REJECT: major 1）への対応。05 の記述を訂正（項目IDが任意だった）。ルーブリック項目IDを必須にし、ない問題があれば止める。項目が同じように欠けた O と F や、想定外の項目IDが一致扱いになる問題を修正。レビュー上限（3回）に達したため、この修正は Sol の再レビューを受けていない。
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **750 passed in 20.75s**。
+
+## PR #12: skeleton CER で根号と指数を保持（2026-10-24）
+
+`harness_v2/recognition/skeleton.py` で平方根を `sqrt(...)` として保持する。
+LaTeX と Unicode の根号、括弧や上線の有無を共通表記にそろえ、入れ子の
+根号の範囲も保持する。上付き数字列は NFKC の前に変換し、LaTeX の指数と
+同じ `^` を残す。根号・指数・べき乗記号が OCR で欠落した場合は CER の
+誤りとして数える。OCR 判定はこの共通正規化を使い、前処理の既定は
+引き続き `none`（無効）。
+
+`harness_v2/tests/test_skeleton_semantics.py` に47件を追加。同じ数式表記の
+一致、根号と分数の入れ子、根号の範囲、全上付き数字、複数桁・符号付き
+指数、記号欠落時の CER 増加を検証する。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests --deselect=harness_v2/tests/test_contracts.py::test_design_summary_records_metrics_and_dev_set`。
+設計概要の既存テスト1件は閲覧禁止ファイルを読むため除外。アプリの
+テストには制限サンドボックス外でのローカルソケット接続が必要。
+結果: **796 passed, 1 deselected in 21.42s**（新規47件を含む）。
