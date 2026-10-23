@@ -6,3 +6,4 @@ pyyaml
 openai
 pytest
 pillow
+sympy
