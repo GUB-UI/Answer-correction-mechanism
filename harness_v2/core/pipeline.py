@@ -65,7 +65,8 @@ class Pipeline:
         }
         # Validate before allowlisting so malformed rubric rows cannot disappear.
         rubric_from_data(raw_view["rubric"])
-        view = prepare_independent_input(raw_view) if self.independent else raw_view
+        # Reference labels are post-hoc data even when independent mode is off.
+        view = prepare_independent_input(raw_view)
         rubric = rubric_from_data(view.get("rubric") or [])
         prompt_answer = str(view.get("answer_text") or "")
         grading_name = artifact.artifact_name if artifact is not None else ""
@@ -252,11 +253,23 @@ class Pipeline:
         request_id: str,
         raw_name: str,
     ) -> str:
-        if result.status == "validated":
+        reference_errors = []
+        reference_total = _optional_score(case.get("reference_score"))
+        if reference_total is not None and result.total_score != reference_total:
+            reference_errors.append("reference_total_mismatch")
+        reference_items = case.get("reference_items")
+        if isinstance(reference_items, dict):
+            predicted = {item.item_id: item.score for item in result.items}
+            for item_id, value in reference_items.items():
+                reference = _optional_score(value)
+                if reference is not None and predicted.get(item_id) != reference:
+                    reference_errors.append(f"reference_item_mismatch:{item_id}")
+        if result.status == "validated" and not reference_errors:
             return ""
         errors = [check.name for check in result.checks if not check.ok]
         if result.failure_reason and result.failure_reason not in errors:
             errors.insert(0, result.failure_reason)
+        errors.extend(reference_errors)
         uncertainties = [
             float(item.uncertainty)
             for item in result.items
@@ -272,7 +285,7 @@ class Pipeline:
             harness_version=__version__,
             rubric_version=str(case.get("rubric_version") or "v0"),
             predicted_score=result.total_score,
-            reference_score=_optional_score(case.get("reference_score")),
+            reference_score=reference_total,
             rubric_results=[item.to_dict() for item in result.items],
             evidence=[span.to_dict() for item in result.items for span in item.evidence_spans],
             errors=errors,

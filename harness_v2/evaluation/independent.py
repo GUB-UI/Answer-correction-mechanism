@@ -50,13 +50,14 @@ _POINT_TEXT = re.compile(
     r"(?:\d+(?:[.．]\d+)?\s*[/／]\s*\d+(?:[.．]\d+)?\s*点|"
     r"(?:採点(?:結果)?|参照得点|教師採点|得点|点数|評価点|合計点|スコア)\s*[:：=は]?\s*\d+(?:[.．]\d+)?\s*点?)"
 )
+_REFERENCE_ITEMS = re.compile(r"(?i)(?<!\w)[\"']?reference[_\s-]*items[\"']?\s*[:=：]\s*")
 
 
 def _drop_key(key: str) -> bool:
     lowered = str(key).lower().replace("-", "_")
     if lowered in {"max_points", "max_score"}:
         return False
-    return "score" in lowered
+    return "score" in lowered or lowered == "reference_items"
 
 
 def _strip_loaded(value: Any) -> Any:
@@ -99,6 +100,17 @@ def _scrub_embedded(text: str) -> str:
 
 def scrub_score_text(text: str) -> str:
     text = _scrub_embedded(text)
+    # Item labels can be a map without any nested key containing "score".
+    decoder = json.JSONDecoder()
+    for match in reversed(list(_REFERENCE_ITEMS.finditer(text))):
+        try:
+            _, end = decoder.raw_decode(text, match.end())
+        except ValueError:
+            # A labelled Python/YAML or malformed mapping is still reference
+            # data. Fail closed rather than pass its values through to a model.
+            text = text[:match.start()] + "[redacted-score]"
+            continue
+        text = text[:match.start()] + "[redacted-score]" + text[end:]
     for pattern in (_SCORE_TEXT, _ATTRIBUTED_SCORE, _POINT_TEXT):
         text = pattern.sub("[redacted-score]", text)
     return text
