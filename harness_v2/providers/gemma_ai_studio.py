@@ -121,7 +121,10 @@ def _response_id(response: Any) -> str:
 
 
 class GemmaAIStudio:
-    """AI Studio only, with an explicit free-tier project attestation.
+    """AI Studio only (vertexai=False, pinned endpoint). No paid fallback.
+
+    free_tier_project is an optional operator note recorded with each run;
+    it is not required (the project has no billing configured).
 
     429 stops immediately. Other transient errors retry with backoff up to
     MAX_ATTEMPTS. The model id is fixed. No second project, key, or API.
@@ -131,7 +134,7 @@ class GemmaAIStudio:
     def __init__(
         self,
         *,
-        free_tier_project: bool = False,
+        free_tier_project: bool | None = None,
         client_factory: Callable[..., Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.perf_counter,
@@ -147,10 +150,6 @@ class GemmaAIStudio:
         self.max_attempts = max_attempts
 
     def _build_client(self) -> Any:
-        # This is an operator attestation, not remote billing verification.
-        # Fail closed before SDK construction; never make a verification call.
-        if self.free_tier_project is not True:
-            raise ProviderSetupError("free_tier_project=True requires an explicitly confirmed free-tier AI Studio project")
         if _vertex_requested():
             raise ProviderSetupError(
                 "Vertex routing is disabled; unset GOOGLE_GENAI_USE_VERTEXAI and use the Gemini API key"
@@ -187,8 +186,8 @@ class GemmaAIStudio:
         config.setdefault("temperature", 0)
         client = self._build_client()
         recorded = {**config, "provider_policy": {
-            "free_tier_project": True,
-            "attestation_source": "caller_config",
+            "free_tier_project": self.free_tier_project if isinstance(self.free_tier_project, bool) else None,
+            "attestation_source": "caller_config" if isinstance(self.free_tier_project, bool) else "none",
             "vertexai": False,
             "base_url": AI_STUDIO_ENDPOINT,
         }}

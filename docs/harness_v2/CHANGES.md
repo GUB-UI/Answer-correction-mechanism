@@ -123,3 +123,10 @@ All eight partial findings (2, 4, 5, 6, 9, 10, 12, 13), all three new MAJOR find
 | `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md` | Record each changed file, behavior, reason and validation result. | Keep both existing change-log conventions complete. |
 
 Final validation: `/tmp/pt2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **311 passed**. The six new re-review modules contain **136 parameterized test cases**. The initial sandbox run failed only because existing legacy tests bind localhost mock servers; the passing run used the same command with `PYTHONPATH=/tmp/pr10_offline`, a temporary guard blocking external connections/DNS, and sandbox permission for those localhost fixtures. No external provider calls or model downloads were made. A read-only reviewer found additional natural-language blinding, numeric-prefix math and blocked-stdin cases; all were reproduced as failing tests and fixed before final validation. `git diff --check` is clean. No git writes were performed.
+
+## Free-tier attestation optional (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/providers/gemma_ai_studio.py` | `free_tier_project` is now optional (default `None`); the mandatory opt-in check is removed. `vertexai=False`, the pinned AI Studio endpoint, stop-on-429 and no fallback are unchanged. `provider_policy` records `free_tier_project` (or `null`) and `attestation_source` (`caller_config` or `none`). | The user confirmed the AI Studio key's project has no billing configured, so the extra opt-in only blocked runs. |
+| `harness_v2/tests/test_rereview_gemma_policy.py` | Replaces the "attestation required" tests with: omitted attestation builds the pinned client and records `null`/`none`; quota still stops after one call. | Lock the relaxed rule without loosening routing or 429 behaviour. |

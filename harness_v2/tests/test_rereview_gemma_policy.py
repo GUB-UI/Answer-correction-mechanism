@@ -29,19 +29,21 @@ def fake_sdk(monkeypatch, *, quota=False):
     return built, calls
 
 
-@pytest.mark.parametrize("opt_in", [False, None, "true", 1])
-def test_requires_explicit_boolean_free_tier_attestation(monkeypatch, opt_in):
+def test_attestation_is_optional_and_recorded_as_absent(monkeypatch):
     built, calls = fake_sdk(monkeypatch)
-    with pytest.raises(ProviderSetupError, match="free_tier_project"):
-        GemmaAIStudio(free_tier_project=opt_in).generate("grade", request_id="r")
-    assert built == calls == []
+    exchange = GemmaAIStudio().generate("grade", request_id="r")
+    assert built == [{"vertexai": False, "api_key": "test-key",
+                      "http_options": {"base_url": "https://generativelanguage.googleapis.com"}}]
+    policy = exchange.settings["provider_policy"]
+    assert policy["free_tier_project"] is None and policy["attestation_source"] == "none"
+    assert policy["vertexai"] is False and len(calls) == 1
 
 
-def test_omitted_attestation_is_refused_before_sdk_construction(monkeypatch):
-    built, calls = fake_sdk(monkeypatch)
-    with pytest.raises(ProviderSetupError, match="free_tier_project"):
+def test_attestation_optional_still_stops_on_quota(monkeypatch):
+    built, calls = fake_sdk(monkeypatch, quota=True)
+    with pytest.raises(QuotaExceeded):
         GemmaAIStudio().generate("grade", request_id="r")
-    assert built == calls == []
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("quota", [False, True])

@@ -220,3 +220,9 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md` | Record each changed file, behavior, reason and validation result. Keep both existing change-log conventions complete. |
 
 検証: `/tmp/pt2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **311 passed**。新しい再レビューテスト6ファイルに **136 ケース**。最初の sandbox 実行は既存テストの localhost モックサーバー作成権限だけで失敗したため、外部接続・DNS を拒否する一時的な `PYTHONPATH=/tmp/pr10_offline` ガードを付け、localhost フィクスチャ用の権限で同じコマンドを実行した。外部 API・モデル取得・git 書き込みは実施していない。独立した read-only レビューで見つかった自然文の得点漏れ、数式の数値接頭辞破壊、stdin 書込みの停止も、失敗する回帰テストを先に追加して修正した。`git diff --check` も成功。
+
+## harness v2: free-tier attestation optional (2026-10-23)
+
+- `harness_v2/providers/gemma_ai_studio.py`: `free_tier_project` の明示オプトインを必須から任意に変更（ユーザー確認: AI Studioキーのプロジェクトは課金未設定）。`vertexai=False`、AI Studioエンドポイント固定、429で停止、有料フォールバックなしは維持。指定の有無を `provider_policy` に記録。
+- `harness_v2/tests/test_rereview_gemma_policy.py`: 任意化と429停止の回帰テストに置換。
+- 検証: `pytest -q harness_v2/tests math-answer-diagnosis/tests` → 308 passed。
