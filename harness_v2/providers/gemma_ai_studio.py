@@ -13,6 +13,8 @@ MODEL_ID = "gemma-4-31b-it"
 API_KEY_ENV = "GEMINI_API_KEY"
 AI_STUDIO_ENDPOINT = "https://generativelanguage.googleapis.com"
 MAX_ATTEMPTS = 3
+# Per-request HTTP timeout (ms). Without it a stalled AI Studio call blocks the batch forever.
+REQUEST_TIMEOUT_MS = 180_000
 _TRANSIENT_STATUS = {408, 500, 502, 503, 504}
 _VERTEX_ENV = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_VERTEX_AI")
 _SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k")
@@ -170,7 +172,7 @@ class GemmaAIStudio:
             factory = genai.Client
         self._client = factory(
             vertexai=False, api_key=key,
-            http_options={"base_url": AI_STUDIO_ENDPOINT},
+            http_options={"base_url": AI_STUDIO_ENDPOINT, "timeout": REQUEST_TIMEOUT_MS},
         )
         return self._client
 

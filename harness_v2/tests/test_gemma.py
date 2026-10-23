@@ -182,7 +182,7 @@ def test_client_is_constructed_for_the_gemini_api(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "google", google)
     monkeypatch.setitem(sys.modules, "google.genai", genai)
     exchange = GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-off")
-    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com"}}]
+    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 180000}}]
     assert "project" not in captured[0]
     assert "location" not in captured[0]
     assert exchange.status == "ok"

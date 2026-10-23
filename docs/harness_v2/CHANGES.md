@@ -130,3 +130,10 @@ Final validation: `/tmp/pt2/bin/python -m pytest -q harness_v2/tests math-answer
 | --- | --- | --- |
 | `harness_v2/providers/gemma_ai_studio.py` | `free_tier_project` is now optional (default `None`); the mandatory opt-in check is removed. `vertexai=False`, the pinned AI Studio endpoint, stop-on-429 and no fallback are unchanged. `provider_policy` records `free_tier_project` (or `null`) and `attestation_source` (`caller_config` or `none`). | The user confirmed the AI Studio key's project has no billing configured, so the extra opt-in only blocked runs. |
 | `harness_v2/tests/test_rereview_gemma_policy.py` | Replaces the "attestation required" tests with: omitted attestation builds the pinned client and records `null`/`none`; quota still stops after one call. | Lock the relaxed rule without loosening routing or 429 behaviour. |
+
+## Gemma request timeout (2026-10-23, found in the first live run)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/providers/gemma_ai_studio.py` | `REQUEST_TIMEOUT_MS = 180000` passed as `http_options.timeout` to the pinned AI Studio client. Endpoint, `vertexai=False`, stop-on-429 and no fallback unchanged. | In the Phase 2 live run, two AI Studio calls stalled with no response (one blocked the batch for >20 min). A bounded timeout turns a stall into a recorded error instead of a hang. |
+| `harness_v2/tests/test_rereview_gemma_policy.py`, `harness_v2/tests/test_gemma.py` | Expect the timeout in the pinned SDK options; new test checks it is set and bounded. | Regression for the hang. |
