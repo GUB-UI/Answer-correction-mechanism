@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from harness_v2.core.contracts import RunRecord
@@ -40,3 +42,34 @@ def test_store_redacts_secrets_and_rejects_images(tmp_path, monkeypatch) -> None
     saved = store.list_runs()[0]
     assert saved["input_tokens"] == 3
     assert saved["output_tokens"] == 4
+    reopened = RunStore(store.db_path, artifacts, readonly=True)
+    assert reopened.list_runs() == [saved]
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        reopened.update_outputs(saved["run_id"], {"note": "replacement"})
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        reopened.save_run(RunRecord(**{**saved, "run_id": "another-run"}))
+    assert reopened.list_runs() == [saved]
+
+
+def test_readonly_store_does_not_create_missing_database_or_parents(tmp_path):
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    path = tmp_path / "missing" / "database.sqlite"
+    store = RunStore(path, artifacts, readonly=True)
+    with pytest.raises(sqlite3.OperationalError, match="unable to open database"):
+        store.list_runs()
+    assert not path.parent.exists()
+
+
+def test_readonly_store_skips_schema_initialization(tmp_path):
+    from harness_v2.storage.permissions import private_open
+
+    path = tmp_path / "empty.sqlite"
+    with private_open(path, "wb"):
+        pass
+    store = RunStore(path, ArtifactStore(tmp_path / "artifacts"), readonly=True)
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        store.list_runs()
+    assert path.read_bytes() == b""
+    with store._connect() as conn:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("CREATE TABLE forbidden (value TEXT)")

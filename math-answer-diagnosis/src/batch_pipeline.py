@@ -79,7 +79,14 @@ def latest_student_ocr(
         if r.input_type == input_type and (input_type != "ocr_output" or not r.human_corrected)
     ]
     if input_type == "ocr_output":
-        results = [r for r in results if provenance is not None and r.provenance == provenance]
+        results = [
+            r for r in results
+            if provenance is not None and r.provenance == provenance
+            and (
+                not provenance.settings.get("formula_enabled")
+                or r.raw_output.get("formula_summary", {}).get("completed") is True
+            )
+        ]
     return max(results, key=lambda r: r.created_at) if results else None
 
 
@@ -122,7 +129,7 @@ def run_batch(
     else:
         adapter = MockOCRAdapter()
     apply_formula = use_glm and opts.apply_formula and config.formula.enabled
-    expected: dict[str, OCRProvenance] = {}
+    expected: dict[str, OCRProvenance | None] = {}
 
     # フェーズ1: OCR（GLM-OCR のみ。数式置換は次のフェーズ）
     started = time.monotonic()
@@ -198,8 +205,11 @@ def run_batch(
                     adapter=adapter, apply_formula=True,
                 )
                 complete = (
-                    result.provenance is not None
+                    refined.raw_output.get("formula_summary", {}).get("completed") is True
+                    and result.provenance is not None
+                    and current is not None
                     and result.provenance.image_sha256 == current.image_sha256
+                    and result.provenance.settings.get("backend") == current.settings.get("backend")
                     and current == expected[answer_id]
                 )
                 refined = refined.model_copy(update={"provenance": current if complete else None})
