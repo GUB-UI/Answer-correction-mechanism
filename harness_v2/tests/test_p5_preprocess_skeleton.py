@@ -77,3 +77,70 @@ def test_cer_and_gate():
     assert not gate_a1(base, {"a": 0.10, "b": 0.05, "c": 0.19}, target="c")["passed"]
     with pytest.raises(ValueError):
         cer("x", "")
+
+
+@pytest.mark.parametrize("a,b", [
+    (r"\frac{x^{2}}{3}", "x²/3"),
+    (r"\frac{\sqrt{2}}{2}", "√2/2"),
+    (r"\frac{a_{1}}{b}", "a1/b"),
+    (r"\frac{{1}}{2}", "1/2"),
+    (r"\frac{1}{\frac{2}{3}}", "1/(2/3)"),
+    (r"\frac12", "1/2"),
+    ("\\frac｛1｝｛2｝", "1/2"),
+])
+def test_grouped_fraction_arguments(a, b):
+    assert skeleton(a) == skeleton(b)
+
+
+def test_gate_boundaries_inclusive():
+    assert gate_a1({"t": 0.30, "o": 0.06}, {"t": 0.28, "o": 0.07}, target="t")["passed"]
+    assert not gate_a1({"t": 0.30, "o": 0.06}, {"t": 0.2801, "o": 0.06}, target="t")["passed"]
+    assert not gate_a1({"t": 0.30, "o": 0.06}, {"t": 0.20, "o": 0.0701}, target="t")["passed"]
+
+
+@pytest.mark.parametrize("name", ["none", "gray_autocontrast_x1.5"])
+def test_runner_records_provenance(tmp_path, monkeypatch, name):
+    import contextlib
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+
+    seen = {}
+
+    class Tokens:
+        shape = [1, 3]
+        def __getitem__(self, index):
+            return [0, 1, 2]
+
+    def template(messages, **kwargs):
+        seen["image"] = messages[0]["content"][0]["image"]
+        seen["kwargs"] = kwargs
+        return {"input_ids": SimpleNamespace(shape=[1, 1])}
+
+    def generate(**kwargs):
+        seen["generate"] = kwargs
+        return Tokens()
+
+    processor = SimpleNamespace(apply_chat_template=template, decode=lambda *a, **k: "text")
+    model = SimpleNamespace(eval=lambda: SimpleNamespace(generate=generate))
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        set_num_threads=lambda n: None, float32="float32", inference_mode=contextlib.nullcontext))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoProcessor=SimpleNamespace(from_pretrained=lambda *a, **kw: processor),
+        AutoModelForImageTextToText=SimpleNamespace(from_pretrained=lambda *a, **kw: model)))
+    path = tmp_path / "sheet.png"
+    _img().save(path)
+    args = SimpleNamespace(threads=1, out=str(tmp_path / "o"), images=[str(path)], max_edge=0,
+                           max_new_tokens=7, preprocess=name)
+    assert ocr._run_model(args) == 0
+    stats = json.loads((tmp_path / "o" / "stats.jsonl").read_text())
+    assert stats["original_image_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert stats["model_image_sha256"] == ocr.image_sha256(seen["image"])
+    assert stats["model_image_size"] == list(seen["image"].size)
+    assert stats["model_image_size"] == ([40, 20] if name == "none" else [60, 30])
+    assert stats["preprocess"] == {"name": name, "params": ocr.PREPROCESS_PARAMS[name]}
+    assert stats["prompt_sha256"] == hashlib.sha256(ocr.PROMPT.encode()).hexdigest()
+    assert stats["revision"] == ocr.REVISION and stats["dtype"] == "float32"
+    assert stats["do_sample"] is False and seen["generate"]["do_sample"] is False
+    assert seen["generate"]["max_new_tokens"] == 7 and stats["enable_thinking"] is False
+    assert seen["kwargs"]["enable_thinking"] is False

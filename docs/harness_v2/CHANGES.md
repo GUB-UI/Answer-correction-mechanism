@@ -422,3 +422,17 @@ Cycle B, evaluation only (no grading component changes). Characterization, not a
 | `harness_v2/tests/test_p5_challenge.py` | Transforms, determinism, zero-eligible handling, empty references, 0700/0600 permissions, pairing and incomplete counting. | Regression contract. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **734 passed in 22.16s**.
+
+## Phase 5 / 04: Skeleton fraction parsing, inclusive gate boundaries, runner provenance tests (2026-10-24)
+
+Sol diff review round 1 (REJECT: 1 major, 2 minor). The 02 entry's claim that notation differences were fully neutralized was wrong for fractions with grouped arguments; this entry fixes it.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/skeleton.py` | NFKC is applied first; `\\frac` arguments are parsed with balanced braces (or a single token), recursively. | [major] `\\frac{x^{2}}{3}` lost its division operator, so a notation-only change could pass the A1 gate. |
+| `harness_v2/recognition/skeleton.py` | `gate_a1` boundaries are inclusive with a 1e-9 tolerance. | [minor] 0.30 → 0.28 failed the 0.02 gain and a 0.01 loss was rejected because of float subtraction. |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | Powers, roots, subscripts, redundant groups, nested and brace-less fractions, full-width braces; boundary values; mocked `_run_model` for both modes checking source hash, model-image hash and size, preprocessing record, prompt hash, revision, dtype and generation settings. | [minor] provenance contract was untested. |
+
+The A1 gate was recomputed with the fixed skeleton; the outcome is reported in the Phase 5 report.
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **744 passed in 21.11s**.

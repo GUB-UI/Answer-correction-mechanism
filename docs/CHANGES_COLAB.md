@@ -513,3 +513,16 @@ Cycle B。評価用のみで採点部は変えない。合否判定ではなく�
 | `harness_v2/tests/test_p5_challenge.py` | 変換、決定性、対象0字の扱い、空の正解点、権限、対応付けを検証。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **734 passed in 22.16s**。
+
+## harness v2 Phase 5 / 04: 分数の解析修正・判定境界・OCR 記録のテスト（2026-10-24）
+
+Sol 差分レビュー1回目（REJECT: major 1、minor 2）への対応。02 で「表記の違いを吸収した」と書いたが、括弧を含む分数では不十分だったので訂正する。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/skeleton.py` | 先に NFKC をかけ、`\\frac` の引数を括弧の対応をとって再帰的に読む。`\\frac{x^{2}}{3}` で割り算記号が消え、表記だけの違いで判定を通ってしまう問題（major）を修正。判定の境界は等号を含め、1e-9 の誤差を許す（minor）。 |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | 指数・根号・添字・入れ子の分数、境界値、OCR 実行の記録（元画像ハッシュ、モデルに渡した画像、前処理、プロンプト、設定）を偽モデルで検証（minor）。 |
+
+修正後の skeleton で A1 判定を再計算し、結果は Phase 5 レポートに記載。
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **744 passed in 21.11s**。
