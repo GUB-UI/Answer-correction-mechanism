@@ -82,3 +82,73 @@ def test_comparison_rejects_both_runs_claiming_another_derived_grading_input(tmp
         payload['runs'][0]['outputs']['grading_input_sha256'] = '0'*64
     result = compare_experiments(baseline, candidate)
     assert result['verdict'] == 'incomparable'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('engine', 'different-engine'), ('revision', 'different-revision'),
+    ('dtype', 'bfloat16'), ('source_sha256', '0' * 64),
+])
+@pytest.mark.parametrize('both_sides', [False, True])
+def test_comparison_checks_actual_ocr_metadata_against_manifest(tmp_path, field, value, both_sides):
+    from harness_v2.evaluation.comparison import compare_experiments
+    baseline, candidate, _ = result_pair(tmp_path)
+    for payload in ([baseline, candidate] if both_sides else [candidate]):
+        payload['runs'][0]['outputs']['ocr_metadata'][field] = value
+    result = compare_experiments(baseline, candidate)
+    assert result['verdict'] == 'incomparable'
+    assert any('OCR' in reason and field in reason for reason in result['reasons'])
+
+
+@pytest.mark.parametrize('field', ['engine', 'revision', 'dtype', 'source_sha256', None])
+def test_comparison_refuses_missing_recorded_ocr_provenance_on_both_sides(tmp_path, field):
+    from harness_v2.evaluation.comparison import compare_experiments
+    baseline, candidate, _ = result_pair(tmp_path)
+    for payload in [baseline, candidate]:
+        outputs = payload['runs'][0]['outputs']
+        if field is None:
+            outputs.pop('ocr_metadata')
+        else:
+            outputs['ocr_metadata'].pop(field, None)
+    assert compare_experiments(baseline, candidate)['verdict'] == 'incomparable'
+
+
+def test_comparison_normalizes_manifest_revision_alias_and_ignores_elapsed_time(tmp_path):
+    from harness_v2.evaluation.comparison import compare_experiments
+    from harness_v2.evaluation.dataset import write_dataset
+    from harness_v2.run import run_experiment
+    from harness_v2.tests.test_p3_dataset import sample_cases
+    cases = sample_cases()
+    cases[0]['ocr_metadata'] = {'engine': 'Xiaomi-OCR-0', 'model_revision': 'revision-1',
+                                'dtype': 'float32', 'source': 'cpu-batch'}
+    manifest = write_dataset(tmp_path / 'dataset', dataset_id='d', version='1', cases=cases,
+                             reference_scores={'P': 4})
+    config = config_at(tmp_path)
+    for name in ['baseline', 'candidate']:
+        run_experiment(config, manifest, repeats=1, out=tmp_path / name)
+    baseline = json.loads((tmp_path / 'baseline/results.json').read_text())
+    candidate = json.loads((tmp_path / 'candidate/results.json').read_text())
+    candidate['runs'][0]['outputs']['ocr_metadata']['elapsed_s'] = 99
+    assert compare_experiments(baseline, candidate)['comparable']
+    for payload in [baseline, candidate]:
+        payload['runs'][0]['outputs']['ocr_metadata']['revision'] = 'wrong'
+    assert compare_experiments(baseline, candidate)['verdict'] == 'incomparable'
+
+
+def test_comparison_detects_changed_sidecar_even_with_same_text_and_effective_engine(tmp_path):
+    from harness_v2.evaluation.comparison import compare_experiments
+    from harness_v2.evaluation.dataset import load_dataset
+    from harness_v2.run import run_experiment
+    from pathlib import Path
+    manifest = make_dataset(tmp_path)
+    source = Path(load_dataset(manifest).cases[0]['ocr_import_path'])
+    sidecar = source.with_name(source.name + '.meta.json')
+    config = config_at(tmp_path)
+    for name, elapsed in [('baseline', 1), ('candidate', 2)]:
+        sidecar.write_text(json.dumps({'elapsed_s': elapsed}))
+        run_experiment(config, manifest, repeats=1, out=tmp_path / name)
+    baseline = json.loads((tmp_path / 'baseline/results.json').read_text())
+    candidate = json.loads((tmp_path / 'candidate/results.json').read_text())
+    assert baseline['runs'][0]['outputs']['ocr_sha256'] == candidate['runs'][0]['outputs']['ocr_sha256']
+    result = compare_experiments(baseline, candidate)
+    assert result['verdict'] == 'incomparable'
+    assert any('sidecar' in reason for reason in result['reasons'])

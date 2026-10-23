@@ -367,3 +367,13 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_runner.py` | 行保存直後・失敗ファイル作成前の中断、旧形式の来歴欠落、完了済み得点の保持、過去の失敗試行、再開の冪等性と0600/0700を検証。SQLiteだけで復元できることを保証する。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **455 passed in 14.03s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 03: 実行済みOCR来歴の照合（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/ocr.py` | 自動・明示指定のメタデータファイルを取り込む際、元のバイト列からsidecar_sha256を算出し、答案のsource_sha256も記録。メタデータ結合後に確定し、申告値による上書きを防ぐ。答案が同じでもサイドカーの変更を追跡可能にする。 |
+| `harness_v2/evaluation/comparison.py` | 各実行のengine・revision・dtype・source hashをmanifestと相手側の記録に照合。宣言済みsource/sidecar hashとrevision別名を扱い、来歴欠落・sidecar変更を拒否。経過時間は識別対象から除く。同じmanifestや両側の同一改竄に隠れる条件差を防ぐ。 |
+| `harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_ocr_metadata.py` | 片側/両側改変、項目欠落、revision別名、サイドカーのみの変更、CRLFの厳密ハッシュ、偽装値と非公開権限を回帰テストにする。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **473 passed in 14.33s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。

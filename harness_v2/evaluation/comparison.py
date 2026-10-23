@@ -148,6 +148,41 @@ def experiment_index(payload: dict) -> tuple[dict, list[str]]:
     return indexed, reasons
 
 
+
+def _ocr_metadata_reasons(case: dict, outputs: dict) -> list[str]:
+    """Check effective run provenance, not just agreement between manifests."""
+    from harness_v2.recognition.run_ocr_cpu import MODEL_ID
+
+    actual = outputs.get('ocr_metadata')
+    # Failures before OCR have no imported provenance to validate.
+    if (actual is None and not outputs.get('ocr_sha256')
+            and outputs.get('grading', {}).get('status') == 'failed'):
+        return []
+    if not isinstance(actual, dict):
+        return ['run OCR metadata is missing or invalid']
+    declared = case.get('ocr_metadata', {})
+    if not isinstance(declared, dict):
+        return ['manifest OCR metadata is invalid']
+    input_hash = case.get('grading_input', {}).get('sha256')
+    expected = {'engine': str(declared.get('engine') or MODEL_ID),
+                'revision': str(declared.get('revision') or declared.get('model_revision') or ''),
+                'dtype': str(declared.get('dtype') or ''), 'source_sha256': input_hash}
+    # Source locations are optional because portable datasets can move. An
+    # explicitly declared source or sidecar digest must still be honored.
+    for field in ('source', 'sidecar_sha256'):
+        if field in declared:
+            expected[field] = declared[field]
+    reasons = [f'run OCR {field} differs from manifest or is missing'
+               for field, value in expected.items() if field not in actual or actual[field] != value]
+    if 'source_sha256' in declared and declared['source_sha256'] != input_hash:
+        reasons.append('manifest OCR source_sha256 differs from input hash')
+    digest = actual.get('sidecar_sha256')
+    if 'sidecar_sha256' in actual and (not isinstance(digest, str) or len(digest) != 64
+            or any(char not in '0123456789abcdef' for char in digest)):
+        reasons.append('run OCR sidecar_sha256 is invalid')
+    return reasons
+
+
 def _provenance_reasons(payload: dict) -> list[str]:
     reasons = []
     manifest = payload.get('dataset', {})
@@ -188,6 +223,7 @@ def _provenance_reasons(payload: dict) -> list[str]:
         actual = outputs.get('experiment_case')
         if not isinstance(actual, dict) or any(actual.get(k) != v for k, v in job.items()):
             reasons.append(f'run case provenance differs from expected case: {case_id}')
+        reasons.extend(f'{reason}: {case_id}' for reason in _ocr_metadata_reasons(case, outputs))
         observed = outputs.get('ocr_sha256')
         if observed is not None and observed != expected['input_sha256']:
             reasons.append(f'run OCR/input hash differs from manifest: {case_id}')
@@ -251,6 +287,11 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
             xv, yv = x.get('outputs', {}).get(field), y.get('outputs', {}).get(field)
             if xv != yv:
                 reasons.append(f'{label} differs: {key}')
+        xm, ym = x.get('outputs', {}).get('ocr_metadata'), y.get('outputs', {}).get('ocr_metadata')
+        if isinstance(xm, dict) and isinstance(ym, dict):
+            for field in ('engine', 'revision', 'dtype', 'source_sha256', 'sidecar_sha256'):
+                if xm.get(field) != ym.get(field):
+                    reasons.append(f'run OCR {field} differs between counterparts: {key}')
         for run, cfg in ((x, left), (y, right)):
             settings = run.get('outputs', {}).get('settings', {})
             if run.get('outputs', {}).get('grading', {}).get('status') != 'failed':

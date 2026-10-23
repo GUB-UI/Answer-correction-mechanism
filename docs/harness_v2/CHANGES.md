@@ -276,3 +276,13 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_runner.py` | Interrupt after row save and before failure-file write; exercise legacy provenance recovery, unchanged completed grades, historical failed attempts, idempotency and private permissions. | Prove recovery works from SQLite alone while preserving attempt history and reference isolation. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **455 passed in 14.03s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks allowed).
+
+## Phase 3 review fix / 03: Validate recorded OCR provenance (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/ocr.py` | Hash exact imported text bytes as source_sha256 and exact sidecar bytes as sidecar_sha256, for automatic and explicit metadata files. Compute these after merging metadata so supplied claims cannot override them. | Unchanged transcript bytes do not prove that mutable sidecar provenance stayed unchanged. |
+| `harness_v2/evaluation/comparison.py` | Check each run's recorded engine/revision/dtype/source hash against manifest expectations and its counterpart; honor declared source/sidecar hashes and revision aliases. Reject missing provenance on OCR-bearing runs and changed sidecar hashes; exclude elapsed time from the identity. | Matching manifests or identical corrupt run metadata must not conceal different actual OCR conditions. |
+| `harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_ocr_metadata.py` | Cover one/both-side mutations, missing fields, revision aliases, sidecar-only changes, exact CRLF hashes, forged claims and private permissions. | Keep comparisons fail-closed while preserving byte identity and offline evaluation. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **473 passed in 14.33s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks allowed).

@@ -10,6 +10,7 @@ bfloat16 is refused. The model is not downloaded by unit tests.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import subprocess
@@ -100,12 +101,16 @@ class XiaomiOCR:
         if not source.is_file():
             raise OCRImportError(f"OCR text file not found: {source}")
         with private_open(source, "rb") as handle:
-            raw = handle.read().decode("utf-8")
+            raw_bytes = handle.read()
+        raw = raw_bytes.decode("utf-8")
         sidecar = Path(metadata_path) if metadata_path else source.with_name(source.name + ".meta.json")
         meta: dict[str, Any] = {}
+        sidecar_sha256 = None
         if metadata_path is not None or sidecar.exists():
-            with private_open(sidecar) as handle:
-                loaded = json.load(handle)
+            with private_open(sidecar, "rb") as handle:
+                sidecar_bytes = handle.read()
+            loaded = json.loads(sidecar_bytes.decode("utf-8"))
+            sidecar_sha256 = hashlib.sha256(sidecar_bytes).hexdigest()
             if not isinstance(loaded, dict):
                 raise OCRImportError("OCR metadata must be an object")
             meta.update(loaded)
@@ -113,6 +118,12 @@ class XiaomiOCR:
             if not isinstance(metadata, dict):
                 raise OCRImportError("OCR metadata must be an object")
             meta.update(metadata)
+        # Byte identities describe what was actually imported, regardless of
+        # claims in case metadata or the sidecar itself.
+        meta["source_sha256"] = hashlib.sha256(raw_bytes).hexdigest()
+        meta.pop("sidecar_sha256", None)
+        if sidecar_sha256 is not None:
+            meta["sidecar_sha256"] = sidecar_sha256
         timing = meta.get("timing") if isinstance(meta.get("timing"), dict) else {}
         elapsed = meta.get("elapsed_s", meta.get("wall_s", timing.get("elapsed_s", timing.get("wall_s"))))
         if elapsed is None and _optional_float(meta.get("elapsed_ms")) is not None:
