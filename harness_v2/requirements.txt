@@ -1,0 +1,4 @@
+# Optional runtime dependencies for harness_v2.
+# Unit tests mock google-genai. sympy is used for mechanical equivalence.
+sympy
+google-genai
