@@ -106,6 +106,12 @@ class RunStore:
         record.run_id = run_id
         return record
 
+    def update_outputs(self, run_id: str, outputs: dict[str, Any]) -> None:
+        """Attach runner provenance to one existing run, retaining its attempt history."""
+        with self._connect() as conn:
+            conn.execute("UPDATE runs SET outputs_json = ? WHERE run_id = ?",
+                         (json.dumps(redact(outputs), ensure_ascii=False), run_id))
+
     def list_runs(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM runs ORDER BY created_at, run_id").fetchall()

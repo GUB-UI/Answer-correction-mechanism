@@ -226,3 +226,13 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/tests/test_p3_dataset.py, docs/harness_v2/phase3_usage.md` | Cover temporary source fixtures, CRLF, separation, hash tampering, path escapes, duplicate cases and 0600/0700 modes; document schema and builder command. | Make input identity and privacy independently verifiable. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **415 passed in 12.68s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 08: Repeatable resumable run CLI (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/run.py` | Load explicit config/dataset; deterministically identify each repetition; resume from SQLite; checkpoint state/results atomically; save per-run failures; stop immediately on quota. Record constructor failures through a lazy provider boundary. | Replace one-off Phase 2 scripts with a repeatable offline-testable experiment entry point. |
+| `harness_v2/providers/gemma_ai_studio.py, harness_v2/providers/fixture.py, harness_v2/core/pipeline.py, harness_v2/storage/sqlite_store.py` | Forward effective generation settings including seed, bind requested Gemma model without fallback, retain fixture settings and attach experiment provenance to stored runs. | Configuration must describe the actual call and immutable input/attempt history. |
+| `harness_v2/tests/test_p3_runner.py, docs/harness_v2/phase3_usage.md` | Test deterministic repetitions, completed skips, retry after quota/setup errors, delay, offline CLI, settings and incompatible resume identities; document config and commands. | Ensure reproducibility and label isolation without live Gemma/Codex calls. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **420 passed in 13.13s** (offline guard; loopback mocks allowed).

@@ -22,12 +22,12 @@ class FixtureProvider:
         request_id: str,
         settings: dict[str, Any] | None = None,
     ) -> ProviderExchange:
-        del prompt, settings
+        del prompt
         return ProviderExchange(
             request_id=request_id,
             model_requested=self.model_id,
             model_returned=self.model_id,
-            settings={},
+            settings=dict(settings or {}),
             input_tokens=None,
             output_tokens=None,
             latency_ms=0,

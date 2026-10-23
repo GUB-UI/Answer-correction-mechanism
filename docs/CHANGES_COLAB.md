@@ -318,3 +318,13 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_dataset.py, docs/harness_v2/phase3_usage.md` | 一時fixtureでビルダー・ハッシュ改竄・CRLF・分離・権限を検証。実データでも/tmp/p3_dev_datasetへ7条件を構築し、APIは呼ばない。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **415 passed in 12.68s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 08: 繰返し実行CLIと再開（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | config・dataset・repeats・outを受けるCLIを追加。IDを決定的に生成し、完了済みをスキップ、失敗試行を別成果物で再実行。429では状態・実行記録・FailureCaseを保存して即停止する。 |
+| `harness_v2/providers/gemma_ai_studio.py, harness_v2/providers/fixture.py, harness_v2/core/pipeline.py, harness_v2/storage/sqlite_store.py` | モデル指定とseed等の生成設定を実呼出しへ渡し、試行来歴を保存。セットアップ例外もPipeline内で記録する。 |
+| `harness_v2/tests/test_p3_runner.py, docs/harness_v2/phase3_usage.md` | fixtureでID・再開・429・構築例外・待機・CLI・設定伝播・参照分離を検証し、コマンドとJSON例を記載。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **420 passed in 13.13s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。

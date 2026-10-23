@@ -128,7 +128,8 @@ class Pipeline:
                         "ocr_sha256": artifact.sha256 if artifact else "",
                         "grading_input_artifact": grading_name, "grading_input_sha256": grading_hash})
         self.store.artifacts.write_text(prompt_name, prompt)
-        exchange = self.provider.generate(prompt, request_id=request_id)
+        kwargs = {"settings": case["generation_settings"]} if "generation_settings" in case else {}
+        exchange = self.provider.generate(prompt, request_id=request_id, **kwargs)
         raw_name = f"raw/{artifact_id}.txt"
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         result = self._grade(exchange, rubric, prompt_answer, request_id)

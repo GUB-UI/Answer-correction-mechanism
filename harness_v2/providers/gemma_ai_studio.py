@@ -17,7 +17,7 @@ MAX_ATTEMPTS = 3
 REQUEST_TIMEOUT_MS = 180_000
 _TRANSIENT_STATUS = {408, 500, 502, 503, 504}
 _VERTEX_ENV = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_VERTEX_AI")
-_SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k")
+_SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k", "seed")
 
 
 def _vertex_requested() -> bool:
@@ -137,6 +137,7 @@ class GemmaAIStudio:
         self,
         *,
         free_tier_project: bool | None = None,
+        model_id: str = MODEL_ID,
         client_factory: Callable[..., Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.perf_counter,
@@ -144,6 +145,9 @@ class GemmaAIStudio:
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
+        if not isinstance(model_id, str) or not model_id.startswith("gemma-"):
+            raise ValueError("GemmaAIStudio requires a Gemma model; no paid fallback")
+        self.model_id = model_id
         self._client: Any | None = None
         self._client_factory = client_factory
         self.free_tier_project = free_tier_project
@@ -200,7 +204,7 @@ class GemmaAIStudio:
             started = self._monotonic()
             try:
                 response = client.models.generate_content(
-                    model=MODEL_ID,
+                    model=self.model_id,
                     contents=prompt,
                     config=config,
                 )
@@ -212,7 +216,7 @@ class GemmaAIStudio:
                                  "error_class": type(exc).__name__, "input_tokens": None, "output_tokens": None})
                 exchange = ProviderExchange(
                     request_id=request_id,
-                    model_requested=MODEL_ID,
+                    model_requested=self.model_id,
                     model_returned="",
                     settings=recorded,
                     input_tokens=None,
@@ -238,8 +242,8 @@ class GemmaAIStudio:
                              "input_tokens": input_tokens, "output_tokens": output_tokens})
             return ProviderExchange(
                 request_id=request_id,
-                model_requested=MODEL_ID,
-                model_returned=_model_returned(response) or MODEL_ID,
+                model_requested=self.model_id,
+                model_returned=_model_returned(response) or self.model_id,
                 settings=recorded,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
