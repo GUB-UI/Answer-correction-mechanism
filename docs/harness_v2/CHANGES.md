@@ -170,3 +170,12 @@ Validation: `/workspace/venv_h2/bin/python -m pytest -q harness_v2/tests math-an
 | `harness_v2/tests/test_p3_evidence.py` | Cover absence types, nonzero/null rejection, delimiter normalization, preserved spans and fabricated evidence. | Regression coverage for Phase 2 findings. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **394 passed in 12.69s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 02: Root runtime dependencies (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `requirements.txt` | Add bounded google-genai, jsonschema and sympy requirements in the existing range style. | Root installation must support every harness dependency, including the existing mechanical checker. |
+| `harness_v2/tests/test_p3_requirements.py` | Compare parsed dependency names and lower bounds between harness and root requirements. | Prevent the Phase 2 missing-SDK setup failures from recurring. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **395 passed in 12.30s** (offline guard; loopback mocks allowed).
