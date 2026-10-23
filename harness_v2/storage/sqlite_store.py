@@ -38,12 +38,20 @@ CREATE TABLE IF NOT EXISTS runs (
 
 
 class RunStore:
-    def __init__(self, db_path: Path, artifacts: ArtifactStore) -> None:
+    """Use ``readonly=True`` when opening existing runs for listing or analysis.
+
+    Read-only stores skip schema initialization and permission changes, and all
+    their connections use SQLite's mode=ro (including attempted writes).
+    """
+
+    def __init__(self, db_path: Path, artifacts: ArtifactStore, *, readonly: bool = False) -> None:
         self.db_path = Path(db_path)
-        private_directory(self.db_path.parent)
         self.artifacts = artifacts
-        with self._connect() as conn:
-            conn.execute(_SCHEMA)
+        self.readonly = readonly
+        if not readonly:
+            private_directory(self.db_path.parent)
+            with self._connect() as conn:
+                conn.execute(_SCHEMA)
 
     def _secure_files(self) -> None:
         private_directory(self.db_path.parent)
@@ -59,6 +67,7 @@ class RunStore:
 
     @contextmanager
     def _connect(self, *, read_only: bool = False):
+        read_only = self.readonly or read_only
         if read_only:
             conn = sqlite3.connect(self.db_path.resolve().as_uri() + '?mode=ro', uri=True)
         else:

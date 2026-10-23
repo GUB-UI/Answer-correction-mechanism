@@ -106,6 +106,28 @@ def test_existing_database_and_sidecars_are_secured_before_connect(tmp_path):
     assert mode(journal) == 0o600
 
 
+@pytest.mark.parametrize("journal_mode", ["PERSIST", "WAL"])
+def test_reopened_database_listing_preserves_modes(tmp_path, journal_mode):
+    path = tmp_path / "database.sqlite"
+    store = RunStore(path, ArtifactStore(tmp_path / "artifacts"))
+    # Keep the writer open so WAL and SHM remain present during the read.
+    with store._connect() as writer:
+        writer.execute(f"PRAGMA journal_mode={journal_mode}")
+        writer.execute("CREATE TABLE listing_probe (value TEXT)")
+        writer.commit()
+        sidecars = [path.with_name(path.name + suffix)
+                    for suffix in ("-journal", "-wal", "-shm")
+                    if path.with_name(path.name + suffix).exists()]
+        assert sidecars
+        for file in [path, *sidecars]:
+            file.chmod(0o644)
+        path.parent.chmod(0o755)
+        watched = [path, *sidecars, path.parent]
+        before = {file: mode(file) for file in watched}
+        assert RunStore(path, store.artifacts, readonly=True).list_runs() == []
+        assert {file: mode(file) for file in watched} == before
+
+
 def test_cpu_raw_ocr_outputs_are_private_on_create_and_rewrite(tmp_path, monkeypatch):
     from PIL import Image
     from harness_v2.recognition.run_ocr_cpu import _run_model

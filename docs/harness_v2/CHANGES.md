@@ -1,5 +1,13 @@
 # Harness v2 changes
 
+## Fix 1: open existing run databases without changing permissions
+
+- Added `RunStore(..., readonly=True)` for listing and analysis of existing databases. Construction skips schema initialization and permission enforcement; every connection uses SQLite `mode=ro`, including attempted writes. Writable stores retain private output permissions.
+- Updated listing-only runner test callers to use the read-only path. Metrics, comparisons, and reports consume saved JSON/rows without constructing writable stores.
+- First reproduced the constructor bug with rollback-journal and live WAL/SHM regression cases: listing changed 0644 databases and sidecars to 0600. The read-only reopening tests now verify that all file modes and the 0755 parent remain unchanged. Additional tests cover record round-trips, rejected writes, missing paths, and skipped schema creation.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **764 passed** (localhost mock servers permitted).
+
 ## PR #10: preserve input and shared-directory permissions
 
 - Read-only `private_open()` calls preserve file and directory modes and do not create missing parents. Config, dataset, OCR text/metadata, artifact, and exchange-result reads now use plain reads; SQLite listing uses a read-only connection.
