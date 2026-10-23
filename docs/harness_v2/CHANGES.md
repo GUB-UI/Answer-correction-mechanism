@@ -197,3 +197,12 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math
 | `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_latency.py` | Persist attempt_count/history in completed and quota records; verify 20ms error + 500ms backoff + 30ms final attempt with a fake clock. | Keep total and attempt distributions auditable without network calls. |
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **403 passed in 12.15s** (offline guard; loopback mocks allowed).
+
+## Phase 3 / 05: Imported OCR provenance (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/ocr.py` | Import <file>.meta.json or an explicit metadata path; merge case metadata with precedence, preserve engine/model revision/dtype/source/timing and normalize elapsed_s. | CPU/imported OCR must carry the same auditable provenance as local inference without rewriting bytes. |
+| `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_ocr_metadata.py` | Pass case provenance to OCR import and persist the full metadata alongside canonical fields. Test all import modes, precedence, CRLF and SHA256. | Allow Phase 2 imported fp32 outputs to be evaluated with their actual provenance. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **407 passed in 12.34s** (offline guard; loopback mocks allowed).

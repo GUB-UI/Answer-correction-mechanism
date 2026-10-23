@@ -159,6 +159,8 @@ class Pipeline:
                 "grading_input_artifact": grading_name,
                 "grading_input_sha256": grading_hash,
                 "ocr_metadata": {
+                    **artifact.metadata,
+                    "source": artifact.metadata.get("source", artifact.source_name),
                     "engine": artifact.engine,
                     "revision": artifact.revision,
                     "dtype": artifact.dtype,
@@ -238,7 +240,9 @@ class Pipeline:
     def _answer_text(self, case: dict[str, Any], request_id: str) -> OCRArtifact | None:
         import_path = str(case.get("ocr_import_path") or "")
         if import_path:
-            return self.ocr.import_file(Path(import_path), ocr_id=request_id)
+            return self.ocr.import_file(Path(import_path), ocr_id=request_id,
+                                        metadata=case.get("ocr_metadata"),
+                                        metadata_path=Path(case["ocr_metadata_path"]) if case.get("ocr_metadata_path") else None)
         answer = case.get("answer_text")
         if isinstance(answer, str) and answer:
             return self.ocr.store_text(answer, ocr_id=request_id, source_name="answer_text")

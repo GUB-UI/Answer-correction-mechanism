@@ -11,9 +11,10 @@ bfloat16 is refused. The model is not downloaded by unit tests.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
@@ -50,6 +51,7 @@ class OCRArtifact:
     revision: str = ""
     dtype: str = ""
     elapsed_s: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class OCRNotRunnable(RuntimeError):
@@ -89,7 +91,9 @@ class XiaomiOCR:
         self._free_bytes = free_bytes or available_bytes
         self.dtype = dtype
 
-    def import_file(self, path: Path, *, ocr_id: str) -> OCRArtifact:
+    def import_file(self, path: Path, *, ocr_id: str,
+                    metadata: dict[str, Any] | None = None,
+                    metadata_path: Path | None = None) -> OCRArtifact:
         source = Path(path)
         if source.suffix.lower() in _IMAGE_SUFFIXES:
             raise OCRImportError("import OCR text, not a student image")
@@ -97,7 +101,28 @@ class XiaomiOCR:
             raise OCRImportError(f"OCR text file not found: {source}")
         with private_open(source, "rb") as handle:
             raw = handle.read().decode("utf-8")
-        return self._store(ocr_id, source.name, raw)
+        sidecar = Path(metadata_path) if metadata_path else source.with_name(source.name + ".meta.json")
+        meta: dict[str, Any] = {}
+        if metadata_path is not None or sidecar.exists():
+            with private_open(sidecar) as handle:
+                loaded = json.load(handle)
+            if not isinstance(loaded, dict):
+                raise OCRImportError("OCR metadata must be an object")
+            meta.update(loaded)
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise OCRImportError("OCR metadata must be an object")
+            meta.update(metadata)
+        timing = meta.get("timing") if isinstance(meta.get("timing"), dict) else {}
+        elapsed = meta.get("elapsed_s", meta.get("wall_s", timing.get("elapsed_s", timing.get("wall_s"))))
+        if elapsed is None and _optional_float(meta.get("elapsed_ms")) is not None:
+            elapsed = meta["elapsed_ms"] / 1000
+        meta.setdefault("source", str(source))
+        return self._store(ocr_id, source.name, raw,
+                           engine=str(meta.get("engine") or MODEL_ID),
+                           revision=str(meta.get("revision") or meta.get("model_revision") or ""),
+                           dtype=str(meta.get("dtype") or ""), elapsed_s=_optional_float(elapsed),
+                           metadata=meta)
 
     def store_text(self, raw: str, *, ocr_id: str, source_name: str) -> OCRArtifact:
         return self._store(ocr_id, source_name, raw)
@@ -125,6 +150,8 @@ class XiaomiOCR:
         source_name: str,
         raw: str,
         *,
+        engine: str = MODEL_ID,
+        metadata: dict[str, Any] | None = None,
         revision: str = "",
         dtype: str = "",
         elapsed_s: float | None = None,
@@ -136,7 +163,7 @@ class XiaomiOCR:
         return OCRArtifact(
             ocr_id=ocr_id,
             source_name=source_name,
-            engine=MODEL_ID,
+            engine=engine,
             raw_text=raw,
             artifact_name=private_name,
             sha256=digest,
@@ -144,13 +171,14 @@ class XiaomiOCR:
             revision=revision,
             dtype=dtype,
             elapsed_s=elapsed_s,
+            metadata=dict(metadata or {}),
         )
 
 
 def _optional_float(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    return float(value)
+    return float(value) if math.isfinite(float(value)) else None
 
 
 def _subprocess_ocr(image_path: Path, *, dtype: str) -> tuple[str, dict[str, Any]]:

@@ -290,3 +290,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_latency.py` | 通常・失敗・429の記録に試行数と履歴を保存。偽時計で合計550msと各試行20/30msを検証し、最後の試行だけを記録する問題を防ぐ。 |
 
 検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **403 passed in 12.15s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 05: 取り込みOCRの来歴（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/ocr.py` | <file>.meta.json・明示メタデータパス・ケースのocr_metadataを受付。engine・revision・dtype・source・timingを保持し、elapsed_sを正規化する。 |
+| `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_ocr_metadata.py` | 来歴をocr_metadataへ永続化。3通りの取り込み・優先順位・CRLFとハッシュの保持を回帰テストにし、Phase 2のCPU出力を監査可能にする。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **407 passed in 12.34s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
