@@ -65,3 +65,26 @@ After these tests were added, `python3 -m pytest -q harness_v2/tests math-answer
 | `harness_v2/tests/test_contracts.py` | The serialized keys must equal the design lists, in that order. The design summary must name the three statuses, the metrics, and the development set. | An extra or renamed field fails the test. |
 
 `python3 -m pytest -q harness_v2/tests math-answer-diagnosis/tests` after this alignment: **155 passed**.
+
+## Review of 9290369
+
+Status name stays `review_required`. The review's rename to `needs_review` was not applied.
+
+| Finding | What changed |
+| --- | --- |
+| Sandbox | `thread/start` sends `sandbox: "read-only"` and checks it against `codex_sandbox_mode.schema.json` (`read-only`, `workspace-write`, `danger-full-access`). |
+| Independent review | Grading input is an allowlist of problem, answer/OCR text, and rubric fields. Proposal review keeps failure-case fields except scores, plus a diff. Score keys inside JSON strings are removed. Each independent turn starts a new thread. |
+| result.json | The CLI writes `redact(record)`. Secret redaction parses JSON embedded in strings. |
+| Gemma | `genai.Client(vertexai=False, api_key=...)`. `GOOGLE_GENAI_USE_VERTEXAI` is rejected. No project or location is passed. |
+| Scores | Item max is the rubric max. A different model max is `review_required`. NaN, inf, and non-numeric scores fail. |
+| Rubric shape | Duplicate item ids and an empty rubric fail. |
+| Review flags | Any model `review_reason`, or uncertainty at or above 0.5, is `review_required` when scores exist. |
+| Pipeline review | Optional `codex_reviewer` is off by default. Disagreement is stored and sets `review_required`. |
+| Codex transport | Responses are buffered by id. Server requests are answered and are not treated as our result. Reads can time out. Stderr is drained. The child is terminated on close. |
+| Grokbot paths | `request_id` is a safe token. Resolved paths must stay in the exchange directory. |
+| Grokbot files | Image data URIs are stripped. `read_result` validates the schema. |
+| OCR bytes | Exact text is stored once under `ocr_private/` and hashed. A redacted sibling is the committable copy. Grading checks the hash. |
+| CPU OCR | Float32 subprocess, revision `ff990be318c4c68f7e621dd690231200f47e48c4`, thinking off, greedy, 4096 tokens, no resize. bfloat16 and low memory are refused. Revision, dtype, and timing are recorded. |
+| Prompt | The prompt lists the object the validator checks. |
+| Gemma settings | `max_output_tokens` is kept. Settings, response id, and attempt count are stored on the run. Quota rows include grading status `failed`. |
+| Requirements | `sympy` is in `math-answer-diagnosis/requirements.txt` so a clean venv can run the equivalence test. |
