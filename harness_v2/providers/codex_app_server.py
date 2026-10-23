@@ -8,14 +8,17 @@ text.
 from __future__ import annotations
 
 import json
+import os
 import select
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from harness_v2.evaluation.independent import independent_text
+from harness_v2.evaluation.review import grading_review_contract
 
 DEFAULT_MODEL = "gpt-6.1-sol"
 SANDBOX_SCHEMA = Path(__file__).resolve().parent / "schemas" / "codex_sandbox_mode.schema.json"
@@ -29,6 +32,10 @@ class CodexRPCError(RuntimeError):
 
 
 class ModelUnavailable(CodexRPCError):
+    pass
+
+
+class CodexReadTimeout(CodexRPCError):
     pass
 
 
@@ -85,6 +92,13 @@ class StdioTransport:
 
     def __init__(self, process: subprocess.Popen[str]) -> None:
         self._process = process
+        assert process.stdout is not None
+        assert process.stdin is not None
+        self._stdin_fd = process.stdin.fileno()
+        os.set_blocking(self._stdin_fd, False)
+        self._stdout_fd = process.stdout.fileno()
+        os.set_blocking(self._stdout_fd, False)
+        self._buffer = bytearray()
         self.stderr_lines: list[str] = []
         self._stderr_thread: threading.Thread | None = None
         if process.stderr is not None:
@@ -92,20 +106,43 @@ class StdioTransport:
             self._stderr_thread.start()
 
     def send(self, message: dict[str, Any]) -> None:
-        assert self._process.stdin is not None
-        self._process.stdin.write(json.dumps(message) + "\n")
-        self._process.stdin.flush()
+        self.send_until(message, time.monotonic() + DEFAULT_READ_TIMEOUT)
+
+    def send_until(self, message: dict[str, Any], deadline: float | None) -> None:
+        data = memoryview((json.dumps(message) + "\n").encode("utf-8"))
+        while data:
+            remaining = _remaining(deadline)
+            _, writable, _ = select.select([], [self._stdin_fd], [], remaining)
+            if not writable:
+                raise CodexReadTimeout("codex app-server write timed out")
+            try:
+                written = os.write(self._stdin_fd, data)
+            except BlockingIOError:
+                continue
+            if not written:
+                raise CodexRPCError("codex app-server closed stdin")
+            data = data[written:]
 
     def read(self, timeout: float | None = None) -> dict[str, Any]:
-        assert self._process.stdout is not None
-        if timeout is not None:
-            ready, _, _ = select.select([self._process.stdout], [], [], timeout)
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while b"\n" not in self._buffer:
+            remaining = _remaining(deadline)
+            ready, _, _ = select.select([self._stdout_fd], [], [], remaining)
             if not ready:
-                raise CodexRPCError("codex app-server read timed out")
-        line = self._process.stdout.readline()
-        if not line:
-            raise CodexRPCError("codex app-server closed stdout")
-        loaded = json.loads(line)
+                raise CodexReadTimeout("codex app-server read timed out")
+            try:
+                chunk = os.read(self._stdout_fd, 65536)
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise CodexRPCError("codex app-server closed stdout before a complete frame")
+            self._buffer.extend(chunk)
+        line, _, rest = self._buffer.partition(b"\n")
+        self._buffer = bytearray(rest)
+        try:
+            loaded = json.loads(line)
+        except (ValueError, UnicodeError) as exc:
+            raise CodexRPCError("codex app-server sent invalid JSON") from exc
         if not isinstance(loaded, dict):
             raise CodexRPCError("codex app-server sent a non-object message")
         return loaded
@@ -123,6 +160,9 @@ class StdioTransport:
                 process.wait(timeout=2)
         if self._stderr_thread is not None:
             self._stderr_thread.join(timeout=1)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
 
     def __enter__(self) -> StdioTransport:
         return self
@@ -182,10 +222,27 @@ class CodexAppServer:
             closer()
 
     def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        return self._request_until(method, params, self._deadline())
+
+    def _deadline(self) -> float | None:
+        return time.monotonic() + self.read_timeout if self.read_timeout is not None else None
+
+    def _send(self, message: dict[str, Any], deadline: float | None) -> None:
+        sender = getattr(self.transport, "send_until", None)
+        if sender is not None:
+            sender(message, deadline)
+        else:
+            self.transport.send(message)
+
+    def _request_until(self, method: str, params: dict[str, Any], deadline: float | None) -> dict[str, Any]:
         self._next_id += 1
         request_id = self._next_id
-        self.transport.send({"method": method, "id": request_id, "params": params})
-        message = self._take_response(request_id)
+        try:
+            self._send({"method": method, "id": request_id, "params": params}, deadline)
+            message = self._take_response(request_id, deadline)
+        except CodexReadTimeout:
+            self.close()
+            raise
         if "error" in message:
             error = message["error"] or {}
             raise CodexRPCError(str(error.get("message") or error), payload=message)
@@ -203,7 +260,7 @@ class CodexAppServer:
                 }
             },
         )
-        self.transport.send({"method": "initialized", "params": {}})
+        self._send({"method": "initialized", "params": {}}, self._deadline())
         self.initialized = True
         return result
 
@@ -261,30 +318,48 @@ class CodexAppServer:
         prompt = text
         if independent:
             active_thread = self.start_thread()
-            prompt = independent_text(text)
-        result = self._request(
+            prompt = independent_text(text) + "\n\n" + grading_review_contract()
+        deadline = self._deadline()
+        result = self._request_until(
             "turn/start",
             {
                 "threadId": active_thread,
                 "input": [{"type": "text", "text": prompt}],
                 "model": self.model,
             },
+            deadline,
         )
         turn = result.get("turn") or {}
         turn_id = str(turn.get("id") or "")
+        if not turn_id:
+            self.close()
+            raise CodexRPCError("turn/start returned no turn id", payload=result)
         if turn.get("status") in {"completed", "failed", "interrupted"}:
             final = result
         else:
-            final = self._read_until_terminal(turn_id)
+            try:
+                final = self._read_until_terminal(active_thread, turn_id, deadline)
+            except CodexReadTimeout:
+                # Do not wait for an interrupt response after the deadline.
+                try:
+                    self._next_id += 1
+                    self._send({"id": self._next_id, "method": "turn/interrupt",
+                                "params": {"threadId": active_thread, "turnId": turn_id}},
+                               time.monotonic() + 0.01)
+                except (CodexRPCError, OSError):
+                    pass  # Closing the process also cancels the timed-out turn.
+                finally:
+                    self.close()
+                raise
         final_turn = final.get("turn") or turn
         status = str(final_turn.get("status") or "")
         error = ""
         error_obj = final_turn.get("error") or {}
         if isinstance(error_obj, dict):
             error = str(error_obj.get("message") or "")
-        text_out = _agent_text(final_turn) or _agent_text_from_notes(self._notes)
-        notes = list(self._notes)
-        self._notes.clear()
+        notes = [note for note in self._notes if _belongs_to_turn(note, active_thread, turn_id)]
+        text_out = _agent_text(final_turn) or _agent_text_from_notes(notes)
+        self._notes = [note for note in self._notes if not _belongs_to_turn(note, active_thread, turn_id)]
         return CodexTurnResult(
             request_id=request_id,
             thread_id=active_thread,
@@ -317,13 +392,17 @@ class CodexAppServer:
         if not self.initialized:
             self.initialize()
 
-    def _accept(self, message: dict[str, Any]) -> None:
+    def _accept(self, message: dict[str, Any], deadline: float | None = None) -> None:
         method = message.get("method")
         has_method = isinstance(method, str) and method != ""
         has_id = "id" in message and message["id"] is not None
         if has_method and has_id:
             self._notes.append(message)
-            self.transport.send({"id": message["id"], "result": {}})
+            if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}:
+                self._send({"id": message["id"], "result": {"decision": "decline"}}, deadline)
+            else:
+                self._send({"id": message["id"], "error": {
+                    "code": -32601, "message": f"Unsupported server request: {method}"}}, deadline)
             return
         if has_method or not has_id:
             self._notes.append(message)
@@ -333,26 +412,44 @@ class CodexAppServer:
             return
         self._notes.append(message)
 
-    def _take_response(self, request_id: int) -> dict[str, Any]:
+    def _take_response(self, request_id: int, deadline: float | None) -> dict[str, Any]:
         while request_id not in self._responses:
-            self._accept(self.transport.read(timeout=self.read_timeout))
+            self._accept(self.transport.read(timeout=_remaining(deadline)), deadline)
         return self._responses.pop(request_id)
 
-    def _completed_turn(self, turn_id: str) -> dict[str, Any] | None:
+    def _completed_turn(self, thread_id: str, turn_id: str) -> dict[str, Any] | None:
         for message in self._notes:
             if message.get("method") != "turn/completed":
                 continue
             turn = (message.get("params") or {}).get("turn") or {}
-            if not turn_id or turn.get("id") == turn_id:
+            if (_belongs_to_turn(message, thread_id, turn_id)
+                    and turn.get("status") in {"completed", "failed", "interrupted"}):
                 return turn
         return None
 
-    def _read_until_terminal(self, turn_id: str) -> dict[str, Any]:
+    def _read_until_terminal(self, thread_id: str, turn_id: str, deadline: float | None) -> dict[str, Any]:
         while True:
-            found = self._completed_turn(turn_id)
+            found = self._completed_turn(thread_id, turn_id)
             if found is not None:
                 return {"turn": found}
-            self._accept(self.transport.read(timeout=self.read_timeout))
+            self._accept(self.transport.read(timeout=_remaining(deadline)), deadline)
+
+
+def _remaining(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise CodexReadTimeout("codex app-server read timed out")
+    return remaining
+
+
+def _belongs_to_turn(message: dict[str, Any], thread_id: str, turn_id: str) -> bool:
+    params = message.get("params") or {}
+    if params.get("threadId") != thread_id:
+        return False
+    note_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
+    return note_turn == turn_id
 
 
 def _agent_text(turn: dict[str, Any]) -> str:

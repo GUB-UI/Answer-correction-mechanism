@@ -50,6 +50,7 @@ def test_turn_completed_saves_text(tmp_path) -> None:
             {
                 "method": "turn/completed",
                 "params": {
+                    "threadId": "thr_fresh",
                     "turn": {
                         "id": "turn_1",
                         "status": "completed",
@@ -142,6 +143,7 @@ def test_notification_arriving_before_response_is_not_lost() -> None:
             {
                 "method": "turn/completed",
                 "params": {
+                    "threadId": "thr_1",
                     "turn": {
                         "id": "turn_1",
                         "status": "completed",
@@ -182,7 +184,7 @@ def test_server_request_is_not_treated_as_our_response() -> None:
     result = client.start_turn(client.start_thread(), "grade", request_id="req", independent=False)
     assert result.text == "ok"
     replies = [message for message in script.sent if message.get("id") == 4 and "method" not in message]
-    assert replies == [{"id": 4, "result": {}}]
+    assert replies == [{"id": 4, "result": {"decision": "decline"}}]
 
 
 def test_stdio_times_out_drains_stderr_and_kills_the_child() -> None:
