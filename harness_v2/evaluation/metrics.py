@@ -91,13 +91,11 @@ def compute_metrics(experiment: dict, dataset: Dataset) -> dict:
                 addition += score > score_ref
                 deduction += score < score_ref
                 wrong_units.append(_wrong_id(case_id, repetition, item_id))
-        if total_wrong and not item_refs:
+        if total_wrong and not any_item_wrong:
+            # Matching or partial item labels cannot hide a known total error.
+            # Count its direction once, without attributing it to an item.
             addition += total > total_ref
             deduction += total < total_ref
-            wrong_units.append(_wrong_id(case_id, repetition, '__total__'))
-        elif total_wrong and not any_item_wrong:
-            # Partial item labels cannot hide a known total mismatch; this does
-            # not assign an error to any unreferenced item.
             wrong_units.append(_wrong_id(case_id, repetition, '__total__'))
         wrong = total_wrong or any_item_wrong
         flagged = status == 'review_required' or any(

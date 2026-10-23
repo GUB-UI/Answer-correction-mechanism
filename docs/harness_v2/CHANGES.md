@@ -286,3 +286,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_ocr_metadata.py` | Cover one/both-side mutations, missing fields, revision aliases, sidecar-only changes, exact CRLF hashes, forged claims and private permissions. | Keep comparisons fail-closed while preserving byte identity and offline evaluation. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **473 passed in 14.33s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks allowed).
+
+## Phase 3 review fix / 04: Direction of total-only grading errors (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/metrics.py` | Count unjust_addition/deduction whenever a total mismatch falls back to __total__ because no labeled item is wrong. Share the same branch with cases having no item labels. | Matching or partial item labels previously recorded a wrong total without counting its error direction. |
+| `harness_v2/tests/test_p3_metrics.py` | Cover additions/deductions with matching full/partial item labels and verify no double counting when an item already explains the error. Assert input grades remain unchanged. | Report directional errors accurately without assigning unreferenced item errors or modifying scores. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **479 passed in 14.09s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks allowed).

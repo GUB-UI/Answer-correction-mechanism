@@ -377,3 +377,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_ocr_metadata.py` | 片側/両側改変、項目欠落、revision別名、サイドカーのみの変更、CRLFの厳密ハッシュ、偽装値と非公開権限を回帰テストにする。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **473 passed in 14.33s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 04: 合計点だけが異なる場合の誤加点・誤減点（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/metrics.py` | 既知の項目に誤りがなく合計不一致を__total__で記録する場合も、誤加点/誤減点の方向を集計。項目参照がない場合と同じ分岐にまとめ、合計誤りだけ方向の集計から漏れる問題を修正する。 |
+| `harness_v2/tests/test_p3_metrics.py` | 全項目・部分項目の参照が一致する場合の両方向、既知の項目誤りがある場合の二重計上防止、入力得点の不変性を検証。未参照項目への誤り割当てや得点補完を行わず正しく集計する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **479 passed in 14.09s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。

@@ -152,3 +152,37 @@ def test_lower_mae_cannot_hide_a_new_wrong_repetition(tmp_path):
     assert result['candidate']['wrong_grading']['count'] == result['baseline']['wrong_grading']['count'] == 1
     assert result['verdict'] == 'regressed'
     assert result['severe_regressions']['new_wrong_grading']
+
+
+@pytest.mark.parametrize('total,addition,deduction', [(5, 1, 0), (3, 0, 1)])
+@pytest.mark.parametrize('partial_labels', [False, True])
+def test_total_fallback_counts_direction_when_labeled_items_match(tmp_path, total, addition, deduction, partial_labels):
+    from harness_v2.evaluation.metrics import compute_metrics
+    payload, ds = metric_fixture(tmp_path)
+    payload['runs'] = payload['runs'][:1]
+    payload['expected_runs'] = payload['expected_runs'][:1]
+    grade = payload['runs'][0]['outputs']['grading']
+    grade['total_score'] = total
+    if partial_labels:
+        ds.references['reference_items']['A'] = {'a': 2}
+        grade['items'][1]['score'] = total - 2
+    original = copy.deepcopy(payload)
+    metrics = compute_metrics(payload, ds)
+    assert metrics['wrong_grading'] == {'count': 1, 'unjust_addition': addition, 'unjust_deduction': deduction}
+    assert metrics['wrong_units'] == ['["A:manual",1,"__total__"]']
+    assert metrics['item_agreement'] == 1
+    assert payload == original
+
+
+@pytest.mark.parametrize('total,addition,deduction', [(5, 1, 0), (3, 0, 1)])
+def test_total_fallback_does_not_double_count_a_known_item_error(tmp_path, total, addition, deduction):
+    from harness_v2.evaluation.metrics import compute_metrics
+    payload, ds = metric_fixture(tmp_path)
+    payload['runs'] = payload['runs'][:1]
+    payload['expected_runs'] = payload['expected_runs'][:1]
+    grade = payload['runs'][0]['outputs']['grading']
+    grade['total_score'] = total
+    grade['items'][1]['score'] = total - 2
+    metrics = compute_metrics(payload, ds)
+    assert metrics['wrong_grading'] == {'count': 1, 'unjust_addition': addition, 'unjust_deduction': deduction}
+    assert metrics['wrong_units'] == ['["A:manual",1,"b"]']
