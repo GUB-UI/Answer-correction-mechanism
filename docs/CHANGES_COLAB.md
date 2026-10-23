@@ -395,3 +395,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_evidence.py` | 先頭`=`の有無・区切りの有無の引用が一致する回帰テスト。既存の否定ケースは維持。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **482 passed in 14.16s**。
+
+## harness v2 Phase 3 review fix / 06: 実装コミットの自動解決（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | CLI・APIでcommitを省略すると、呼出し元の作業ディレクトリではなくharnessソースのHEADを取得し、追跡対象の変更には`+dirty`を付ける。解決不能・空文字・`unknown`は保存やプロバイダ呼出し前に拒否し、明示指定ならGitなしでも実行可能。既定値や旧`unknown`記録による異なる実装の混在を防ぐ。 |
+| `harness_v2/tests/conftest.py, harness_v2/tests/test_p3_commit_identity.py, harness_v2/tests/test_p3_runner.py` | 解決処理をモックして実リポジトリ状態への依存を排除。クリーン/変更済みHEAD、Git失敗、CLI/API既定値、明示指定、旧記録の拒否と再開拒否時のファイル不変性を検証する。参照分離は維持する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **506 passed in 14.31s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。

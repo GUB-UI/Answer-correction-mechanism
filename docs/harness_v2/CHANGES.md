@@ -304,3 +304,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_evidence.py` | Regression: spans with/without leading `=` and with/without delimiters match a delimited answer. Existing negative cases (`=x+1` vs `x+1`, `$=$`) still fail. | Prevent the asymmetric false positive. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **482 passed in 14.16s**.
+
+## Phase 3 review fix / 06: Resolve the implementation identity by default (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/run.py` | Resolve omitted CLI/API commits from the harness source checkout's HEAD, adding `+dirty` for tracked modifications. Refuse unresolved, empty or `unknown` identities before writing checkpoints or calling providers. Explicit identities work without Git. | Default runs must preserve the commit boundary on resume, including legacy experiments recorded as `unknown`. |
+| `harness_v2/tests/conftest.py, harness_v2/tests/test_p3_commit_identity.py, harness_v2/tests/test_p3_runner.py` | Mock resolution independently of repository state; cover clean/dirty HEAD, Git failures, CLI/API defaults, explicit identities, legacy rejection and unchanged files on refused resumes. | Make revision binding reproducible without depending on the real checkout or sending references to models. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **506 passed in 14.31s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation).

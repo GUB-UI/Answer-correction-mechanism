@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -94,6 +95,21 @@ def default_provider(config: dict, case: dict, repetition: int):
     return FixtureProvider(completion, model_id=config['model'])
 
 
+def resolve_implementation_commit() -> str | None:
+    """Identify the harness source checkout, independent of the caller's cwd."""
+    source = Path(__file__).resolve().parent
+    try:
+        head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=source,
+                              capture_output=True, text=True, check=True, timeout=5).stdout.strip()
+        if len(head) not in {40, 64} or any(c not in '0123456789abcdef' for c in head):
+            return None
+        status = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=source,
+                                capture_output=True, text=True, check=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return head + ('+dirty' if status.strip() else '')
+
+
 class _LazyProvider:
     """Construction failures occur inside Pipeline's recorded exception boundary."""
     def __init__(self, config, case, repetition, factory):
@@ -107,7 +123,12 @@ class _LazyProvider:
 
 def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: Path,
                    delay_s: float = 0, sleep: Callable = time.sleep,
-                   provider_factory: Callable | None = None, commit: str = 'unknown') -> dict:
+                   provider_factory: Callable | None = None, commit: str | None = None) -> dict:
+    if commit is None:
+        commit = resolve_implementation_commit()
+    if not isinstance(commit, str) or not commit.strip() or commit.strip().lower() == 'unknown':
+        raise ValueError('implementation commit is required: supply --commit (not unknown) '
+                         'or run from a resolvable harness source checkout')
     if isinstance(repeats, bool) or not isinstance(repeats, int) or repeats < 1:
         raise ValueError('repeats must be a positive integer')
     if isinstance(delay_s, bool) or not isinstance(delay_s, (int, float)) or not math.isfinite(delay_s) or delay_s < 0:
@@ -211,7 +232,7 @@ def main(argv=None) -> int:
     parser.add_argument('--repeats', type=int, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--delay', type=float, default=0, help='seconds between logical requests')
-    parser.add_argument('--commit', default='unknown')
+    parser.add_argument('--commit', help='implementation identity; default: harness source HEAD with +dirty for tracked changes')
     args = parser.parse_args(argv)
     try:
         result = run_experiment(args.config, args.dataset, repeats=args.repeats, out=args.out,

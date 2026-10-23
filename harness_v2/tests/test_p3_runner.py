@@ -85,7 +85,8 @@ def test_provider_construction_error_is_a_failed_record(tmp_path):
 def test_cli_fixture_is_offline_and_applies_settings(tmp_path):
     manifest = make_dataset(tmp_path); config = config_at(tmp_path); out = tmp_path / 'runs'
     result = subprocess.run([sys.executable, '-m', 'harness_v2.run', '--config', str(config),
-        '--dataset', str(manifest), '--repeats', '1', '--out', str(out)], capture_output=True, text=True)
+        '--dataset', str(manifest), '--repeats', '1', '--out', str(out),
+        '--commit', 'test-revision'], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['completed'] == 1
     runs = json.loads((out / 'results.json').read_text())['runs']
@@ -123,7 +124,7 @@ def test_dataset_input_mutation_between_repetitions_fails_before_provider(tmp_pa
     assert 'hash' in json.loads((out / 'results.json').read_text())['runs'][1]['failure_reason']
 
 
-@pytest.mark.parametrize('original,resumed', [('rev-a', 'rev-b'), ('unknown', 'rev-a'), ('rev-a', 'unknown')])
+@pytest.mark.parametrize('original,resumed', [('rev-a', 'rev-b'), ('rev-a', 'unknown')])
 def test_resume_rejects_changed_implementation_without_mutating_results(tmp_path, original, resumed):
     from harness_v2.run import run_experiment
     manifest = make_dataset(tmp_path)
@@ -139,7 +140,7 @@ def test_resume_rejects_changed_implementation_without_mutating_results(tmp_path
     assert {name: (out / name).read_bytes() for name in before} == before
 
 
-@pytest.mark.parametrize('commit', ['rev-a', 'unknown'])
+@pytest.mark.parametrize('commit', ['rev-a', 'rev-b'])
 def test_experiment_persists_implementation_identity_and_resumes_same_commit(tmp_path, commit):
     from harness_v2.run import run_experiment
     manifest = make_dataset(tmp_path)
