@@ -11,8 +11,11 @@ _SECRET = re.compile(r"AIza[0-9A-Za-z\-_]{8,}|sk-[A-Za-z0-9]{8,}")
 _SENSITIVE_PARTS = ("api_key", "apikey", "secret", "password", "authorization", "token")
 
 
-def _sensitive_key(key: str) -> bool:
+def _sensitive_key(key: str, value: Any = None) -> bool:
     lowered = str(key).lower().replace("-", "_")
+    if (lowered.endswith(("_token_runs", "_token_attempts"))
+            and type(value) in {int, float}):
+        return False
     if lowered.endswith("_tokens") or lowered.endswith("_token_count"):
         return False
     return any(part in lowered for part in _SENSITIVE_PARTS)
@@ -68,7 +71,7 @@ def _redact(value: Any, secrets: list[str]) -> Any:
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
         for key, item in value.items():
-            if _sensitive_key(str(key)):
+            if _sensitive_key(str(key), item):
                 cleaned[str(key)] = "[redacted]"
             else:
                 cleaned[str(key)] = _redact(item, secrets)

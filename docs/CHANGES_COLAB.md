@@ -431,3 +431,13 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_durable_identity.py` | メタデータの削除/書換え、未知/異なるcommit、DB・JSON・スキーマ破損、実験/case来歴の不一致、過去の失敗行、安全な復元と私有権限を検証。拒否時の全ファイル不変性とプロバイダ未呼出しを確認し、SQLiteを再開時の正とする。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **571 passed in 15.71s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 10: 指標に寄与する全試行のOCR来歴を検証（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | 最新の論理実行だけでなく、集計対象の過去のattempt_runsにもcase来歴・OCRメタデータ/入力ハッシュ・採点用派生入力ハッシュの照合を適用。sidecarの有無とハッシュを同じcaseの全試行と実験間で照合し、最新の失敗がOCR前でも過去の相違を検出する。OCRや後続応答の証拠がない失敗だけ除外し、再開成功による過去の条件不一致の隠蔽を防ぐ。 |
+| `harness_v2/storage/secrets.py` | _token_runs/_token_attemptsで終わる数値の使用量カウンタを保持し、秘密値の文字列や認証情報の伏字は維持する。不明トークン数も比較レポートと差分に数値で残す。 |
+| `harness_v2/tests/test_p3_historical_ocr.py` | 片側/両側の過去来歴破損、欠落、sidecarの変更/欠落/宣言値、実際の再開時変更、全採点状態、OCR前失敗の除外、履歴間比較、派生入力ハッシュと私有CLIレポートのカウンタを検証。記録不変性と失敗得点の未補完を確認し、参照の送信や追加推論なしで監査可能にする。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **603 passed in 18.12s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。

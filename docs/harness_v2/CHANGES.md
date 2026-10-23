@@ -340,3 +340,13 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_durable_identity.py` | Cover removed/rewritten metadata, unknown/different durable commits, corrupt databases/JSON/schema, experiment and case identity mismatches, historical failed rows, safe metadata recovery and private permissions. Assert rejected resumes preserve all files and never call a provider. | SQLite remains the durable source of truth and validation precedes checkpoint writes. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **571 passed in 15.71s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes.
+
+## Phase 3 review fix / 10: Validate OCR provenance across contributing attempts (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/comparison.py` | Validate case provenance, OCR metadata/source hashes and derived grading-input hashes on contributing historical attempt_runs as well as latest logical runs. Require consistent sidecar identity, including presence/absence, across a case's attempts and between experiments even when the latest failure precedes OCR. Exempt only failures without OCR or downstream response evidence. | Historical failures contribute usage and retry metrics; a later successful or pre-OCR attempt must not hide incompatible OCR conditions. |
+| `harness_v2/storage/secrets.py` | Preserve numeric usage counters ending in _token_runs/_token_attempts while continuing to redact secret-valued strings and credential fields. | Unknown-token counts are metrics and must remain numeric in persisted comparison reports and deltas. |
+| `harness_v2/tests/test_p3_historical_ocr.py` | Cover one/both-side historical metadata corruption, missing fields/hashes, changed/missing/declared sidecars, real sidecar changes on resume, all grading statuses, pre-OCR exemptions, cross-history comparison, derived input hashes and private CLI report counters. Assert comparison does not mutate records or fill failed scores. | Keep full attempt accounting auditable without inference, reference exposure or score substitution. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **603 passed in 18.12s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.

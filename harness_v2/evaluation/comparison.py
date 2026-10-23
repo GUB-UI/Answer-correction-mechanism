@@ -155,7 +155,9 @@ def _ocr_metadata_reasons(case: dict, outputs: dict) -> list[str]:
 
     actual = outputs.get('ocr_metadata')
     # Failures before OCR have no imported provenance to validate.
-    if (actual is None and not outputs.get('ocr_sha256')
+    if (actual is None and not any(outputs.get(field) for field in (
+            'ocr_sha256', 'ocr_artifact', 'ocr_redacted', 'grading_input_sha256',
+            'raw_response_artifact', 'exchange', 'provider_response_id'))
             and outputs.get('grading', {}).get('status') == 'failed'):
         return []
     if not isinstance(actual, dict):
@@ -183,7 +185,7 @@ def _ocr_metadata_reasons(case: dict, outputs: dict) -> list[str]:
     return reasons
 
 
-def _provenance_reasons(payload: dict) -> list[str]:
+def _provenance_reasons(payload: dict, *, sidecars: dict | None = None) -> list[str]:
     reasons = []
     manifest = payload.get('dataset', {})
     rows = manifest.get('cases', [])
@@ -195,8 +197,42 @@ def _provenance_reasons(payload: dict) -> list[str]:
     jobs = payload.get('expected_runs', [])
     if not isinstance(jobs, list):
         return reasons + ['invalid expected cases']
-    seen = set()
+    seen, jobs_by_request = set(), {}
+    sidecars = {} if sidecars is None else sidecars
     indexed, _ = experiment_index(payload)
+
+    def check_run(case, job, run):
+        case_id = case['case_id']
+        outputs = run.get('outputs')
+        if not isinstance(outputs, dict):
+            reasons.append(f'invalid run provenance: {case_id}')
+            return
+        actual = outputs.get('experiment_case')
+        if not isinstance(actual, dict) or any(actual.get(k) != v for k, v in job.items()):
+            reasons.append(f'run case provenance differs from expected case: {case_id}')
+        grading = outputs.get('grading')
+        if not isinstance(grading, dict):
+            reasons.append(f'invalid grading status: {case_id}')
+            return
+        reasons.extend(f'{reason}: {case_id}' for reason in _ocr_metadata_reasons(case, outputs))
+        observed = outputs.get('ocr_sha256')
+        if observed is not None and observed != case.get('grading_input', {}).get('sha256'):
+            reasons.append(f'run OCR/input hash differs from manifest: {case_id}')
+        status = grading.get('status')
+        if status not in {'validated', 'review_required', 'failed'}:
+            reasons.append(f'invalid grading status: {case_id}')
+        if status != 'failed' and not observed:
+            reasons.append(f'run OCR/input hash is missing: {case_id}')
+        metadata = outputs.get('ocr_metadata')
+        if isinstance(metadata, dict):
+            # Optional sidecars still form part of the effective OCR identity.
+            # Every contributing attempt for a case must use the same bytes,
+            # including presence/absence, even if its grade failed later.
+            sidecar = ('sidecar_sha256' in metadata, metadata.get('sidecar_sha256'))
+            if case_id in sidecars and sidecars[case_id] != sidecar:
+                reasons.append(f'run OCR sidecar_sha256 differs between attempts: {case_id}')
+            sidecars[case_id] = sidecar
+
     for job in jobs:
         if not isinstance(job, dict):
             reasons.append('invalid expected case')
@@ -216,19 +252,24 @@ def _provenance_reasons(payload: dict) -> list[str]:
         for field, value in expected.items():
             if not value or job.get(field) != value:
                 reasons.append(f'expected case {field} differs from manifest: {case_id}')
+        jobs_by_request[job.get('request_id')] = (case, job)
         run = indexed.get((case_id, rep))
         if run is None:
             continue
-        outputs = run.get('outputs', {})
-        actual = outputs.get('experiment_case')
-        if not isinstance(actual, dict) or any(actual.get(k) != v for k, v in job.items()):
-            reasons.append(f'run case provenance differs from expected case: {case_id}')
-        reasons.extend(f'{reason}: {case_id}' for reason in _ocr_metadata_reasons(case, outputs))
-        observed = outputs.get('ocr_sha256')
-        if observed is not None and observed != expected['input_sha256']:
-            reasons.append(f'run OCR/input hash differs from manifest: {case_id}')
-        if outputs.get('grading', {}).get('status') != 'failed' and not observed:
-            reasons.append(f'run OCR/input hash is missing: {case_id}')
+        check_run(case, job, run)
+    if 'attempt_runs' in payload:
+        history = payload['attempt_runs']
+        if not isinstance(history, list):
+            reasons.append('invalid attempt_runs provenance')
+        else:
+            for run in history:
+                if not isinstance(run, dict):
+                    reasons.append('invalid historical run provenance')
+                    continue
+                pair = jobs_by_request.get(run.get('request_id'))
+                # Usage metrics include only attempts for expected requests.
+                if pair is not None:
+                    check_run(*pair, run)
     repetitions = {rep for _, rep in seen}
     if seen != {(case_id, rep) for case_id in cases for rep in repetitions}:
         reasons.append('incomplete problem/case/repetition plan')
@@ -279,9 +320,16 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
             reasons.append(f'{name}: missing configuration or dataset manifest')
     if reasons:
         return reasons
+    sidecars_by_name = {}
     for name, payload in (("baseline", baseline), ("candidate", candidate)):
-        reasons.extend(f"{name}: {reason}" for reason in _provenance_reasons(payload))
+        sidecars_by_name[name] = {}
+        reasons.extend(f"{name}: {reason}" for reason in
+                       _provenance_reasons(payload, sidecars=sidecars_by_name[name]))
         reasons.extend(f"{name}: {reason}" for reason in _generation_settings_reasons(payload))
+    a_sidecars, b_sidecars = sidecars_by_name['baseline'], sidecars_by_name['candidate']
+    for case_id in a_sidecars.keys() & b_sidecars.keys():
+        if a_sidecars[case_id] != b_sidecars[case_id]:
+            reasons.append(f'run OCR sidecar_sha256 differs between counterparts: {case_id}')
     left, right = baseline['config'], candidate['config']
     for key, label in (('model', 'model'), ('provider', 'provider'),
                        ('rubric_version', 'rubric version'), ('generation_settings', 'generation settings')):
@@ -371,7 +419,13 @@ def compare_experiments(baseline: dict, candidate: dict, *, dataset=None) -> dic
             if payload.get('dataset') != dataset.manifest:
                 reasons.append(f'{name}: supplied dataset manifest differs')
             indexed, _ = experiment_index(payload)
-            for (case_id, _), run in indexed.items():
+            contributing = [(key[0], run) for key, run in indexed.items()]
+            jobs = {job['request_id']: job for job in payload.get('expected_runs', [])}
+            history = payload.get('attempt_runs', [])
+            if isinstance(history, list):
+                contributing.extend((jobs[run['request_id']]['case_id'], run)
+                                    for run in history if isinstance(run, dict) and run.get('request_id') in jobs)
+            for case_id, run in contributing:
                 outputs = run.get('outputs', {})
                 actual = outputs.get('grading_input_sha256')
                 if (actual is not None or outputs.get('grading', {}).get('status') != 'failed') and actual != derived.get(case_id):
