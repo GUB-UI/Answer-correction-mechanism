@@ -405,3 +405,9 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` â
 | --- | --- | --- |
 | `docs/harness_v2/experiments/prompt_ambiguity_aware_v1_summary.md` | Aggregate, privacy-safe comparison of `harness_v2_default` vs `harness_v2_ambiguity_aware_v1` under identical model/config/dataset/OCR inputs: per-case 1-A/2-B/3-A statuses and totals, evidence traceability, unnecessary-flag change, an explicitly defined ambiguous-input detection rate, and limits. | Review request: the candidate must stay non-default until a human reviews the evidence. |
 | `harness_v2/tests/test_p4_experiment_summary.py` | Guards that the summary stays candidate-only and contains no images or local data paths. | Keep the committed artifact privacy-safe. |
+
+## Phase 4 / 04: Restack fixture fix (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/tests/test_private_permissions.py` | Use the registered `harness_v2_default` prompt version in the shared-input runner test. | The PR #10 permission test used an ad-hoc `v1` label, which the PR #11 strict registry rejects after the restack merge. |

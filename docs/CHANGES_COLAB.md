@@ -513,3 +513,9 @@ OCR 結果にエンジン、モデル ID・revision、OCR 設定、入力画像�
 検証: `tests/test_no_score_autofill.py` に合計点と OCR 疑いの組合せ、部分的な出力、明示的な 0 点、null・欠落・無効値、配点なし、ルーブリック項目不足、mock、保存後の null、教師比較、一括再利用時の確認状態を追加。既存の満点補完・合計書き換えの期待値を撤回し、旧状態名のテストを更新。
 
 全テストを指定の Python・pytest コマンドで実行し、180 件成功（既存の HTTP mock 用に localhost 接続を許可）。`docs/harness_v2/CHANGES.md` はこのブランチには存在しないため、新規作成していない。
+
+## Phase 4 / 04: 積み直し時のテスト修正（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/tests/test_private_permissions.py` | PR #10 の権限テストが仮ラベル `v1` を使っており、PR #11 の厳格な版登録で拒否されるため、登録済みの `harness_v2_default` に変更。 |
