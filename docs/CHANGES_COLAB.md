@@ -254,3 +254,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | 共通 | `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md`, `commit_plan.json` | 変更内容・理由・検証結果を記録し、修正1→2→3の3グループに整理。共有する両ドキュメントは最後のグループに置き、git 状態を変更せずレビュー可能にする。 |
 
 検証: `/workspace/venv_h2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **379 passed（12.27秒）**。既存アプリの localhost モックサーバー用に loopback ソケットの sandbox 権限を付けて実行した。最初の制限付き実行は345件成功、ソケット権限による失敗・エラー14件。外部接続・モデル取得は不要。read-only レビューで見つかった非 JSON の参照情報、空比較、形式の別名による検証回避も回帰テストを追加して修正した。`git diff --check` も成功。
+
+## harness v2 Phase 3 / 01: 根拠照合と明示的な記載なし（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/contracts.py, harness_v2/grading/scorer.py, harness_v2/grading/validator.py` | 0点・真偽値true・理由付きの場合だけ空の根拠を許可。数式区切り・数式先頭の等号・空白を比較時だけ正規化し、生データを保持する。 |
+| `harness_v2/evaluation/review.py, harness_v2/evaluation/schemas/grading_review.schema.json, harness_v2/tests/test_p3_evidence.py` | 独立レビューにも同じ契約を適用。型の偽装・非0点・捏造根拠の拒否とLaTeX差分の回帰テストを追加。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **394 passed in 12.69s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。

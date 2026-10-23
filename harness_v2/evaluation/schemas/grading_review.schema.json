@@ -86,8 +86,47 @@
           "max_score": {
             "type": "number",
             "minimum": 0
+          },
+          "evidence_absent": {
+            "type": "boolean",
+            "description": "True only for zero score with absent_reason and no cited spans."
+          },
+          "absent_reason": {
+            "type": "string"
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "evidence_absent": {
+                  "const": true
+                }
+              },
+              "required": [
+                "evidence_absent"
+              ]
+            },
+            "then": {
+              "required": [
+                "absent_reason"
+              ],
+              "properties": {
+                "score": {
+                  "const": 0,
+                  "type": "number"
+                },
+                "absent_reason": {
+                  "type": "string",
+                  "pattern": "\\S"
+                },
+                "evidence_spans": {
+                  "maxItems": 0
+                }
+              }
+            }
+          }
+        ]
       }
     },
     "total_score": {

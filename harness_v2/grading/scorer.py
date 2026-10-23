@@ -140,6 +140,8 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
                 math_reason=str(row.get("math_reason") or row.get("reason") or ""),
                 uncertainty=_number(uncertainty) if uncertainty is not None else None,
                 review_reason="; ".join(reasons),
+                evidence_absent=row.get("evidence_absent", False),
+                absent_reason=row.get("absent_reason", ""),
             )
         )
     total = payload.get("total_score", payload.get("score"))
@@ -167,6 +169,9 @@ def build_prompt(problem_text: str, answer_text: str, rubric: list[RubricItem]) 
                 "math_reason, uncertainty, and review_reason. "
                 "score is a finite number, or null when the item cannot be graded. Do not invent a score. "
                 "evidence_spans is an array of objects with text and optional start, end, and source. "
+                "Only for score exactly 0 and no written evidence, set evidence_absent to the JSON boolean true, "
+                "give a nonempty absent_reason string, and use empty evidence_spans. "
+                "Otherwise evidence_absent is false and evidence_spans must cite answer text. "
                 "math_reason is a string. "
                 "uncertainty is a number from 0 to 1, or null. "
                 "review_reason is a string and is empty when the item is clear. "

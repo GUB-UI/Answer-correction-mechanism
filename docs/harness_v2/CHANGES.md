@@ -160,3 +160,13 @@ Grading states remain `validated` / `review_required` / `failed`. Reference labe
 | All | `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md`, `commit_plan.json` | Record these changes and verification; group files into exactly three proposed commits in fix order, with both changelogs in the last group. | Keep implementation reviewable without modifying git state. |
 
 Validation: `/workspace/venv_h2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **379 passed in 12.27s**. Existing app tests require localhost mock servers; the passing run used sandbox permission for loopback sockets. The initial restricted run had 345 passes and 14 socket-permission failures/errors. No external network requests or model downloads were needed. A read-only review found non-JSON reference text, empty comparisons and schema-alias counterexamples; regression tests now cover them. `git diff --check` passed.
+
+## Phase 3 / 01: Evidence matching and explicit absence (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/core/contracts.py, harness_v2/grading/scorer.py, harness_v2/grading/validator.py` | Preserve evidence_absent/absent_reason; allow absent evidence only for numeric zero and literal true with a reason. Normalize paired math delimiters, leading math equals and whitespace only for matching. | Remove Phase 2 false flags without accepting invented evidence or rewriting raw text. |
+| `harness_v2/evaluation/review.py, harness_v2/evaluation/schemas/grading_review.schema.json` | Document and validate the same absence contract for independent Codex review. | Keep both grading boundaries consistent. |
+| `harness_v2/tests/test_p3_evidence.py` | Cover absence types, nonzero/null rejection, delimiter normalization, preserved spans and fabricated evidence. | Regression coverage for Phase 2 findings. |
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **394 passed in 12.69s** (offline guard; loopback mocks allowed).

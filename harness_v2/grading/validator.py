@@ -13,8 +13,20 @@ _SPACE = re.compile(r"\s+")
 UNCERTAINTY_REVIEW_AT = 0.5
 
 
-def _collapse(text: str) -> str:
-    return _SPACE.sub("", text)
+_MATH = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DOTALL)
+
+
+def normalize_evidence(text: str) -> str:
+    """Comparison view only; never rewrite stored OCR or cited spans."""
+    def body(match: re.Match) -> str:
+        value = next(group for group in match.groups() if group is not None)
+        return re.sub(r"^\s*=\s*", "", value)
+    return _SPACE.sub("", _MATH.sub(body, text))
+
+
+def evidence_traceable(text: str, answer_text: str) -> bool:
+    needle = normalize_evidence(text)
+    return bool(needle) and needle in normalize_evidence(answer_text)
 
 
 def _finite(value: float | None) -> bool:
@@ -115,7 +127,6 @@ def validate(
     non_numeric: list[str] = []
     max_mismatch: list[str] = []
     score_missing = list(missing)
-    haystack = _collapse(answer_text)
     rubric_by_id = {item.item_id: item for item in rubric}
     for item in ordered:
         rubric_item = rubric_by_id.get(item.item_id)
@@ -135,11 +146,20 @@ def validate(
             range_bad.append(f"{item.item_id}:{item.score}/{maximum}")
         if not item.math_reason.strip():
             reason_bad.append(item.item_id)
-        if not item.evidence_spans or any(not span.text.strip() for span in item.evidence_spans):
+        absence_valid = (
+            item.evidence_absent is True and item.score == 0
+            and not item.evidence_spans and isinstance(item.absent_reason, str)
+            and bool(item.absent_reason.strip())
+        )
+        if not isinstance(item.evidence_absent, bool) or (item.evidence_absent is True and not absence_valid):
+            evidence_bad.append(item.item_id)
+        elif absence_valid:
+            pass
+        elif not item.evidence_spans or any(not span.text.strip() for span in item.evidence_spans):
             evidence_bad.append(item.item_id)
         else:
             for span in item.evidence_spans:
-                if _collapse(span.text) not in haystack:
+                if not evidence_traceable(span.text, answer_text):
                     evidence_bad.append(item.item_id)
                     break
         expression = rubric_item.acceptable_expression if rubric_item else ""

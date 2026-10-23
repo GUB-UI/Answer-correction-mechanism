@@ -82,6 +82,8 @@ class ItemResult:
     math_reason: str = ""
     uncertainty: float | None = None
     review_reason: str = ""
+    evidence_absent: bool = False
+    absent_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -92,6 +94,8 @@ class ItemResult:
             "math_reason": self.math_reason,
             "uncertainty": self.uncertainty,
             "review_reason": self.review_reason,
+            "evidence_absent": self.evidence_absent,
+            "absent_reason": self.absent_reason,
         }
 
 
