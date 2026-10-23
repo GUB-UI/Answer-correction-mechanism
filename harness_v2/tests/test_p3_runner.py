@@ -41,7 +41,7 @@ def test_repeats_are_deterministic_resumable_and_blind(tmp_path):
     assert again['skipped'] == 2 and len(seen) == 2
     other = run_experiment(config, manifest, repeats=2, out=tmp_path / 'other', provider_factory=factory)
     assert first['request_ids'] == other['request_ids']
-    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
+    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'), readonly=True)
     assert len(store.list_runs()) == 2
     assert all(r['outputs']['experiment_case']['input_sha256'] for r in store.list_runs())
     assert len(list((out / 'failure_cases').glob('*.json'))) == 0
@@ -172,7 +172,7 @@ def test_resume_after_initial_row_save_keeps_provenance_and_never_repeats_provid
         patch.setattr(RunStore, 'save_run', interrupt_after_save)
         with pytest.raises(KeyboardInterrupt):
             run_experiment(config, manifest, repeats=1, out=out)
-    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
+    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'), readonly=True)
     row = store.list_runs()[0]
     assert row['outputs']['experiment_case']['input_sha256']
     assert row['outputs']['experiment_case']['repetition'] == 1
@@ -201,7 +201,7 @@ def test_resume_recovers_missing_failure_for_completed_run_with_durable_identity
         patch.setattr(runner, 'write_json', interrupt_failure_write)
         with pytest.raises(KeyboardInterrupt):
             runner.run_experiment(config, manifest, repeats=1, out=out)
-    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'))
+    store = RunStore(out / 'runs.sqlite', ArtifactStore(out / 'artifacts'), readonly=True)
     row = store.list_runs()[0]
     # Recovery is safe because the full experiment identity survived in SQLite.
     assert row['outputs']['experiment_case']['experiment_identity']
