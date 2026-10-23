@@ -59,13 +59,18 @@ def test_import_records_exact_sidecar_and_source_hashes_without_trusting_claims(
     sidecar = tmp_path / 'chosen.json' if explicit else source.with_name(source.name + '.meta.json')
     sidecar_bytes = b'{\r\n "engine": "manual", "elapsed_s": 1\r\n}\r\n'
     sidecar.write_bytes(sidecar_bytes)
+    source.chmod(0o644)
+    sidecar.chmod(0o644)
+    tmp_path.chmod(0o755)
     artifact = XiaomiOCR(store_at(tmp_path / 'out').artifacts).import_file(
         source, ocr_id='import', metadata={'sidecar_sha256': 'forged', 'source_sha256': 'forged'},
         metadata_path=sidecar if explicit else None)
     assert artifact.metadata['sidecar_sha256'] == hashlib.sha256(sidecar_bytes).hexdigest()
     assert artifact.metadata['source_sha256'] == hashlib.sha256(raw).hexdigest()
     assert sidecar.read_bytes() == sidecar_bytes
-    assert sidecar.stat().st_mode & 0o777 == 0o600
+    assert source.stat().st_mode & 0o777 == 0o644
+    assert sidecar.stat().st_mode & 0o777 == 0o644
+    assert tmp_path.stat().st_mode & 0o777 == 0o755
 
 
 def test_import_without_sidecar_does_not_invent_a_sidecar_hash(tmp_path):

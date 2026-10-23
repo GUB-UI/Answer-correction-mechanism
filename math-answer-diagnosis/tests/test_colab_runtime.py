@@ -68,7 +68,7 @@ def test_question_scores_drop_total_and_unknown_ids() -> None:
     allocation = [{"question": "(1)", "max_score": 4}, {"question": "(2)", "max_score": 6}]
     scores = normalize_question_scores(raw, allocation)
     assert scores == [
-        {"question": "(1)", "score": 2.0, "max_score": 4.0, "reason": ""},
+        {"question": "(1)", "score": 2.0, "max_score": 4.0, "reason": "", "status": "validated"},
     ]
     assert normalize_question_scores([{"question": "全体", "score": 3}]) == []
     kept = normalize_question_scores([{"question": "(2)", "score": 1, "max_score": 3}])
@@ -117,7 +117,7 @@ def test_empty_question_scores_follow_allocation() -> None:
         {"score": 10, "max_score": 10, "question_scores": [], "possible_ocr_issue": False},
         "diag",
     )
-    assert [item["score"] for item in full.question_scores] == [4.0, 6.0]
+    assert [item["score"] for item in full.question_scores] == [None, None]
     held = build_diagnosis_result(
         context,
         {
@@ -129,7 +129,7 @@ def test_empty_question_scores_follow_allocation() -> None:
         },
         "diag2",
     )
-    assert held.review_status == "needs_teacher_review"
+    assert held.review_status == "review_required"
     assert all(item["score"] is None for item in held.question_scores)
     assert "要教師確認" in held.teacher_review_notes
     partial = build_diagnosis_result(
@@ -145,8 +145,8 @@ def test_empty_question_scores_follow_allocation() -> None:
         },
         "diag3",
     )
-    assert partial.score == 5
-    assert partial.review_status == "needs_teacher_review"
+    assert partial.score == 0
+    assert partial.review_status == "review_required"
 
 
 def test_xiaomi_adapter_sends_japanese_prompt(tmp_path: Path) -> None:

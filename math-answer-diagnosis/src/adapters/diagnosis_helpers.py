@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from src.adapters.base import DiagnosisRunContext
@@ -14,8 +15,11 @@ from src.grading.review_flags import evaluate_review_flags, review_routing_enabl
 
 
 def _to_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -40,7 +44,7 @@ def normalize_question_scores(
         return []
     canonical: dict[str, str] = {}
     for item in allocation or []:
-        question = str(item.get("question") or "").strip()
+        question = str(item.get("question") or item.get("item_id") or "").strip()
         key = normalize_question_label(question)
         if key:
             canonical.setdefault(key, question)
@@ -49,9 +53,7 @@ def normalize_question_scores(
         if not isinstance(item, dict):
             continue
         score = _to_float(item.get("score"))
-        if score is None:
-            continue
-        question = str(item.get("question") or item.get("label") or "").strip()
+        question = str(item.get("question") or item.get("label") or item.get("item_id") or "").strip()
         key = normalize_question_label(question)
         if not key:
             continue
@@ -63,6 +65,7 @@ def normalize_question_scores(
             {
                 "question": question,
                 "score": score,
+                "status": "validated" if score is not None else "review_required",
                 "max_score": _to_float(item.get("max_score")),
                 "reason": str(item.get("reason") or ""),
             }
@@ -70,88 +73,41 @@ def normalize_question_scores(
     return items
 
 
-def fill_question_scores_from_allocation(
+def mark_missing_question_scores(
     scores: list[dict[str, Any]],
     allocation: list[dict[str, Any]] | None,
-    *,
-    total_score: float,
-    possible_ocr_issue: bool = False,
 ) -> list[dict[str, Any]]:
-    """question_scores が空のとき、配点の設問行を作る。
-
-    モデルが満点に相当する合計だけ返したときは、各設問を満点にする。
-    合計が 0 より大きく満点未満のときは配点比で分ける。
-    OCR が疑わしく合計も 0 のときは、設問点を 0 で確定させず未確定の行にする。
-    """
+    """Keep model scores, adding only undetermined rows for omitted questions."""
     from src.teacher_compare import normalize_question_label
 
-    if scores or not allocation:
-        return scores
-    rows: list[dict[str, Any]] = []
-    for item in allocation:
-        question = str(item.get("question") or "").strip()
+    rows = [dict(item) for item in scores]
+    present = {normalize_question_label(item["question"]): item for item in rows}
+    for item in allocation or []:
+        question = str(item.get("question") or item.get("item_id") or "").strip()
         key = normalize_question_label(question)
-        cap = _to_float(item.get("max_score"))
-        if not key or cap is None:
+        if not key:
             continue
-        rows.append({"question": question, "max_score": cap})
-    if not rows:
-        return scores
-    cap_sum = sum(float(row["max_score"]) for row in rows)
-    if possible_ocr_issue and total_score <= 0:
-        return [
-            {
-                "question": row["question"],
-                "score": None,
-                "max_score": row["max_score"],
-                "reason": "要教師確認。OCRが疑わしく設問点が出なかったため未確定",
-            }
-            for row in rows
-        ]
-    if cap_sum > 0 and abs(total_score - cap_sum) <= 0.05:
-        return [
-            {
-                "question": row["question"],
-                "score": row["max_score"],
-                "max_score": row["max_score"],
-                "reason": "モデルが設問点を省略したため配点どおり満点で補完",
-            }
-            for row in rows
-        ]
-    if cap_sum > 0 and total_score > 0:
-        filled: list[dict[str, Any]] = []
-        remaining = float(total_score)
-        for index, row in enumerate(rows):
-            if index == len(rows) - 1:
-                part = remaining
-            else:
-                part = round(total_score * (float(row["max_score"]) / cap_sum), 2)
-                remaining = round(remaining - part, 2)
-            part = min(max(part, 0.0), float(row["max_score"]))
-            filled.append(
-                {
-                    "question": row["question"],
-                    "score": part,
-                    "max_score": row["max_score"],
-                    "reason": "モデルが設問点を省略したため配点比で補完",
-                }
-            )
-        return filled
-    return [
-        {
-            "question": row["question"],
-            "score": 0.0,
-            "max_score": row["max_score"],
-            "reason": "モデルが設問点を省略したため配点表から補完",
+        cap = _to_float(item.get("max_score"))
+        if key in present:
+            if present[key].get("max_score") is None:
+                present[key]["max_score"] = cap
+            continue
+        row = {
+            "question": question,
+            "score": None,
+            "max_score": cap,
+            "status": "review_required",
+            "reason": "要教師確認。設問点が出力されていないため未確定",
         }
-        for row in rows
-    ]
+        rows.append(row)
+        present[key] = row
+    return rows
 
 
 def format_score_allocation(allocation: list[dict[str, Any]]) -> str:
     lines = []
     for item in allocation:
-        question = str(item.get("question") or "").strip()
+        question = str(item.get("question") or item.get("item_id") or "").strip()
         max_score = _to_float(item.get("max_score"))
         if question and max_score is not None:
             lines.append(f"{question}: {max_score:g}点")
@@ -183,25 +139,34 @@ def build_diagnosis_result(
             raw_output, expected or None
         ).errors
     possible_ocr_issue = bool(raw_output.get("possible_ocr_issue", False))
-    score = float(raw_output.get("score", 0) or 0)
-    question_scores = fill_question_scores_from_allocation(
-        normalize_question_scores(raw_output.get("question_scores"), allocation),
-        allocation,
-        total_score=score,
-        possible_ocr_issue=possible_ocr_issue,
+    score = _to_float(raw_output.get("score"))
+    # Rubric items may supply explicit scores for matching IDs. Never derive them
+    # from the total or from allocation weights.
+    provided = raw_output.get("question_scores") or raw_output.get("rubric_scores")
+    question_scores = mark_missing_question_scores(
+        normalize_question_scores(provided, allocation), allocation,
     )
-    item_scores = [
-        float(item["score"]) for item in question_scores if item.get("score") is not None
-    ]
-    # 設問ごとの部分点があるのに合計だけ 0 のときは、部分点の合計を使う。
-    if possible_ocr_issue and score <= 0 and item_scores and sum(item_scores) > 0:
-        score = sum(item_scores)
-    review_status = str(raw_output.get("review_status") or "").strip()
+    missing_scores = not question_scores or any(item["score"] is None for item in question_scores)
+    review_status = str(raw_output.get("review_status") or "validated").strip()
+    if review_status == "needs_teacher_review":
+        review_status = "review_required"
+    if review_status not in {"validated", "review_required", "failed"}:
+        review_status = "review_required"
     notes = str(raw_output.get("teacher_review_notes", ""))
-    if possible_ocr_issue:
-        review_status = "needs_teacher_review"
-        if "要教師確認" not in notes:
-            notes = ("要教師確認。読める手順は設問ごとの部分点とし、全体を0点で確定しない。" + notes).strip()
+    validation_errors = list(raw_output.get("grading_validation") or [])
+    if missing_scores:
+        validation_errors.append("question_scores_missing")
+        notes = ("要教師確認。設問点が未確定。" + notes).strip()
+    if score is None:
+        validation_errors.append("total_score_missing")
+    if not missing_scores and score is not None:
+        if abs(sum(item["score"] for item in question_scores) - score) > 1e-6:
+            validation_errors.append("question_score_sum_mismatch")
+    if (possible_ocr_issue or validation_errors) and review_status != "failed":
+        review_status = "review_required"
+    if possible_ocr_issue and "要教師確認" not in notes:
+        notes = ("要教師確認。OCRの疑いがあるため原文を確認する。" + notes).strip()
+    raw_output["grading_validation"] = validation_errors
     routing = review_routing_enabled()
     flags = evaluate_review_flags(
         raw_output,
@@ -212,8 +177,8 @@ def build_diagnosis_result(
     )
     raw_output["review_flags"] = flags.as_dict()
     # 既定では記録だけ。possible_ocr_issue による確認状態は変えない。
-    if routing and flags.needs_review:
-        review_status = "needs_teacher_review"
+    if routing and flags.needs_review and review_status != "failed":
+        review_status = "review_required"
     return DiagnosisResult(
         diagnosis_id=diagnosis_id,
         answer_id=context.answer_id,

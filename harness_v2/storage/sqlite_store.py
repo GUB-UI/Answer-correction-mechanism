@@ -58,16 +58,20 @@ class RunStore:
                 pass
 
     @contextmanager
-    def _connect(self):
-        self._secure_files()
-        conn = sqlite3.connect(self.db_path)
+    def _connect(self, *, read_only: bool = False):
+        if read_only:
+            conn = sqlite3.connect(self.db_path.resolve().as_uri() + '?mode=ro', uri=True)
+        else:
+            self._secure_files()
+            conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         try:
             with conn:
                 yield conn
         finally:
             conn.close()
-            self._secure_files()
+            if not read_only:
+                self._secure_files()
 
     def save_run(self, record: RunRecord) -> RunRecord:
         cleaned = redact(record.to_dict())
@@ -113,7 +117,7 @@ class RunStore:
                          (json.dumps(redact(outputs), ensure_ascii=False), run_id))
 
     def list_runs(self) -> list[dict[str, Any]]:
-        with self._connect() as conn:
+        with self._connect(read_only=True) as conn:
             rows = conn.execute("SELECT * FROM runs ORDER BY created_at, run_id").fetchall()
         found: list[dict[str, Any]] = []
         for row in rows:

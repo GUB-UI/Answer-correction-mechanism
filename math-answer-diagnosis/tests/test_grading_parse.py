@@ -146,5 +146,5 @@ def test_fence_strip_does_not_set_teacher_review() -> None:
     diagnosis = build_diagnosis_result(context, raw, "diag")
     assert diagnosis.raw_output["fence_stripped"] is True
     assert diagnosis.raw_output["grading_validation"] == []
-    assert diagnosis.review_status == ""
+    assert diagnosis.review_status == "validated"
     assert diagnosis.possible_ocr_issue is False

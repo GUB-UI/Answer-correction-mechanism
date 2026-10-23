@@ -40,24 +40,13 @@ class MockOCRAdapter(OCRAdapter):
 
 class MockDiagnosisAdapter(DiagnosisAdapter):
     def run(self, context: DiagnosisRunContext) -> dict[str, Any]:
-        question_scores = [
-            {
-                "question": str(item.get("question")),
-                "score": round(float(item.get("max_score", 0)) * 0.6, 1),
-                "max_score": float(item.get("max_score", 0)),
-                "reason": "mock",
-            }
-            for item in context.problem.score_allocation
-            if item.get("question") and item.get("max_score") is not None
-        ]
-        score = sum(item["score"] for item in question_scores) if question_scores else 3.0
-        max_score = (
-            sum(item["max_score"] for item in question_scores) if question_scores else 5.0
-        )
+        # Synthetic total for wiring checks; no per-question scores are invented.
+        score = 3.0
+        max_score = sum(float(item.get("max_score") or 0) for item in context.problem.score_allocation) or 5.0
         return {
             "score": score,
             "max_score": max_score,
-            "question_scores": question_scores,
+            "question_scores": [],
             "error_categories": ["計算ミス"],
             "error_locations": [
                 {

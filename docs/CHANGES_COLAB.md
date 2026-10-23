@@ -1,5 +1,14 @@
 # Colab / CUDA 対応の変更一覧
 
+## PR #10: 入力ファイルと共有親ディレクトリの権限を維持
+
+- `private_open()` の読み取りでは chmod や親ディレクトリの作成を行わない。設定・データセット・OCR 本文とメタデータ・成果物・交換結果は通常の読み取りを使い、SQLite の一覧取得も読み取り専用接続に変更した。
+- `private_directory()` は既存ディレクトリの権限を維持する。書き込み側が明示したハーネス管理下の出力ディレクトリだけを 0700 に制限し、既存の共有・ユーザー親ディレクトリには chmod しない。新規出力はファイル 0600、ディレクトリ 0700 とし、管理対象の既存出力は書き込み時に権限を制限する。
+- `private_open`・`private_directory`・chmod の呼び出しを監査し、CLI・CPU OCR・旧版比較スクリプト・成果物・ファイル交換・SQLite 関連ファイルまで確認した。
+- 0755 ディレクトリ内の 0644 入力が変化しないこと、既存の出力親ディレクトリの維持、新規出力の権限、存在しない入力、テキスト・バイナリ読み取り、umask の違いを回帰テストで確認する。OCR 来歴テストも入力の権限維持を検証するよう更新した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **712 件成功**（ローカルの模擬 HTTP サーバー起動を許可して実行）。
+
 Mac の oMLX + mlx-vlm 経路は残し、Google Colab（CUDA）でも同じ Streamlit アプリが動くようにした。
 GPU メモリは、モデルを別プロセスにして **GLM-OCR → UniMERNet → 診断LLM** の順に1つだけ載せることで空ける。
 答案と採点は `APP_DATA_DIR`（Google Drive を想定）に書く。
@@ -561,3 +570,32 @@ LaTeX と Unicode の根号、括弧や上線の有無を共通表記にそろ�
 設計概要の既存テスト1件は閲覧禁止ファイルを読むため除外。アプリの
 テストには制限サンドボックス外でのローカルソケット接続が必要。
 結果: **796 passed, 1 deselected in 21.42s**（新規47件を含む）。
+## Phase 4 / 03: 旧・新プロンプト比較の実験サマリーをコミット（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `docs/harness_v2/experiments/prompt_ambiguity_aware_v1_summary.md` | 同一条件（モデル・設定・データセット・OCR入力）での旧プロンプトと候補プロンプトの比較（集計のみ・画像/個人情報なし）。1-A/2-B/3-A の状態と点数、根拠一致、不要なフラグの変化、定義を明示した曖昧入力の検出率、限界。人が結果を確認するまで既定にしない。 |
+| `harness_v2/tests/test_p4_experiment_summary.py` | 候補扱いの明記と、画像・ローカルパスを含まないことを確認。 |
+## PR #9 修正1: OCR 再利用の条件と手動転記の分離
+
+OCR 結果にエンジン、モデル ID・revision、OCR 設定、入力画像ごとの SHA-256（ページ順）を保存し、現在の実行とすべて一致するときだけ再利用する。情報のない旧レコード、画像の変更・欠落、設定の変更では再利用しない。数式置換が失敗した結果を、置換済みとして再利用しない。`OCR_MODEL_REVISION` は managed サーバーの processor・重みの読み込みにも渡す。
+
+人の修正は元の OCR を残して別レコードの `manual_transcription` として保存する。旧 `human_corrected` レコードもこの入力型として読み込む。一括処理で手動転記を使うときは `--input-type manual_transcription`、テキスト答案は `--input-type typed_text` を明示する。OCR キャッシュとしては扱わない。
+
+検証: `tests/test_ocr_reuse.py` に一致時の再利用、各条件の不一致、複数画像の順序・枚数、旧レコード、手動転記・テキスト入力の分離、数式置換失敗、revision の受け渡しを追加。全テストを指定の Python・pytest コマンドで実行し、147 件成功（既存の HTTP mock 用に localhost 接続を許可）。
+
+## PR #9 修正2: 設問点の自動補完を廃止
+
+合計点が満点・途中点・0点のどの場合も、配点や配点比から設問点を計算しない。モデルが省略した設問、null・無効な設問点は `None` のまま残し、設問と診断を `review_required` にする。この確認は `REVIEW_FLAGS_ROUTE` がオフでも必須。明示された 0 点や部分点は変えず、ルーブリックに実際に出力された同じ ID の点だけを正規化する。mock も配点から設問点を生成しない。合計点も設問点から書き換えず、不一致を確認理由に残す。
+
+診断・一括処理の状態名を `validated` / `review_required` / `failed` に統一し、旧 `needs_teacher_review` は読み込み時に変換する。画面・プロンプトも同じ名前を使う。設問点が未確定のまま保存・教師比較・再チェックできるようにした。
+
+検証: `tests/test_no_score_autofill.py` に合計点と OCR 疑いの組合せ、部分的な出力、明示的な 0 点、null・欠落・無効値、配点なし、ルーブリック項目不足、mock、保存後の null、教師比較、一括再利用時の確認状態を追加。既存の満点補完・合計書き換えの期待値を撤回し、旧状態名のテストを更新。
+
+全テストを指定の Python・pytest コマンドで実行し、180 件成功（既存の HTTP mock 用に localhost 接続を許可）。`docs/harness_v2/CHANGES.md` はこのブランチには存在しないため、新規作成していない。
+
+## Phase 4 / 04: 積み直し時のテスト修正（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/tests/test_private_permissions.py` | PR #10 の権限テストが仮ラベル `v1` を使っており、PR #11 の厳格な版登録で拒否されるため、登録済みの `harness_v2_default` に変更。 |

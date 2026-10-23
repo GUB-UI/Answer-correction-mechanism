@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--commit", default="unknown")
     args = parser.parse_args(argv)
     case = json.loads(args.input.read_text(encoding="utf-8"))
-    private_directory(args.out)
+    private_directory(args.out, managed=True)
     store = RunStore(args.out / "runs.sqlite", ArtifactStore(args.out / "artifacts"))
     completion = case.get("new_completion")
     if not isinstance(completion, str) or not completion:
