@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
@@ -31,12 +32,38 @@ def redact(value: Any) -> Any:
     return _redact(value, secrets)
 
 
+def _redact_text(text: str, secrets: list[str]) -> str:
+    cleaned = _SECRET.sub("[redacted]", text)
+    for secret in secrets:
+        cleaned = cleaned.replace(secret, "[redacted]")
+    return cleaned
+
+
+def _redact_embedded(text: str, secrets: list[str]) -> str:
+    """Redact secret keys inside JSON objects that sit inside a larger string."""
+    decoder = json.JSONDecoder()
+    pieces: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] in "{[":
+            try:
+                loaded, end = decoder.raw_decode(text, index)
+            except json.JSONDecodeError:
+                pieces.append(text[index])
+                index += 1
+                continue
+            if isinstance(loaded, (dict, list)):
+                pieces.append(json.dumps(_redact(loaded, secrets), ensure_ascii=False))
+                index = end
+                continue
+        pieces.append(text[index])
+        index += 1
+    return _redact_text("".join(pieces), secrets)
+
+
 def _redact(value: Any, secrets: list[str]) -> Any:
     if isinstance(value, str):
-        text = _SECRET.sub("[redacted]", value)
-        for secret in secrets:
-            text = text.replace(secret, "[redacted]")
-        return text
+        return _redact_embedded(value, secrets)
     if isinstance(value, dict):
         cleaned: dict[str, Any] = {}
         for key, item in value.items():

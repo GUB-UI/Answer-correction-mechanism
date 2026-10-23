@@ -10,6 +10,7 @@ from pathlib import Path
 from harness_v2.core.pipeline import Pipeline
 from harness_v2.providers.fixture import FixtureProvider
 from harness_v2.storage.artifacts import ArtifactStore
+from harness_v2.storage.secrets import redact
 from harness_v2.storage.sqlite_store import RunStore
 
 
@@ -25,17 +26,22 @@ def main(argv: list[str] | None = None) -> int:
     store = RunStore(args.out / "runs.sqlite", ArtifactStore(args.out / "artifacts"))
     completion = case.get("new_completion")
     if not isinstance(completion, str) or not completion:
-        payload = {
-            "pipeline": "harness_v2",
-            "status": "no_new_completion",
-            "failure_reason": "saved new_completion is required for an offline run",
-        }
+        payload = redact(
+            {
+                "pipeline": "harness_v2",
+                "status": "no_new_completion",
+                "failure_reason": "saved new_completion is required for an offline run",
+            }
+        )
         (args.out / "result.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return 0
     pipeline = Pipeline(store, FixtureProvider(completion))
     record = pipeline.run(case, experiment_id=args.experiment, commit=args.commit)
     (args.out / "result.json").write_text(
-        json.dumps({"pipeline": "harness_v2", "status": "ran", "run": record.to_dict()}, indent=2),
+        json.dumps(
+            redact({"pipeline": "harness_v2", "status": "ran", "run": record.to_dict()}),
+            indent=2,
+        ),
         encoding="utf-8",
     )
     return 0
