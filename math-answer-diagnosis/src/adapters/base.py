@@ -37,6 +37,10 @@ class OCRAdapter(ABC):
 
 
 class DiagnosisAdapter(ABC):
+    def grading_metadata(self, context: DiagnosisRunContext) -> dict[str, Any] | None:
+        """Unknown grading configurations are never eligible for automatic reuse."""
+        return None
+
     @abstractmethod
     def run(self, context: DiagnosisRunContext) -> dict[str, Any]:
         raise NotImplementedError

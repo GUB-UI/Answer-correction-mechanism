@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from src.adapters.base import DiagnosisAdapter, DiagnosisRunContext
 from src.adapters.diagnosis_helpers import (
     build_diagnosis_result,
+    build_grading_metadata,
     format_score_allocation,
     parse_diagnosis_json,
 )
@@ -18,6 +21,13 @@ DIAGNOSIS_SERVER_PROVIDERS = {"omlx", "lmstudio", "lm_studio", "openai", "colab_
 
 
 class LMStudioDiagnosisAdapter(DiagnosisAdapter):
+    generation_settings = {
+        "response_format_json": False,
+        "temperature": 0.0,
+        "max_tokens": 1536,
+        "disable_thinking": True,
+    }
+
     def __init__(
         self,
         config: AppConfig | None = None,
@@ -28,31 +38,39 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
         self.lmstudio_client = lmstudio_client or LMStudioClient(self.config)
         self.transport = transport
 
-    def run(self, context: DiagnosisRunContext) -> dict:
-        from src.runtime.services import LLM, get_service_manager
-
-        get_service_manager(self.config).ensure(LLM)
+    def _messages(self, context: DiagnosisRunContext) -> list[dict]:
         prompt_type = context.prompt_type or DEFAULT_DIAGNOSIS_PROMPT_TYPE
         system_prompt = DIAGNOSIS_PROMPTS.get(
             prompt_type,
             DIAGNOSIS_PROMPTS[DEFAULT_DIAGNOSIS_PROMPT_TYPE],
         )
         user_prompt = self._build_user_prompt(context)
-        messages = [
+        return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+
+    def grading_metadata(self, context: DiagnosisRunContext) -> dict:
+        settings = {"request": self.generation_settings}
+        if self.config.services.mode == "managed":
+            settings["server"] = asdict(self.config.services.llm)
+        return build_grading_metadata(
+            context, provider=self.transport, messages=self._messages(context),
+            generation_settings=settings,
+        )
+
+    def run(self, context: DiagnosisRunContext) -> dict:
+        from src.runtime.services import LLM, get_service_manager
+
+        get_service_manager(self.config).ensure(LLM)
         raw_text = self.lmstudio_client.chat_completion(
-            messages=messages,
+            messages=self._messages(context),
             model=context.model_name or self.config.diagnosis.model_name,
-            response_format_json=False,
-            temperature=0.0,
-            max_tokens=1536,
-            disable_thinking=True,
+            **self.generation_settings,
         )
         parsed = parse_diagnosis_json(raw_text)
         parsed["_transport"] = self.transport
-        parsed["_prompt_type"] = prompt_type
+        parsed["_prompt_type"] = context.prompt_type or DEFAULT_DIAGNOSIS_PROMPT_TYPE
         return parsed
 
     def to_diagnosis_result(

@@ -123,6 +123,7 @@ class DiagnosisResult(BaseModel):
     ocr_id: str
     model_name: str
     prompt_type: str
+    grading_metadata: dict[str, Any] | None = None
     score: float | None
     max_score: float
     error_categories: list[str]
