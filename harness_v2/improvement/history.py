@@ -55,6 +55,23 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+_PID = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+
+
+def _check_provenance(exp: dict) -> None:
+    """Every contributing run must come from the header's commit/config/identity."""
+    from harness_v2.run import identity as _identity
+    cfg = exp.get("config") or {}
+    if exp.get("identity") != _identity({"config": cfg, "dataset": exp.get("dataset"), "commit": exp["commit"]}):
+        raise HistoryError("experiment identity does not match its config/dataset/commit")
+    want = {"commit": exp["commit"], "experiment_id": cfg.get("name"),
+            "prompt_version": cfg.get("prompt_version"), "model_id": cfg.get("model"),
+            "rubric_version": cfg.get("rubric_version")}
+    for run in list(exp.get("runs") or []) + list(exp.get("attempt_runs") or []):
+        if not isinstance(run, dict) or any(run.get(k) != v for k, v in want.items()):
+            raise HistoryError("a contributing run does not belong to this experiment")
+
+
 def snapshot_id(snapshot: dict) -> str:
     required = {"baseline_commit", "candidate_commit", "config_sha256", "dataset_manifest_sha256",
                 "prompt_version", "ocr_preprocess", "evaluation_digest"}
@@ -261,6 +278,10 @@ class History:
     def propose(self, proposal: ImprovementProposal, *, change_id: str | None = None,
                 source: dict | None = None) -> dict:
         record = proposal.to_dict()
+        from harness_v2.storage.secrets import redact as _redact
+        pid = proposal.proposal_id
+        if not isinstance(pid, str) or not _PID.match(pid) or _redact(pid) != pid:
+            raise HistoryError("proposal_id must be [A-Za-z0-9._-]{1,100} and contain nothing redaction would change")
         return self._append("proposed", proposal.proposal_id, {
             "proposal": record, "content_sha256": sha256(canonical(record)),
             "change_id": change_id, "source": source or {}})
@@ -284,7 +305,16 @@ class History:
             if prior["content_sha256"] == digest:
                 return None  # idempotent
             raise HistoryError("different content already registered under this proposal_id")
-        return self.propose(proposal, source={"draft_path": str(path), "sha256": digest})
+        source = {"draft_path": str(path), "sha256": digest}
+        if self.repo is not None and proposal.candidate_commit:
+            from harness_v2.improvement.duplicates import change_identity, find_duplicates
+            self._check_commit(proposal.baseline_commit)
+            self._check_commit(proposal.candidate_commit)
+            identity = change_identity(self.repo, proposal.baseline_commit, proposal.candidate_commit)
+            source.update(identity=identity,
+                          duplicates=find_duplicates(self.state(), identity, proposal.baseline_commit))
+            return self.propose(proposal, change_id=identity["change_id"], source=source)
+        return self.propose(proposal, source=source)
 
     def attach_candidate(self, proposal_id: str, candidate_commit: str, *,
                          change_id: str | None = None) -> dict:
@@ -317,6 +347,12 @@ class History:
             if not isinstance(exp.get("commit"), str) or not _SHA40.match(exp["commit"]):
                 raise HistoryError("experiment commit must be a full 40-hex sha")
             self._check_commit(exp["commit"])
+            _check_provenance(exp)
+        rec = self.state()["proposals"].get(proposal_id)
+        if rec is None:
+            raise HistoryError("evaluation for unknown proposal")
+        if not rec.get("identity") and self.repo is not None:
+            raise HistoryError("candidate must be attached (identified) before evaluation")
         comp = compare(base, cand)
         comp_bytes = canonical(comp)
         if comp.get("comparable") is not True:
@@ -339,6 +375,9 @@ class History:
     def record_external_evaluation(self, proposal_id: str, *, snapshot: dict, verdict: str,
                                    evidence_path: Path, regressions: list | None = None) -> dict:
         """Evaluations that are not runner comparisons (e.g. the OCR skeleton-CER gate)."""
+        rec = self.state()["proposals"].get(proposal_id)
+        if rec is not None and not rec.get("identity") and self.repo is not None:
+            raise HistoryError("candidate must be attached (identified) before evaluation")
         data = Path(evidence_path).read_bytes()
         if snapshot.get("evaluation_digest") != sha256(data):
             raise HistoryError("evaluation_digest must be the sha256 of the evidence file")
@@ -512,6 +551,8 @@ def _replay(events: list[dict]) -> dict:
                 raise HistoryError("unknown verdict")
             if rec["candidate_commit"] and p["snapshot"]["candidate_commit"] != rec["candidate_commit"]:
                 raise HistoryError("evaluation snapshot is for a different candidate")
+            if p["snapshot"].get("baseline_commit") != rec["proposal"].get("baseline_commit"):
+                raise HistoryError("evaluation baseline differs from the proposal baseline")
             rec["evaluations"].append(p)
             if rec["decision"] == "accepted":  # a new snapshot invalidates the earlier acceptance
                 rec["decision"] = "pending"

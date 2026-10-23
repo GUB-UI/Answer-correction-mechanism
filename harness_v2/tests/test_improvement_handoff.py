@@ -12,7 +12,7 @@ from harness_v2.tests.test_improvement_history import _experiments, _proposal, i
 def _setup(tmp_path, repo, inputs):
     r, (c0, c1, _) = repo
     h = History(tmp_path / "h", repo=r)
-    h.propose(_proposal("P", c0))
+    h.propose(_proposal("P", c0)); h.attach_candidate("P", c1)
     h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs))
     return h
 
@@ -49,7 +49,7 @@ def test_handoff_redacts_secrets(tmp_path, repo, inputs):
     h = History(tmp_path / "h", repo=r)
     p = _proposal("P", c0)
     p.cause = "leaked key sk-abcdefghijklmnopqrstuvwxyz0123456789 in config"
-    h.propose(p)
+    h.propose(p); h.attach_candidate("P", c1)
     h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs))
     folder = write_review_request(h, "P", tmp_path / "out")
     for name in ("request.json", "issue.md", "pr.md", "commands.txt"):

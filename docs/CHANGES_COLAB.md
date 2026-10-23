@@ -666,3 +666,13 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 | `harness_v2/improvement/handoff.py` | 秘密情報の伏せ字（redact）を適用してからファイルを作成。 |
 | `scripts/register_history.py` | 途中で止まった登録を手順ごとに再開。 |
 | テスト | 上記の各ケース。 |
+
+## Phase 5 / 12: 改善ループのレビュー修正（Sol 差分2回目）（2026-10-24）
+
+| ファイル | 変更 |
+|---|---|
+| `harness_v2/improvement/history.py` | 評価時に実験IDを設定・データセット・コミットから再計算し、すべての実行がその実験のもの（コミット・名前・プロンプト・モデル・ルーブリック）か確認。候補を登録していない提案や、提案と違うベースラインの評価は拒否。下書きの取り込みでも重複判定。提案IDは英数字と ._- のみ。 |
+| `harness_v2/improvement/duplicates.py` | 同じ部品の同じ変更を1つでも含めば重複として検出（無関係な変更が違っても）。 |
+| `harness_v2/improvement/handoff.py` | 伏せ字で変わる提案IDは受け渡しを拒否。 |
+| `scripts/register_history.py` | 途中で止まった登録で、候補の登録だけを再開。 |
+| テスト | `test_improvement_review2.py` ほか。 |

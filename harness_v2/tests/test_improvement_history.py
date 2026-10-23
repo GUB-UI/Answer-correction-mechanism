@@ -55,7 +55,9 @@ def _experiments(tmp_path, h, base, cand, inputs, verdict="improved", tag="e"):
     paths = []
     for name, commit in (("base", base), ("cand", cand)):
         p = tmp_path / f"{tag}_{name}.json"
-        p.write_text(json.dumps({"identity": name + tag, "config": config, "dataset": ds, "commit": commit,
+        from harness_v2.run import identity
+        ident = identity({"config": config, "dataset": ds, "commit": commit})
+        p.write_text(json.dumps({"identity": ident, "config": config, "dataset": ds, "commit": commit,
                                  "runs": []}))
         paths.append(p)
 
@@ -159,7 +161,7 @@ def test_promoted_version_must_match_snapshot(tmp_path, repo, inputs):
     r, (c0, c1, _) = repo
     h = History(tmp_path / "h", repo=r)
     _base(h, c0, inputs)
-    h.propose(_proposal("P", c0))
+    h.propose(_proposal("P", c0)); h.attach_candidate("P", c1)
     ev = h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs))
     h.decide("P", "accepted", reason="ok")
     h.approve("P", approver="o", snapshot_id_=ev["payload"]["snapshot_id"], quote="q", **REPO_ARGS)
@@ -175,7 +177,7 @@ def test_promoted_version_must_match_snapshot(tmp_path, repo, inputs):
 def test_evaluation_evidence_binding(tmp_path, repo, inputs):
     r, (c0, c1, _) = repo
     h = History(tmp_path / "h", repo=r)
-    h.propose(_proposal("P", c0))
+    h.propose(_proposal("P", c0)); h.attach_candidate("P", c1)
     kw = _experiments(tmp_path, h, c0, c1, inputs)
     cand = json.loads(kw["candidate_results"].read_text())
     cand["dataset"] = {"different": True}
@@ -199,7 +201,7 @@ def test_reevaluation_invalidates_acceptance(tmp_path, repo, inputs):
     r, (c0, c1, _) = repo
     h = History(tmp_path / "h", repo=r)
     _base(h, c0, inputs)
-    h.propose(_proposal("P", c0))
+    h.propose(_proposal("P", c0)); h.attach_candidate("P", c1)
     h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs, tag="a"))
     h.decide("P", "accepted", reason="ok")
     ev = h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs, verdict="regressed", tag="b"))
@@ -214,7 +216,7 @@ def test_reevaluation_invalidates_acceptance(tmp_path, repo, inputs):
 def test_accept_requires_improved_and_rejected_is_final(tmp_path, repo, inputs):
     r, (c0, c1, _) = repo
     h = History(tmp_path / "h", repo=r)
-    h.propose(_proposal("P", c0))
+    h.propose(_proposal("P", c0)); h.attach_candidate("P", c1)
     with pytest.raises(HistoryError):
         h.decide("P", "accepted", reason="x")
     h.record_evaluation("P", **_experiments(tmp_path, h, c0, c1, inputs, verdict="regressed"))

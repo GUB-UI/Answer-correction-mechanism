@@ -41,7 +41,8 @@ def main(argv=None) -> int:
         h.propose(ImprovementProposal(p4, b, "", "Garbled OCR passages were not surfaced to the teacher",
                                       ["prompt"], "Score-affecting ambiguity cited with uncertainty >= 0.5",
                                       {}, [], [], "pending"), source={"phase": 4})
-        h.attach_candidate(p4, c)
+    if not rec(p4)["candidate_commit"]:  # resumes an interrupted registration
+        h.attach_candidate(p4, json.loads(cand_res.read_text())["commit"])
     if not rec(p4)["evaluations"]:
         h.record_evaluation(p4, baseline_results=base_res, candidate_results=cand_res, ocr_preprocess="none")
     # decision intentionally left pending: adoption awaits the owner's review
@@ -53,6 +54,7 @@ def main(argv=None) -> int:
         h.propose(ImprovementProposal(p5, _full(h, "53adc0b"), "", "OCR misreads remain after the Phase 4 prompt",
                                       ["recognition"], "Generic grayscale+autocontrast+x1.5 lowers OCR error",
                                       {}, [], [], "pending"), source={"phase": 5})
+    if not rec(p5)["candidate_commit"]:
         h.attach_candidate(p5, _full(h, "27cb2af"))
     if not rec(p5)["evaluations"]:
         rows = [json.loads(x) for x in

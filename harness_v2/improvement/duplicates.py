@@ -36,15 +36,15 @@ def change_identity(repo: Path, baseline: str, candidate: str) -> dict:
 
 
 def overlaps(a: dict | None, b: dict | None) -> bool:
-    """True if one change contains the other's exact (path, blob) edits.
+    """True if the changes share any exact (path, blob) edit.
 
-    Catches a rejected edit resubmitted together with unrelated edits, while
+    Catches a rejected component edit resubmitted with other, differing edits, while
     staying byte-sensitive (a whitespace change yields a different blob id).
     """
     if not a or not b or not a.get("pairs") or not b.get("pairs"):
         return False
     pa, pb = {tuple(x) for x in a["pairs"]}, {tuple(x) for x in b["pairs"]}
-    return pa <= pb or pb <= pa
+    return bool(pa & pb)
 
 
 def find_duplicates(state: dict, identity: dict, baseline: str) -> list[dict]:

@@ -41,7 +41,12 @@ def write_review_request(history: History, proposal_id: str, out_root: Path) -> 
                "expected_effect": proposal["expected_effect"], "verdict": latest["verdict"],
                "reasons": [str(r) for r in (latest["evaluation_results"].get("reasons") or [])]}
     _validate(request, "proposal_review_request.schema.json")
-    request = _blind_text(redact(request))  # secrets and score text never leave the box
+    if redact(proposal_id) != proposal_id:
+        raise HistoryError("proposal_id would change under redaction; refuse to hand off")
+    request = _blind_text(redact(request))
+    if request["proposal_id"] != proposal_id:
+        raise HistoryError("proposal_id changed during sanitization")
+    proposal_id = request["proposal_id"]  # secrets and score text never leave the box
     _validate(request, "proposal_review_request.schema.json")
     rid = safe_request_id(request["request_id"])
     folder = private_directory(Path(out_root) / rid, managed=True)

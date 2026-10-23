@@ -555,3 +555,13 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 | `harness_v2/improvement/handoff.py` | Apply `redact()` (secrets) before score scrubbing and render every file from the cleaned request. | Sol major 6. |
 | `scripts/register_history.py` | Resumes each missing step (candidate, evaluation, decision) instead of skipping an existing proposal. | Sol minor 7. |
 | tests | Comparison not comparable / evidence objects retained; re-evaluation invalidates acceptance; refused repair keeps bytes; contains-change and attach-candidate duplicates; secret redaction. | |
+
+## Phase 5 / 12: Loop review fixes (Sol diff round 2) (2026-10-24)
+
+| File | Change | Why |
+|---|---|---|
+| `harness_v2/improvement/history.py` | `record_evaluation` recomputes each experiment identity from config/dataset/commit and requires every run and attempt run to match the header commit, experiment name, prompt, model and rubric. Evaluations require an identified candidate and, on replay, the proposal's baseline commit. `import_draft` derives identity and duplicate flags when the draft names a candidate. `proposal_id` must be `[A-Za-z0-9._-]{1,100}` and unchanged by redaction. | Sol blocker 1 (run provenance), majors 2, 3, 5. |
+| `harness_v2/improvement/duplicates.py` | `overlaps` flags any shared exact (path, blob) edit, not only whole-set containment. | Sol major 4. |
+| `harness_v2/improvement/handoff.py` | Refuses a proposal_id that sanitization would change, so every file uses the same validated id. | Sol major 5. |
+| `scripts/register_history.py` | Attaches a missing candidate independently of proposal creation. | Sol minor 6. |
+| tests | `test_improvement_review2.py`; fixtures now carry real experiment identities and attach candidates. | |
