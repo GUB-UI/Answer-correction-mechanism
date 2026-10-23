@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from typing import Any
 from harness_v2 import __version__
 from harness_v2.core.contracts import Check, FailureCase, GradingResult, RunRecord
 from harness_v2.evaluation.independent import grading_allowlist, prepare_independent_input
+from harness_v2.evaluation.review import review_disagreement
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import ScoringParseError, build_prompt, items_from_completion
 from harness_v2.grading.validator import validate
@@ -35,25 +35,6 @@ def _optional_score(value: Any) -> float | None:
     if not math.isfinite(number):
         return None
     return number
-
-
-def _review_disagreement(text: str, result: GradingResult) -> str:
-    try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError:
-        return "independent_review_unparsed"
-    if not isinstance(loaded, dict):
-        return "independent_review_unparsed"
-    if loaded.get("agree") is False:
-        return "independent_review_disagree"
-    their_total = loaded.get("total_score")
-    if isinstance(their_total, bool) or not isinstance(their_total, (int, float)):
-        return "independent_review_no_score"
-    if not math.isfinite(float(their_total)):
-        return "independent_review_no_score"
-    if result.total_score is None or abs(float(their_total) - float(result.total_score)) > 1e-6:
-        return "independent_review_disagree"
-    return ""
 
 
 class Pipeline:
@@ -82,16 +63,23 @@ class Pipeline:
             "answer_text": answer_text,
             "rubric": case.get("rubric") or [],
         }
+        # Validate before allowlisting so malformed rubric rows cannot disappear.
+        rubric_from_data(raw_view["rubric"])
         view = prepare_independent_input(raw_view) if self.independent else raw_view
         rubric = rubric_from_data(view.get("rubric") or [])
         prompt_answer = str(view.get("answer_text") or "")
+        grading_name = artifact.artifact_name if artifact is not None else ""
+        grading_hash = hashlib.sha256(prompt_answer.encode("utf-8")).hexdigest()
+        if prompt_answer != answer_text:
+            grading_name = f"grading_private/{request_id}.txt"
+            _, grading_hash = self.store.artifacts.write_private_text(grading_name, prompt_answer)
         prompt = build_prompt(str(view.get("problem_text") or ""), prompt_answer, rubric)
         self.store.artifacts.write_text(f"prompts/{request_id}.txt", prompt)
         exchange = self.provider.generate(prompt, request_id=request_id)
         raw_name = f"raw/{request_id}.txt"
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
-        result = self._grade(exchange, rubric, answer_text, request_id)
-        review_payload = self._maybe_review(result, view, request_id)
+        result = self._grade(exchange, rubric, prompt_answer, request_id)
+        review_payload = self._maybe_review(result, view, rubric, request_id)
         proposal_link = self._maybe_propose(result, case, view, experiment_id, commit, request_id, raw_name)
         record = RunRecord(
             experiment_id=experiment_id,
@@ -106,6 +94,14 @@ class Pipeline:
                 "ocr_artifact": artifact.artifact_name if artifact is not None else "",
                 "ocr_redacted": artifact.redacted_name if artifact is not None else "",
                 "ocr_sha256": artifact.sha256 if artifact is not None else "",
+                "grading_input_artifact": grading_name,
+                "grading_input_sha256": grading_hash,
+                "ocr_metadata": {
+                    "engine": artifact.engine,
+                    "revision": artifact.revision,
+                    "dtype": artifact.dtype,
+                    "elapsed_s": artifact.elapsed_s,
+                } if artifact is not None else {},
                 "raw_response_artifact": raw_name,
                 "regions": len(structure_text(answer_text)),
                 "candidates": [
@@ -186,13 +182,20 @@ class Pipeline:
         if digest != artifact.sha256 or data.decode("utf-8") != artifact.raw_text:
             raise RuntimeError("grading input is not the stored OCR artifact")
 
-    def _maybe_review(self, result: GradingResult, view: dict[str, Any], request_id: str) -> dict[str, Any]:
+    def _maybe_review(self, result: GradingResult, view: dict[str, Any], rubric: list, request_id: str) -> dict[str, Any]:
         if self.codex_reviewer is None or result.status != "validated":
             return {}
         payload = grading_allowlist(view)
-        outcome = self.codex_reviewer.review_independent(payload, request_id=f"{request_id}-review")
-        saved = outcome.to_dict() if hasattr(outcome, "to_dict") else {"text": str(outcome)}
-        reason = _review_disagreement(str(saved.get("text") or ""), result)
+        try:
+            outcome = self.codex_reviewer.review_independent(payload, request_id=f"{request_id}-review")
+            saved = outcome.to_dict() if hasattr(outcome, "to_dict") else {"text": str(outcome)}
+            if not isinstance(saved, dict):
+                saved = {"status": "failed", "error": "invalid reviewer outcome", "text": ""}
+            reason = review_disagreement(saved, result, rubric, str(payload.get("answer_text") or ""))
+        except Exception as exc:
+            saved = {"status": "failed", "error": str(exc), "error_type": type(exc).__name__,
+                     "request_id": f"{request_id}-review", "text": ""}
+            reason = "independent_review_exception"
         if reason:
             result.status = "review_required"
             result.failure_reason = reason

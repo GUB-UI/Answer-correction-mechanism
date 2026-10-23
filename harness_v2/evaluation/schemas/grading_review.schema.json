@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "items",
+    "total_score"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item_id",
+          "score",
+          "evidence_spans",
+          "math_reason",
+          "uncertainty",
+          "review_reason"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "evidence_spans": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "text"
+              ],
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "start": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "end": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "source": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "math_reason": {
+            "type": "string"
+          },
+          "uncertainty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "review_reason": {
+            "type": "string"
+          },
+          "max_points": {
+            "type": "number",
+            "minimum": 0
+          },
+          "max_score": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "total_score": {
+      "type": [
+        "number",
+        "null"
+      ]
+    }
+  }
+}

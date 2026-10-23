@@ -94,7 +94,7 @@ class XiaomiOCR:
             raise OCRImportError("import OCR text, not a student image")
         if not source.is_file():
             raise OCRImportError(f"OCR text file not found: {source}")
-        raw = source.read_text(encoding="utf-8")
+        raw = source.read_bytes().decode("utf-8")
         return self._store(ocr_id, source.name, raw)
 
     def store_text(self, raw: str, *, ocr_id: str, source_name: str) -> OCRArtifact:
@@ -174,4 +174,4 @@ def _subprocess_ocr(image_path: Path, *, dtype: str) -> tuple[str, dict[str, Any
             loaded = json.loads(line)
             if isinstance(loaded, dict):
                 meta.update(loaded)
-        return text_path.read_text(encoding="utf-8"), meta
+        return text_path.read_bytes().decode("utf-8"), meta

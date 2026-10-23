@@ -27,10 +27,28 @@ _FAILURE_FIELDS = (
     "uncertainty",
     "execution_log",
 )
+# Scalar score values must end before punctuation/prose, rather than consume a
+# numeric prefix of a student's symbolic expression such as score = 2*x + 1.
+_SCALAR = r"[-+−]?(?:\d+(?:[.．]\d+)?(?:[eE][-+]?\d+)?|NaN|Inf(?:inity)?)"
+_SCORE_VALUE = rf"{_SCALAR}(?:[ \t]*(?:[/／]|out[ \t]+of)[ \t]*{_SCALAR})?"
+_VALUE = (
+    rf"(?:[\"']{_SCORE_VALUE}(?:[ \t]*(?:points?|marks?|点))?[\"']|{_SCORE_VALUE}|null)"
+    r"(?:[ \t]*点|(?![\w.．/／]))(?!(?:[ \t]*[-+*/^=]))"
+)
 _SCORE_TEXT = re.compile(
-    r"(?i)\"?(?:predicted_score|reference_score|prior[_\s-]*ai[_\s-]*score|"
-    r"teacher_score|ai_score|score_strict|correct_answer_score)\"?"
-    r"\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|-?\d+(?:\.\d+)?|\S+)"
+    r"(?i)(?<!\w)[\"']?(?:(?:predicted|reference|teacher|ai|total|correct[_\s-]*answer|"
+    r"prior[_\s-]*ai)[_\s-]*)?score(?:_strict)?[\"']?"
+    rf"\s*(?:[:=：]|was\b|is\b)\s*{_VALUE}"
+)
+_ATTRIBUTED_SCORE = re.compile(
+    r"(?i)(?<!\w)(?:(?:prior|previous|earlier|reference|teacher|ai|model|predicted|total)[_\s-]+)+"
+    r"(?:scores?|scored|grades?|graded|marks?|awarded|gave|assigned)"
+    r"(?:[ \t]+(?:is|was|of|a|the|score|grade|total))*[ \t]*[:=：]?[ \t]*"
+    + _VALUE
+)
+_POINT_TEXT = re.compile(
+    r"(?:\d+(?:[.．]\d+)?\s*[/／]\s*\d+(?:[.．]\d+)?\s*点|"
+    r"(?:採点(?:結果)?|参照得点|教師採点|得点|点数|評価点|合計点|スコア)\s*[:：=は]?\s*\d+(?:[.．]\d+)?\s*点?)"
 )
 
 
@@ -68,7 +86,10 @@ def _scrub_embedded(text: str) -> str:
                 index += 1
                 continue
             if isinstance(loaded, (dict, list)):
-                pieces.append(json.dumps(_strip_loaded(loaded), ensure_ascii=False))
+                cleaned = _strip_loaded(loaded)
+                # Mathematical lists/objects are text too: do not reserialize them
+                # unless blinding actually changed their contents.
+                pieces.append(text[index:end] if cleaned == loaded else json.dumps(cleaned, ensure_ascii=False))
                 index = end
                 continue
         pieces.append(text[index])
@@ -77,7 +98,10 @@ def _scrub_embedded(text: str) -> str:
 
 
 def scrub_score_text(text: str) -> str:
-    return _SCORE_TEXT.sub("[redacted-score]", _scrub_embedded(text))
+    text = _scrub_embedded(text)
+    for pattern in (_SCORE_TEXT, _ATTRIBUTED_SCORE, _POINT_TEXT):
+        text = pattern.sub("[redacted-score]", text)
+    return text
 
 
 def _text(value: Any) -> str:
@@ -108,7 +132,11 @@ def grading_allowlist(payload: dict[str, Any]) -> dict[str, Any]:
                 if field not in item:
                     continue
                 value = item[field]
-                row[field] = _text(value) if isinstance(value, str) else value
+                if field == "max_points":
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        row[field] = value
+                elif isinstance(value, str):
+                    row[field] = _text(value)
             items.append(row)
     kept["rubric"] = items
     return kept

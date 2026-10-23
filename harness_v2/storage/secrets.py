@@ -53,7 +53,8 @@ def _redact_embedded(text: str, secrets: list[str]) -> str:
                 index += 1
                 continue
             if isinstance(loaded, (dict, list)):
-                pieces.append(json.dumps(_redact(loaded, secrets), ensure_ascii=False))
+                cleaned = _redact(loaded, secrets)
+                pieces.append(text[index:end] if cleaned == loaded else json.dumps(cleaned, ensure_ascii=False))
                 index = end
                 continue
         pieces.append(text[index])
