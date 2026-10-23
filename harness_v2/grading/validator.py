@@ -7,6 +7,7 @@ import re
 
 from harness_v2.core.contracts import Check, GradingResult, ItemResult, RubricItem
 from harness_v2.grading.sympy_equiv import mechanical_equivalent
+from harness_v2.grading.rubric import rubric_error
 
 _SPACE = re.compile(r"\s+")
 UNCERTAINTY_REVIEW_AT = 0.5
@@ -34,7 +35,7 @@ def _failed(
         status="failed",
         items=items,
         total_score=total_score,
-        max_points=sum(item.max_points for item in rubric) if rubric else None,
+        max_points=None if rubric_error(rubric) else sum(item.max_points for item in rubric),
         failure_reason=reason,
         checks=checks,
         request_id=meta.get("request_id", ""),
@@ -61,13 +62,14 @@ def validate(
         "model_id": model_id,
         "raw_response": raw_response,
     }
-    if not rubric:
+    invalid_rubric = rubric_error(rubric)
+    if invalid_rubric:
         return _failed(
             rubric,
             [],
             total_score,
-            "empty_rubric",
-            [Check("rubric_nonempty", False, "empty_rubric")],
+            invalid_rubric,
+            [Check("rubric_valid", False, invalid_rubric)],
             **meta,
         )
     seen: dict[str, int] = {}

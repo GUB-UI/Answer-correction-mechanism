@@ -106,10 +106,10 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
     items: list[ItemResult] = []
     for row in rows:
         if not isinstance(row, dict):
-            continue
-        item_id = str(row.get("item_id") or "")
-        if not item_id:
-            continue
+            raise ScoringParseError("malformed_item_row", raw=raw, fence_stripped=fence)
+        item_id = row.get("item_id")
+        if not isinstance(item_id, str) or not item_id.strip():
+            raise ScoringParseError("invalid_item_id", raw=raw, fence_stripped=fence)
         claimed = _number(row.get("max_points", row.get("max_score")))
         rubric_max = maxima.get(item_id)
         max_points = float(rubric_max if rubric_max is not None else (claimed if claimed is not None else 0))
@@ -117,8 +117,13 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
         supplied_reason = str(row.get("review_reason") or "")
         if supplied_reason:
             reasons.append(supplied_reason)
-        if claimed is not None and rubric_max is not None and abs(claimed - float(rubric_max)) > 1e-6:
-            reasons.append("item_max_mismatch")
+        for field in ("max_points", "max_score"):
+            if field in row:
+                supplied = _number(row[field])
+                if supplied is None:
+                    reasons.append("item_max_invalid")
+                elif rubric_max is not None and abs(supplied - float(rubric_max)) > 1e-6:
+                    reasons.append("item_max_mismatch")
         if "score" in row and row["score"] is not None and _number(row["score"]) is None:
             reasons.append("score_not_number")
             score = None
