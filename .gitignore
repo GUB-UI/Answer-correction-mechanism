@@ -1,4 +1,5 @@
 harness_runs/
+ocr_private/
 __pycache__/
 *.py[cod]
 .pytest_cache/

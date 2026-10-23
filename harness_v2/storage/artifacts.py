@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -34,16 +36,33 @@ class ArtifactStore:
             raise ArtifactRejected("student images are not stored in the harness")
         return path
 
-    def write_text(self, name: str, text: str) -> Path:
+    def _exclusive_bytes(self, name: str, data: bytes) -> Path:
         path = self._path(name)
-        if path.exists():
-            raise ImmutableArtifactError(f"artifact already exists: {name}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(redact(text), encoding="utf-8")
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except FileExistsError as exc:
+            raise ImmutableArtifactError(f"artifact already exists: {name}") from exc
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
         return path
+
+    def write_text(self, name: str, text: str) -> Path:
+        return self._exclusive_bytes(name, redact(text).encode("utf-8"))
+
+    def write_private_text(self, name: str, text: str) -> tuple[Path, str]:
+        """Exact bytes. Callers keep a redacted sibling for anything committed."""
+        data = text.encode("utf-8")
+        path = self._exclusive_bytes(name, data)
+        return path, hashlib.sha256(data).hexdigest()
 
     def write_json(self, name: str, payload: Any) -> Path:
         return self.write_text(name, json.dumps(redact(payload), ensure_ascii=False, indent=2))
 
     def read_text(self, name: str) -> str:
         return self._path(name).read_text(encoding="utf-8")
+
+    def read_bytes(self, name: str) -> bytes:
+        return self._path(name).read_bytes()
