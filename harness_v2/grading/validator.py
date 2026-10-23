@@ -19,8 +19,7 @@ _MATH = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DO
 def normalize_evidence(text: str) -> str:
     """Comparison view only; never rewrite stored OCR or cited spans."""
     def body(match: re.Match) -> str:
-        value = next(group for group in match.groups() if group is not None)
-        return re.sub(r"^\s*=\s*", "", value)
+        return next(group for group in match.groups() if group is not None)
     return _SPACE.sub("", _MATH.sub(body, text))
 
 

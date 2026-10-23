@@ -295,3 +295,12 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_metrics.py` | Cover additions/deductions with matching full/partial item labels and verify no double counting when an item already explains the error. Assert input grades remain unchanged. | Report directional errors accurately without assigning unreferenced item errors or modifying scores. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **479 passed in 14.09s** (using `/workspace/venv_clean/bin` on PATH; loopback mocks allowed).
+
+## Phase 3 live-run fix / 05: Symmetric evidence normalization (2026-10-23)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/grading/validator.py` | normalize_evidence no longer strips a leading `=` from math-delimited bodies; it only removes `$…$`, `\\(…\\)`, `\\[…\\]` delimiters and whitespace. | The strip was applied to the answer but not to an undelimited cited span, so a verbatim span such as `= \sqrt{9}-\sqrt{2}` against `$= \sqrt{9}-\sqrt{2}$` was judged untraceable. In the Phase 3 live baseline this caused all 3 review_required flags on 1-A xiaomi_cpu_fp32 (correctly graded). Comparison view only; stored text unchanged. |
+| `harness_v2/tests/test_p3_evidence.py` | Regression: spans with/without leading `=` and with/without delimiters match a delimited answer. Existing negative cases (`=x+1` vs `x+1`, `$=$`) still fail. | Prevent the asymmetric false positive. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **482 passed in 14.16s**.

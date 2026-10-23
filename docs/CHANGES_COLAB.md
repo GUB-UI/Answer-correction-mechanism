@@ -386,3 +386,12 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 | `harness_v2/tests/test_p3_metrics.py` | 全項目・部分項目の参照が一致する場合の両方向、既知の項目誤りがある場合の二重計上防止、入力得点の不変性を検証。未参照項目への誤り割当てや得点補完を行わず正しく集計する。 |
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **479 passed in 14.09s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。
+
+## harness v2 Phase 3 ライブ実行修正 / 05: 根拠照合の正規化を対称にする（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/grading/validator.py` | 数式区切り内の先頭`=`を削除する処理をやめ、区切り記号と空白の除去だけにする。答案側だけ`=`が消え、区切りのない引用（例 `= \sqrt{9}-\sqrt{2}`）が逐語でも照合失敗していた。Phase 3 ライブ実行で、正しく採点された1-A xiaomi_cpu_fp32の3件がこれだけでreview_requiredになっていた。比較用のみで保存テキストは変更しない。 |
+| `harness_v2/tests/test_p3_evidence.py` | 先頭`=`の有無・区切りの有無の引用が一致する回帰テスト。既存の否定ケースは維持。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **482 passed in 14.16s**。

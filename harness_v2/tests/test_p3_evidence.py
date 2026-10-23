@@ -57,3 +57,10 @@ def test_math_normalization_only_changes_comparison(answer, span):
 def test_fabricated_evidence_still_fails(answer, span):
     result, _ = grade({'score': 4, 'evidence_spans': [{'text': span}]}, answer)
     assert result.status != 'validated'
+
+
+@pytest.mark.parametrize('span', [r'= \sqrt{9}-\sqrt{2}', r'\sqrt{9}-\sqrt{2}', r'$= \sqrt{9}-\sqrt{2}$'])
+def test_undelimited_span_with_leading_equals_matches_delimited_answer(span):
+    from harness_v2.grading.validator import evidence_traceable
+    answer = '$\\sqrt{11-6\\sqrt{2}}$\n\n$= \\sqrt{9}-\\sqrt{2}$\n\n$= 3\\sqrt{2}$'
+    assert evidence_traceable(span, answer)
