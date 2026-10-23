@@ -690,3 +690,10 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 
 `test_skeleton_semantics.py` に構造の衝突防止、同値表記、正規化の冪等性の回帰テストを追加。
 検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **166 件成功**。追加のローカル検証では生成した算術式 10,000 件で演算子の構造と冪等性を確認。ネットワーク・API 呼び出しなし。
+
+## PR #12 / 修正B: challenge の request_id と実行計画を照合（2026-10-24）
+
+`harness_v2/evaluation/challenge.py` は実行記録を上書きせず、計画と照合して重複・欠落・予定外の `request_id` を `reasons` に列挙する。いずれかがあれば `comparable: false`、CLI 終了コード 2 とする。重複した実行は incomplete として扱い、どちらの記録も一致率の比較に使わない。残りの集計は診断用であり、得点の補完や採点ステータス名の変更は行わない。
+
+`test_p5_challenge.py` に重複（原本・変形、記録順の両方）、欠落、予定外、複数の異常、正常系、CLI の出力・終了コードの検証を追加。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **19 件成功、1 件除外**。`references.json` を読む既存の dataset-builder テストは指示に従い除外。修正Aの関連テストと合わせて **185 件成功、1 件除外**。ネットワーク・API 呼び出しなし。

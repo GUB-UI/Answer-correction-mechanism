@@ -579,3 +579,10 @@ Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 
 `test_skeleton_semantics.py` adds collision, notation-equivalence, and idempotence regressions.
 Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **166 passed**. An additional local check preserved operator trees and idempotence for 10,000 generated arithmetic expressions. No network or API calls.
+
+## PR #12 / Fix B: Validate challenge run IDs against the job plan (2026-10-24)
+
+`harness_v2/evaluation/challenge.py` retains all run records and reports duplicate, missing, and unexpected `request_id` values in `reasons`. Any such error sets `comparable: false` and CLI exit code 2. Duplicate records are classified as incomplete and neither record contributes to agreement pairs. Remaining metrics are diagnostic only; scores are never filled in and grading status names are unchanged.
+
+`test_p5_challenge.py` covers duplicate original/variant records in both orders, missing and unexpected IDs, combined errors, clean reports, and CLI output/exit codes.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **19 passed, 1 deselected**. The existing dataset-builder test is excluded because it reads `references.json`, which this task forbids. Combined with Fix A's relevant tests: **185 passed, 1 deselected**. No network or API calls.

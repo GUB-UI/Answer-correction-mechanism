@@ -2,6 +2,9 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
+from harness_v2.evaluation import challenge
 from harness_v2.evaluation.challenge import challenge_report
 from harness_v2.evaluation.dataset import load_dataset
 
@@ -68,6 +71,7 @@ def test_report_pairs_by_repetition_and_classifies_outcomes():
             _run("P:manualF1", "validated", [("R1", 2)]), _run("P:manualF2", "review_required", [("R1", 2)]),
             _run("P:manualN1", "failed", None), _run("P:manualN2", "review_required", [("R1", 1)])]
     report = challenge_report({"expected_runs": _jobs(), "runs": runs}, rubric_items=R)
+    assert report["comparable"] is True and report["reasons"] == []
     f, n = report["variants"]["F"], report["variants"]["N"]
     assert f["pairs"] == 2 and f["items_equal"] == 1 and f["item_agreement"] == 0.5
     assert f["newly_flagged_relative_to_O"] == 1 and f["flag_rate"] == 0.5
@@ -81,6 +85,8 @@ def test_missing_runs_are_counted_not_dropped():
     f, o, n = (report["variants"][k] for k in "FON")
     assert f["scheduled"] == 2 and f["missing"] == 1 and f["pairs"] == 1
     assert o["missing"] == 1 and n["missing"] == 2 and n["item_agreement"] is None and n["flag_rate"] is None
+    assert report["comparable"] is False
+    assert report["reasons"] == [f"missing request_id: P:manual{suffix}" for suffix in ("F2", "N1", "N2", "O2")]
 
 
 def test_variant_without_valid_original_is_unpaired():
@@ -115,7 +121,6 @@ def test_by_source_keeps_transcriptions_separate():
 
 
 def test_rubric_ids_are_required_and_fail_closed():
-    import pytest
     jobs = _jobs(variants=("O", "F"), reps=(1,))
     with pytest.raises(TypeError):
         challenge_report({"expected_runs": jobs, "runs": []})
@@ -131,3 +136,68 @@ def test_equally_truncated_or_unexpected_scores_are_incomplete():
     runs = [_run("P:manualO1", "validated", [("X", 1)]), _run("P:manualF1", "validated", [("X", 1)])]
     report = challenge_report({"expected_runs": _jobs(variants=("O", "F"), reps=(1,)), "runs": runs}, rubric_items=R)
     assert report["variants"]["F"]["incomplete"] == 1 and report["variants"]["F"]["pairs"] == 0
+
+
+@pytest.mark.parametrize("variant", ["O", "F"])
+@pytest.mark.parametrize("duplicate_first", [False, True])
+def test_duplicate_request_ids_are_invalid_and_neither_record_is_used(variant, duplicate_first):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs]
+    rid = f"P:manual{variant}1"
+    duplicate = _run(rid, "review_required", [("R1", 0)])
+    runs.insert(0 if duplicate_first else len(runs), duplicate)
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == [f"duplicate request_id: {rid}"]
+    assert report["variants"][variant]["incomplete"] == 1
+    assert report["variants"][variant]["flag_denominator"] == 0
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+
+def test_unexpected_request_id_invalidates_an_otherwise_complete_report():
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs]
+    runs.append(_run("unscheduled", "validated", [("R1", 0)]))
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == ["unexpected request_id: unscheduled"]
+    assert report["variants"]["F"]["scheduled"] == 1
+
+
+def test_all_request_id_problems_are_reported_together():
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = [_run("P:manualO1", "validated", [("R1", 1)])] * 2
+    runs += [_run("unscheduled", "failed", None)] * 2
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == [
+        "duplicate request_id: P:manualO1", "duplicate request_id: unscheduled",
+        "missing request_id: P:manualF1", "unexpected request_id: unscheduled",
+    ]
+
+
+@pytest.mark.parametrize("problem", [None, "duplicate", "missing", "unexpected"])
+def test_cli_marks_request_id_integrity_in_report_and_exit_code(tmp_path, monkeypatch, capsys, problem):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in reversed(jobs)]
+    if problem == "duplicate":
+        runs.append(runs[0])
+    elif problem == "missing":
+        runs.pop()
+    elif problem == "unexpected":
+        runs.append(_run("unscheduled", "validated", [("R1", 1)]))
+    results_path, out = tmp_path / "results.json", tmp_path / "report.json"
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert json.loads(capsys.readouterr().out) == report
+    assert code == (0 if problem is None else 2)
+    assert report["comparable"] is (problem is None)
+    if problem is None:
+        assert report["reasons"] == []
+        assert report["variants"]["F"]["item_agreement"] == 1
+    else:
+        assert len(report["reasons"]) == 1
+        assert report["reasons"][0].startswith(f"{problem} request_id:")

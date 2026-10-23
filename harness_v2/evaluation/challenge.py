@@ -5,7 +5,8 @@ source and repetition. Needs no reference scores and reads none. Every
 scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 ``failed`` (grading status failed) or ``incomplete`` (missing, duplicate,
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
-nothing is filled in.
+nothing is filled in. Duplicate, missing or unexpected run request IDs make
+the report non-comparable; any remaining metrics are diagnostic only.
 """
 
 from __future__ import annotations
@@ -65,15 +66,31 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
     """
     if not isinstance(rubric_items, dict):
         raise ValueError("rubric_items is required")
-    runs = {run.get("request_id"): run for run in results.get("runs", [])}
+    jobs = results.get("expected_runs", [])
+    planned_ids = {job["request_id"] for job in jobs}
+    runs = defaultdict(list)
+    for run in results.get("runs", []):
+        runs[run.get("request_id")].append(run)
+    reasons = []
+    for label, ids in (
+        ("duplicate", {rid for rid, records in runs.items() if len(records) > 1}),
+        ("missing", planned_ids - runs.keys()),
+        ("unexpected", runs.keys() - planned_ids),
+    ):
+        reasons.extend(f"{label} request_id: {rid}" for rid in sorted(ids, key=str))
     cells = {}
-    for job in results.get("expected_runs", []):
+    for job in jobs:
         source, _, variant = job["case_id"].rpartition(":")
         ids = rubric_items.get(job.get("problem_id"))
         if not ids:
             raise ValueError(f"no rubric item ids for problem {job.get('problem_id')!r}")
         expected = set(ids)
-        cells[(source, variant, job["repetition"])] = _cell(runs.get(job["request_id"]), expected)
+        records = runs.get(job["request_id"], [])
+        if len(records) > 1:
+            cell = {"outcome": "incomplete", "status": None, "scores": None}
+        else:
+            cell = _cell(records[0] if records else None, expected)
+        cells[(source, variant, job["repetition"])] = cell
     totals = defaultdict(_empty)
     by_source = defaultdict(lambda: defaultdict(_empty))
     for (source, variant, rep), cell in sorted(cells.items()):
@@ -98,6 +115,7 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
             stats["newly_flagged_relative_to_O"] += cell["status"] == FLAGGED and base["status"] != FLAGGED
             stats["unflagged_relative_to_O"] += cell["status"] != FLAGGED and base["status"] == FLAGGED
     return {"kind": "label-free robustness characterization (development data, not generalization)",
+            "comparable": not reasons, "reasons": reasons,
             "note": "flag_rate = flagged / scored runs; pairs need ok variant and ok O of the same repetition",
             "variants": {v: _finish(s) for v, s in sorted(totals.items())},
             "by_source": {src: {v: _finish(s) for v, s in sorted(vs.items())}
@@ -122,7 +140,7 @@ def main(argv=None) -> int:
     report = challenge_report(json.loads(args.results.read_text(encoding="utf-8")), rubric_items=items)
     private_write_text(args.out, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0
+    return 0 if report["comparable"] else 2
 
 
 if __name__ == "__main__":
