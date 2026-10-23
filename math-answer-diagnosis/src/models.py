@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ERROR_CATEGORIES = [
     "問題理解の誤り",
@@ -123,7 +123,7 @@ class DiagnosisResult(BaseModel):
     ocr_id: str
     model_name: str
     prompt_type: str
-    score: float
+    score: float | None
     max_score: float
     error_categories: list[str]
     error_locations: list[dict[str, Any]]
@@ -131,13 +131,25 @@ class DiagnosisResult(BaseModel):
     student_feedback: str
     teacher_review_notes: str
     possible_ocr_issue: bool
-    # possible_ocr_issue のとき "needs_teacher_review"。0 点は確定の採点ではない。
-    review_status: str = ""
+    review_status: Literal["validated", "review_required", "failed"] = "validated"
     confidence: float
     raw_output: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     # [{"question": "(1)", "score": 3, "max_score": 5, "reason": "..."}]
     question_scores: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("review_status", mode="before")
+    @classmethod
+    def migrate_review_status(cls, value: Any) -> Any:
+        return {"": "validated", "needs_teacher_review": "review_required"}.get(value, value)
+
+    @model_validator(mode="after")
+    def require_review_for_undetermined_scores(self) -> DiagnosisResult:
+        if self.review_status != "failed" and (
+            self.score is None or any(item.get("score") is None for item in self.question_scores)
+        ):
+            self.review_status = "review_required"
+        return self
 
 
 class TeacherGradeRecord(BaseModel):

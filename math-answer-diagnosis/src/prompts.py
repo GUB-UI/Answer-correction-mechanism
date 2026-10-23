@@ -33,7 +33,8 @@ question には設問番号だけを書いてください。(1) や 2 などで�
 配点が与えられている場合は、その設問を question_scores にすべて書き、配点に無い設問は足さないでください。空の配列にしてはいけません。
 possible_ocr_issue が true のときも、答案全体を 0 点にしてはいけません。
 配点の設問ごとに、読める手順が正しければ部分点を付け、読めない行だけを減点してください。
-そのときは review_status を needs_teacher_review にしてください。この得点は教師確認前の下書きです。"""
+設問点が判断できない場合は score を null にし、合計点や配点比から計算・補完しないでください。
+そのときは review_status を review_required にしてください。この得点は教師確認前の下書きです。"""
 
 DIAGNOSIS_OUTPUT_SCHEMA = """{
   "score": 3,
@@ -49,7 +50,7 @@ DIAGNOSIS_OUTPUT_SCHEMA = """{
   "student_feedback": "方針はよいので、符号と式変形を一行ずつ確認しましょう。",
   "teacher_review_notes": "2行目の符号が不自然なため、OCR誤りの可能性があります。",
   "possible_ocr_issue": true,
-  "review_status": "needs_teacher_review",
+  "review_status": "review_required",
   "confidence": 0.68,
   "question_scores": [
     {"question": "(1)", "score": 2, "max_score": 2, "reason": "正しく解けている"},

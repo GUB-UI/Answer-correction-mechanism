@@ -600,13 +600,15 @@ def build_recheck_instructions(
     blind: 教師の点数は見せない（AI が教師に迎合して点を合わせるのを防ぐ）。
     informed: 教師の点数・コメントも示し、答案の証拠からどちらが妥当かを判断させる。
     """
+    total = f"{original.score:g}" if original.score is not None else "未確定"
     lines = [
         "【前回のAI採点（参考。誤っている可能性があります）】",
-        f"合計: {original.score:g} / {original.max_score:g}",
+        f"合計: {total} / {original.max_score:g}",
     ]
     for item in original.question_scores:
         max_part = f" / {item['max_score']:g}" if item.get("max_score") is not None else ""
-        lines.append(f"{item['question']}: {item['score']:g}{max_part}  {item.get('reason', '')}")
+        score_text = f"{item['score']:g}" if item.get("score") is not None else "未確定"
+        lines.append(f"{item['question']}: {score_text}{max_part}  {item.get('reason', '')}")
     if original.reasoning_summary:
         lines.append(f"前回の根拠: {original.reasoning_summary}")
     target = discrepancy.question or "答案全体"

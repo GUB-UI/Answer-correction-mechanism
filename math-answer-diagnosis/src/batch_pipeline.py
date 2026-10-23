@@ -51,7 +51,7 @@ class BatchItem:
     diagnosis_id: str = ""
     score: float | None = None
     max_score: float | None = None
-    status: str = "pending"
+    status: Literal["validated", "review_required", "failed"] = "failed"
     errors: list[str] = field(default_factory=list)
 
 
@@ -225,7 +225,7 @@ def run_batch(
                 latest = sorted(done, key=lambda d: d.created_at)[-1]
                 item.diagnosis_id = latest.diagnosis_id
                 item.score, item.max_score = latest.score, latest.max_score
-                item.status = "skipped_existing"
+                item.status = latest.review_status
                 continue
         ocr = storage.get_ocr_result(item.ocr_id)
         if ocr is None:
@@ -263,13 +263,14 @@ def run_batch(
                 storage.save_diagnosis_result(diagnosis)
                 item.diagnosis_id = diagnosis.diagnosis_id
                 item.score, item.max_score = diagnosis.score, diagnosis.max_score
+                item.status = diagnosis.review_status
             except Exception as exc:
                 item.errors.append(f"診断: {exc}")
     report.phase_seconds["diagnosis"] = round(time.monotonic() - started, 1)
 
     for item in report.items:
-        if item.status == "pending":
-            item.status = "error" if item.errors else ("done" if item.diagnosis_id else "no_result")
+        if item.errors or not item.diagnosis_id:
+            item.status = "failed"
     if opts.stop_services_after:
         manager.stop_all()
     report.service_events = list(manager.events)

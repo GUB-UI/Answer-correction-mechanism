@@ -50,8 +50,8 @@ with col1:
     st.metric("得点", f"{diagnosis.score} / {diagnosis.max_score}")
     st.metric("信頼度", f"{diagnosis.confidence:.2f}")
 with col2:
-    if diagnosis.review_status == "needs_teacher_review":
-        st.error("要教師確認（needs_teacher_review）。この得点は確定ではありません。")
+    if diagnosis.review_status == "review_required":
+        st.error("要教師確認（review_required）。この得点は確定ではありません。")
     elif diagnosis.possible_ocr_issue:
         st.error("possible_ocr_issue: **あり** — OCR誤りの可能性を確認してください。")
     else:
