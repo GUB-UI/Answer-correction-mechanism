@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from typing import Any
 
@@ -12,6 +14,34 @@ from src.grading.parse import (
     validate_grading,
 )
 from src.grading.review_flags import evaluate_review_flags, review_routing_enabled
+
+
+def build_grading_metadata(
+    context: DiagnosisRunContext,
+    *,
+    provider: str,
+    messages: list[dict[str, Any]],
+    generation_settings: dict[str, Any],
+) -> dict[str, Any]:
+    """Use content hashes as versions of the rendered prompt and grading rubric."""
+    def digest(value: Any) -> str:
+        return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    problem = context.problem
+    return {
+        "provider": provider,
+        "model_id": context.model_name,
+        "prompt_version": digest(messages),
+        "rubric_identity": digest({
+            "problem_id": problem.problem_id,
+            "problem_text": problem.problem_text,
+            "correct_answer": problem.correct_answer,
+            "rubric": problem.rubric,
+            "score_allocation": problem.score_allocation,
+        }),
+        # Snapshot nested settings so later changes cannot alter stored metadata.
+        "generation_settings": json.loads(json.dumps(generation_settings)),
+    }
 
 
 def _to_float(value: Any) -> float | None:

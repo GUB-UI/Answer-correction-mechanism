@@ -3,3 +3,8 @@ ocr_private/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Agent and debug logs
+codex_*.log
+*_stderr.log
+*_stdout.log

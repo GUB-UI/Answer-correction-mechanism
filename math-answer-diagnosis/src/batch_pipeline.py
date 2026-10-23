@@ -220,23 +220,13 @@ def run_batch(
 
     # フェーズ3: 診断LLM
     started = time.monotonic()
-    targets: list[tuple[AnswerRecord, OCRResult]] = []
+    adapter = diagnosis_adapter or create_diagnosis_adapter(opts.diagnosis_provider, config)
+    model_name = config.diagnosis.model_name if opts.diagnosis_provider != "mock" else "mock"
+    targets: list[tuple[DiagnosisRunContext, dict[str, Any] | None]] = []
     for answer in answers:
         item = items[answer.answer_id]
         if not item.ocr_id:
             continue
-        if opts.skip_existing_diagnosis:
-            done = [
-                d
-                for d in storage.get_diagnosis_results_for_answer(answer.answer_id)
-                if d.ocr_id == item.ocr_id and d.prompt_type == opts.prompt_type
-            ]
-            if done:
-                latest = sorted(done, key=lambda d: d.created_at)[-1]
-                item.diagnosis_id = latest.diagnosis_id
-                item.score, item.max_score = latest.score, latest.max_score
-                item.status = latest.review_status
-                continue
         ocr = storage.get_ocr_result(item.ocr_id)
         if ocr is None:
             item.errors.append("OCR結果が見つかりません")
@@ -244,24 +234,38 @@ def run_batch(
         if answer.problem_id not in problems:
             item.errors.append("問題が見つかりません")
             continue
-        targets.append((answer, ocr))
+        context = DiagnosisRunContext(
+            answer_id=answer.answer_id,
+            problem_id=answer.problem_id,
+            ocr_id=ocr.ocr_id,
+            problem=problems[answer.problem_id],
+            used_text=ocr.used_text,
+            model_name=model_name,
+            prompt_type=opts.prompt_type,
+        )
+        metadata_builder = getattr(adapter, "grading_metadata", None)
+        metadata = metadata_builder(context) if metadata_builder else None
+        if opts.skip_existing_diagnosis:
+            done = [
+                d
+                for d in storage.get_diagnosis_results_for_answer(answer.answer_id)
+                if d.ocr_id == item.ocr_id and d.prompt_type == opts.prompt_type
+                and d.problem_id == answer.problem_id and d.model_name == model_name
+                and metadata is not None and d.grading_metadata == metadata
+            ]
+            if done:
+                latest = sorted(done, key=lambda d: d.created_at)[-1]
+                item.diagnosis_id = latest.diagnosis_id
+                item.score, item.max_score = latest.score, latest.max_score
+                item.status = latest.review_status
+                continue
+        targets.append((context, metadata))
     if targets:
         if opts.diagnosis_provider != "mock":
             manager.ensure(LLM)
-        adapter = diagnosis_adapter or create_diagnosis_adapter(opts.diagnosis_provider, config)
-        model_name = config.diagnosis.model_name if opts.diagnosis_provider != "mock" else "mock"
-        for index, (answer, ocr) in enumerate(targets, start=1):
-            notify("diagnosis", index, len(targets), answer.answer_id)
-            item = items[answer.answer_id]
-            context = DiagnosisRunContext(
-                answer_id=answer.answer_id,
-                problem_id=answer.problem_id,
-                ocr_id=ocr.ocr_id,
-                problem=problems[answer.problem_id],
-                used_text=ocr.used_text,
-                model_name=model_name,
-                prompt_type=opts.prompt_type,
-            )
+        for index, (context, metadata) in enumerate(targets, start=1):
+            notify("diagnosis", index, len(targets), context.answer_id)
+            item = items[context.answer_id]
             try:
                 raw = adapter.run(context)
                 diagnosis = adapter.to_diagnosis_result(
@@ -270,6 +274,7 @@ def run_batch(
                     diagnosis_id=storage.generate_id("diag"),
                     created_at=utc_now_iso(),
                 )
+                diagnosis.grading_metadata = metadata
                 storage.save_diagnosis_result(diagnosis)
                 item.diagnosis_id = diagnosis.diagnosis_id
                 item.score, item.max_score = diagnosis.score, diagnosis.max_score

@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import Any
 
 from src.adapters.base import DiagnosisAdapter, DiagnosisRunContext, OCRAdapter, OCRRunContext
-from src.adapters.diagnosis_helpers import build_diagnosis_result, parse_diagnosis_json
+from src.adapters.diagnosis_helpers import (
+    build_diagnosis_result,
+    build_grading_metadata,
+    parse_diagnosis_json,
+)
 from src.config import AppConfig, load_config
 from src.models import DiagnosisResult, OCRResult, utc_now_iso
 from src.prompts import DEFAULT_DIAGNOSIS_PROMPT_TYPE, DIAGNOSIS_PROMPTS, OCR_PROMPT
@@ -39,6 +43,16 @@ class MockOCRAdapter(OCRAdapter):
 
 
 class MockDiagnosisAdapter(DiagnosisAdapter):
+    def grading_metadata(self, context: DiagnosisRunContext) -> dict[str, Any]:
+        prompt = DIAGNOSIS_PROMPTS.get(
+            context.prompt_type, DIAGNOSIS_PROMPTS[DEFAULT_DIAGNOSIS_PROMPT_TYPE],
+        )
+        return build_grading_metadata(
+            context, provider="mock", generation_settings={},
+            messages=[{"role": "system", "content": prompt},
+                      {"role": "user", "content": context.used_text}],
+        )
+
     def run(self, context: DiagnosisRunContext) -> dict[str, Any]:
         # Synthetic total for wiring checks; no per-question scores are invented.
         score = 3.0
