@@ -306,3 +306,24 @@ def test_sol_r5_fix_1_explicit_overline_inside_roots(forms, different):
 ])
 def test_sol_r5_fix_2_root_interval_endpoints(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('glyph,command,plain', [
+    ('\U0001D497', r'\mathbfit{v}', 'v'),
+    ('\U0001D603', r'\mathsfbf{v}', 'v'),
+    ('\U0001D66B', r'\mathsfbfit{v}', 'v'),
+    ('\U0001D4FF', r'\mathbfscr{v}', 'v'),
+    ('\U0001D59B', r'\mathbffrak{v}', 'v'),
+    ('\U0001D736', r'\mathbfit{\alpha}', 'α'),
+    ('\U0001D7ED', r'\mathsfbf{1}', '1'),
+])
+def test_sol_r5_fix_3_bold_styles_match_their_commands(glyph, command, plain):
+    call = command[1:command.index('{')] + '(' + plain + ')'
+    check_forms([glyph, command, call], [plain, r'\mathbf{' + plain + '}'])
+
+
+def test_sol_r5_fix_3_non_bold_styles_still_fold_and_glyphs_stay_separate():
+    assert skeleton('\U0001D463') == skeleton(r'\mathit{v}') == 'v'
+    assert skeleton('\U0001D637') == 'v'
+    assert skeleton('\U0001D497\U0001D497') == 'mathbfit(v)mathbfit(v)'
+    assert skeleton(skeleton('\U0001D603')) == 'mathsfbf(v)'

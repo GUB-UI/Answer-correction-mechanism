@@ -49,7 +49,51 @@ _SYMBOLS = {
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
 _LAYOUT = re.compile(r"\\[,;:! ()\[\]]|\$+")
 _ENVIRONMENTS = "pmatrix|bmatrix|vmatrix|Vmatrix|matrix|array|cases"
-_DECORATIONS = "overline|bar|vec|hat|dot|tilde|mathbf|text"
+_STYLE_ABBREVIATIONS = {
+    "SANS-SERIF": "sf",
+    "DOUBLE-STRUCK": "bb",
+    "FRAKTUR": "frak",
+    "MONOSPACE": "tt",
+    "SCRIPT": "scr",
+    "BOLD": "bf",
+    "ITALIC": "it",
+}
+
+
+def _mathematical_bold_form(ch: str) -> tuple[str, str] | None:
+    """Return ``(command, base)`` for one bold mathematical alphanumeric glyph.
+
+    Style words in the Unicode name become the command, in that order, so
+    bold italic and sans-serif bold share one rule with their LaTeX names.
+    Styles that do not contain bold are left for compatibility folding.
+    """
+    name = unicodedata.name(ch, "")
+    if not name.startswith("MATHEMATICAL ") or "BOLD" not in name.split():
+        return None
+    abbreviations = []
+    for word in name.split()[1:]:
+        if word not in _STYLE_ABBREVIATIONS:
+            break
+        abbreviations.append(_STYLE_ABBREVIATIONS[word])
+    if "bf" not in abbreviations:
+        return None
+    base = unicodedata.normalize("NFKC", ch)
+    if len(base) != 1 or not base.isalnum():
+        return None
+    return "math" + "".join(abbreviations), base
+
+
+def _bold_style_commands() -> list[str]:
+    found = {
+        parsed[0]
+        for codepoint in range(0x1D400, 0x1D800)
+        if (parsed := _mathematical_bold_form(chr(codepoint)))
+    }
+    return sorted(found, key=len, reverse=True)
+
+
+# Longer commands first so mathbfit is not tokenized as mathbf.
+_DECORATIONS = "overline|bar|vec|hat|dot|tilde|text|" + "|".join(_bold_style_commands())
 _DECORATION_HEAD = re.compile(r"\\(?:" + _DECORATIONS + r")(?![A-Za-z\u2063])|(?:" + _DECORATIONS + r")(?=\()")
 _CALL_HEAD = re.compile(r"(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + r")(?=\()")
 _MATH_SPAN = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DOTALL)
@@ -454,20 +498,6 @@ def _combining_notation(text: str, *, decompose: bool = True) -> str:
                   lambda m: f"mark[{ord(m[0]):04x}]", text)
 
 
-def _mathematical_bold_base(ch: str) -> str | None:
-    """Base letter of a mathematical bold character, before NFKC folds it."""
-    name = unicodedata.name(ch, "")
-    if not name.startswith("MATHEMATICAL BOLD "):
-        return None
-    if name.startswith(("MATHEMATICAL BOLD ITALIC ", "MATHEMATICAL BOLD SCRIPT ",
-                        "MATHEMATICAL BOLD FRAKTUR ")):
-        return None
-    base = unicodedata.normalize("NFKC", ch)
-    if len(base) == 1 and base.isalnum():
-        return base
-    return None
-
-
 def _unicode_notation(text: str) -> str:
     """Protect scripts, bold letters, and enclosed numbers before compatibility folding."""
     out, plain, script, kind = [], [], [], ""
@@ -511,10 +541,11 @@ def _unicode_notation(text: str) -> str:
                 command = "tilde" if mark == "\u0303" else "overline"
                 out.append("\\" + command + "{" + base + "}")
                 continue
-            bold = _mathematical_bold_base(ch)
-            if bold:
+            styled = _mathematical_bold_form(ch)
+            if styled:
                 flush_plain()
-                out.append(f"mathbf({bold})")
+                command, base = styled
+                out.append(f"{command}({base})")
                 continue
             name = unicodedata.name(ch, "")
             enclosed = (unicodedata.numeric(ch, None) is not None

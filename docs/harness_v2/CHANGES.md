@@ -756,6 +756,10 @@ A stroke removed as the root's own vinculum is only the marker produced from com
 
 A square-bracket radicand keeps the delimiter that closed it. `√[0,1)` is `sqrt([0,1))` and does not match `√[0,1]`. The same holds after a root index. The braced LaTeX form uses that same skeleton. Parentheses still delimit a radicand.
 
+## PR #12 / Sol r5 fix 3: Keep every bold mathematical alphanumeric style
+
+Bold mathematical letters, digits, and Greek letters are mapped from the style words in the Unicode name, not from a per-character list. Bold italic is `mathbfit` and sans-serif bold is `mathsfbf`; each matches the LaTeX command of that name and stays distinct from the plain character. Styles without bold still fold. Adjacent glyphs stay one command each.
+
 ## PR #12 / Challenge re-review fix 5: Nested malformed fields invalidate
 
 A planned `problem_id` that is not text, a repetition that is not a positive integer, a grading value that is not a record, and a grading status that is not text each produce an explicit reason. The report is not comparable and the CLI exits 2. Scores from those records are not used. Output stays 0600 and input permissions are unchanged.
