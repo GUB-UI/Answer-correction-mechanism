@@ -271,10 +271,12 @@ def run_batch(
                         manager.ensure(LLM)
                 except Exception as exc:
                     startup_error = exc
-                if startup_error is None and backend_builder:
-                    backend = backend_builder()
             if startup_error is not None:
                 raise startup_error
+            # Reuse must see the backend that would grade this answer. A snapshot
+            # taken for an earlier answer stays valid only while that backend is current.
+            if backend_builder:
+                backend = backend_builder()
             metadata = metadata_for(context)
             before_reason = getattr(adapter, "reuse_unavailable_reason", None)
             if opts.skip_existing_diagnosis and complete_grading_metadata(metadata):

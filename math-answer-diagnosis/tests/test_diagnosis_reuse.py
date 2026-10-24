@@ -1,3 +1,4 @@
+import copy
 import json
 import hashlib
 from dataclasses import replace
@@ -460,9 +461,67 @@ def test_batch_shares_startup_and_backend_snapshot(case, monkeypatch):
                            services=manager, diagnosis_adapter=adapter)
         assert all(item.diagnosis_id for item in report.items)
         assert manager.ensure.call_count == 1
-        # Before batch + after each generation; all reused needs just one snapshot.
-        assert client.backend_fingerprint.call_count == (3 if not skip else 1)
+        # Startup stays once per batch. Identity is read before every answer and
+        # again after each generation, including when every answer is reused.
+        assert client.backend_fingerprint.call_count == (4 if not skip else 2)
     assert client.chat_completion.call_count == 2
+
+
+@pytest.mark.parametrize("kind", ["model_id", "settings", "unavailable"])
+def test_backend_change_between_cached_answers_is_not_reused(case, kind):
+    """A fingerprint cached for one reused answer must not authorize the next."""
+    storage, config, options, client, run = case
+    config = replace(config, services=replace(config.services, mode="managed"))
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+    manager = SimpleNamespace(events=[], ensure=MagicMock())
+    adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client)
+    answers = [first, second]
+    primed = run_batch(storage, config, answers, options, services=manager, diagnosis_adapter=adapter)
+    saved_ids = {item.answer_id: item.diagnosis_id for item in primed.items}
+    assert client.chat_completion.call_count == 2
+    client.chat_completion.reset_mock()
+    client.backend_fingerprint.reset_mock()
+    manager.ensure.reset_mock()
+    base = copy.deepcopy(client.backend_fingerprint.return_value)
+    state = {"n": 0}
+
+    def current_backend():
+        state["n"] += 1
+        if state["n"] == 1:
+            client.fingerprint_unavailable_reason = None
+            return copy.deepcopy(base)
+        if kind == "unavailable":
+            client.fingerprint_unavailable_reason = "backend_health_timeout"
+            return None
+        client.fingerprint_unavailable_reason = None
+        changed = copy.deepcopy(base)
+        if kind == "model_id":
+            changed["model_id"] = "loaded-weights-B"
+        else:
+            changed["settings"]["model_revision"] = "revision-B"
+        return changed
+
+    client.backend_fingerprint.side_effect = current_backend
+    report = run_batch(storage, config, answers, options, services=manager, diagnosis_adapter=adapter)
+    assert manager.ensure.call_count == 1
+    assert report.items[0].diagnosis_id == saved_ids["a"]
+    assert report.items[1].diagnosis_id != saved_ids["b"]
+    assert client.chat_completion.call_count == 1
+    regenerated = storage.get_diagnosis_result(report.items[1].diagnosis_id)
+    if kind == "unavailable":
+        assert regenerated.grading_metadata is None
+        assert regenerated.reuse_unavailable_reason == "backend_health_timeout"
+        assert report.items[1].status == "review_required"
+    else:
+        assert regenerated.grading_metadata["generation_settings"]["backend"]["model_id"] == (
+            "loaded-weights-B" if kind == "model_id" else "loaded-weights-A"
+        )
+        if kind == "settings":
+            assert regenerated.grading_metadata["generation_settings"]["backend"]["settings"]["model_revision"] == "revision-B"
+    assert report.items[0].status != "failed"
 
 
 def test_unavailable_backend_reason_is_persisted_without_failing_grade(case):

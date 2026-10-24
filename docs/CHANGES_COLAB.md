@@ -288,3 +288,9 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 - `test_glmocr_sdk_adapter_extracts_markdown` に health が常に false の UniMERNet クライアントを注入し、数式補正を明示的に有効にした状態で、元の Markdown と `unimernet_unavailable` の記録を回帰確認する。実 HTTP 呼び出しもテスト内で禁止し、localhost の接続失敗に依存しない。
 - 本番コードと既存の autouse 通信ガードは変更していない。HTTP・DNS 呼び出しも禁止する一時 pytest プラグインで全スイートを点検し、他の実 localhost 接続依存は検出されなかった。
 - 検証: 修正前の依存を HTTP 呼び出し境界で失敗として再現。関連テスト 26 件成功、追加のオフライン点検と `/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider` による全スイートはそれぞれ 362 件成功（除外なし）。ネットワーク・API 通信は実施していない。`docs/harness_v2/CHANGES.md` はこの worktree に存在しない。
+
+## PR #9 / 修正1: 再利用判定の前に backend を再確認
+
+- 診断バッチは LLM の起動をバッチで1回のまま、答案ごとの再利用判定の直前に現在の backend fingerprint を取り直す。生成後の再確認は維持する。
+- 保存済み採点は、採点モデル ID・プロンプト版・ルーブリック・生成設定・後処理が現在の backend と一致するときだけ再利用する。これらの情報が欠ける古い結果は自動再利用しない。
+- 再利用の途中でモデル ID や生成設定が変わった場合、および fingerprint が取れなくなった場合に、その答案だけ再採点する回帰テストを追加。
