@@ -315,3 +315,8 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 
 - `stop()` と `stop_all()` は managed / external を問わず、共有ロックの下で所有権を確認してからサービスを止める。別設定の external マネージャは、生存中の managed セッションを停止できない。
 - 競合時に停止処理へ入らない回帰テストを追加。入力の権限は変えない。
+
+## PR #9 / 再レビュー修正3: health 応答全体を安全に符号化する
+
+- `/health` の `model` など fingerprint 以外のフィールドにサロゲートが含まれても、応答全体を UTF-8 で送る。符号化できないときは ASCII エスケープに落とす。
+- 既定の served name がモデル ID そのものである backend の回帰テストを追加。fingerprint が作れないときは null のまま、health は 200 を返す。

@@ -206,6 +206,33 @@ def test_health_stays_live_when_fingerprint_is_unavailable(monkeypatch, failure)
     assert not valid_backend_fingerprint(payload["backend_fingerprint"])
 
 
+def test_health_encodes_surrogate_default_served_name(monkeypatch):
+    scripts = Path(__file__).resolve().parents[1] / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    from llm_server import TransformersChatBackend
+    from _openai_compat import ServerState, make_handler
+
+    backend = TransformersChatBackend("weights\udcff")
+    assert backend.model_name == "weights\udcff"
+    state = ServerState(backend)
+    state.ready = True
+    handler = object.__new__(make_handler(state))
+    handler.path = "/health"
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = io.BytesIO()
+    handler.do_GET()
+    raw = handler.wfile.getvalue()
+    payload = json.loads(raw)
+    assert handler.send_response.call_args.args == (200,)
+    assert raw.startswith(b"{")
+    assert payload["ok"] is True
+    assert payload["model"] == "weights\udcff"
+    assert payload["backend_fingerprint"] is None
+    assert payload["backend_fingerprint_error"] == "unavailable"
+
+
 def test_health_preserves_non_ascii_fingerprint(monkeypatch):
     backend = _loaded_backend(monkeypatch)
     fingerprint = backend.backend_fingerprint()
