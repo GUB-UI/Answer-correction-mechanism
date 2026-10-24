@@ -202,7 +202,7 @@ def test_division_operator_notations_match_without_disappearing(notation, left, 
     assert skeleton(normalized) == normalized
 
 
-@pytest.mark.parametrize("command", [r"\alpha", r"\sin", r"\unknown", r"\timesextra", r"\leqqextra"])
+@pytest.mark.parametrize("command", [r"\alphaextra", r"\sin", r"\unknown", r"\timesextra", r"\leqqextra"])
 def test_unknown_semantic_commands_and_their_boundaries_survive(command):
     text = "a" + command + " b"
     normalized = skeleton(text)
@@ -222,4 +222,79 @@ def test_removing_groups_cannot_manufacture_a_function_token(letters, prefix):
     normalized = skeleton(text)
     assert normalized != skeleton(prefix + "sqrt(x+y)")
     assert cer(text, prefix + "sqrt(x+y)") > 0
+    assert skeleton(normalized) == normalized
+
+
+def test_multiline_aligned_latex_matches_plain_text_and_is_idempotent():
+    latex = r"""```latex
+\begin{aligned}
+\displaystyle \alpha & = \frac{a+b}{c} \\
+\beta & = \left(x+y\right)^2 \, + \pi \\
+\theta & = 30\circ \qquad \gamma = \sqrt{x+1}
+\end{aligned}
+```"""
+    plain = "α = (a+b)/c\nβ = (x+y)^2 + π\nθ = 30° γ = sqrt(x+1)"
+    expected = "α=(a+b)/cβ=(x+y)^2+πθ=30°γ=sqrt(x+1)"
+    assert skeleton(latex) == skeleton(plain) == expected
+    assert cer(latex, plain) == 0
+    for text in (latex, plain, expected):
+        assert skeleton(skeleton(text)) == expected
+
+
+@pytest.mark.parametrize("layout", [
+    r"\\", r"\begin{aligned}", r"\end{aligned}",
+    r"\begin{gather*}", r"\end{gather*}",
+    r"\,", r"\;", r"\:", r"\!", r"\quad", r"\qquad",
+    r"\left", r"\right", r"\displaystyle", "&",
+])
+@pytest.mark.parametrize("left,right", [("12", "34"), ("s", "qrt(x+y)"), (r"\unknown", "b")])
+def test_layout_is_removed_without_joining_tokens(layout, left, right):
+    latex = left + layout + " " + right
+    plain = left + " " + right
+    normalized = skeleton(latex)
+    assert normalized == skeleton(plain)
+    assert normalized != skeleton(left + right)
+    assert skeleton(normalized) == normalized
+    if right[0].isdigit() or not layout[-1].isalpha():
+        # Control words need a terminator before letters, but other layout
+        # constructs must also preserve boundaries with no surrounding spaces.
+        assert skeleton(left + layout + right) == normalized
+
+
+@pytest.mark.parametrize("command,symbol", [
+    ("alpha", "α"), ("beta", "β"), ("gamma", "γ"), ("delta", "δ"),
+    ("epsilon", "ε"), ("zeta", "ζ"), ("eta", "η"), ("theta", "θ"),
+    ("iota", "ι"), ("kappa", "κ"), ("lambda", "λ"), ("mu", "μ"),
+    ("nu", "ν"), ("xi", "ξ"), ("omicron", "ο"), ("pi", "π"),
+    ("rho", "ρ"), ("sigma", "σ"), ("tau", "τ"), ("upsilon", "υ"),
+    ("phi", "φ"), ("chi", "χ"), ("psi", "ψ"), ("omega", "ω"),
+    ("Gamma", "Γ"), ("Delta", "Δ"), ("Theta", "Θ"), ("Lambda", "Λ"),
+    ("Xi", "Ξ"), ("Pi", "Π"), ("Sigma", "Σ"), ("Upsilon", "Υ"),
+    ("Phi", "Φ"), ("Psi", "Ψ"), ("Omega", "Ω"),
+    ("varepsilon", "ϵ"), ("vartheta", "ϑ"), ("varkappa", "ϰ"),
+    ("varpi", "ϖ"), ("varrho", "ϱ"), ("varsigma", "ς"), ("varphi", "ϕ"),
+    ("circ", "°"), ("times", "×"), ("cdot", "·"), ("infty", "∞"),
+    ("neq", "≠"), ("pm", "±"), ("div", "÷"),
+])
+def test_symbol_commands_match_unicode_and_are_idempotent(command, symbol):
+    latex = "a\\" + command + " b"
+    plain = "a" + symbol + "b"
+    normalized = skeleton(latex)
+    assert normalized == skeleton(plain)
+    assert normalized != skeleton("ab")
+    assert normalized != skeleton("a\\" + command + "extra b")
+    assert cer(latex, plain) == 0
+    for text in (latex, plain, normalized):
+        assert skeleton(skeleton(text)) == normalized
+
+
+@pytest.mark.parametrize("latex,plain", [
+    (r"\frac\, {a+b}\; {c}", "(a+b)/c"),
+    (r"\sqrt\quad {a+b}", "sqrt(a+b)"),
+    (r"\sqrt\,\pi", "sqrt(π)"),
+    (r"x^{\alpha+\beta}", "x^(α+β)"),
+])
+def test_layout_and_symbols_preserve_fraction_root_and_power_scope(latex, plain):
+    normalized = skeleton(latex)
+    assert normalized == skeleton(plain)
     assert skeleton(normalized) == normalized

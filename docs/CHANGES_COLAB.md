@@ -1,5 +1,13 @@
 # Colab / CUDA 対応の変更一覧
 
+## PR #12: OCR 骨格から LaTeX レイアウトを除去し、記号表記を統一
+
+- 改行 `\\`、任意の環境の `\begin` / `\end` マーカー、空白命令、`\left` / `\right`、`\displaystyle`、整列用 `&` を区切りとして除去する。分数・根号の引数を読む前に処理し、数字や関数名が連結されないよう既存の括弧処理で境界を保持する。
+- Greek 文字（大文字・異体字を含む）、`\circ` / `°`、`\infty` / `∞` を共通の Unicode 表記に揃える。既存の乗除算・不等号・複号の規則、未知の命令の独立したトークン、括弧・根号・指数の範囲を維持する。
+- 複数行 aligned ブロックとプレーンテキストの一致（CER 0）、記号の同値性、レイアウト除去時の境界、冪等性の回帰テストを追加。修正前は新規テストの88件が失敗することを確認した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **342 件成功**（ネットワーク・API 呼び出しなし）。
+
 ## 修正 1: 係数・変数の直後にある正規形の根号の範囲を維持
 
 - 正規形 `sqrt(...)` を数字・英字の直後も含む任意の位置で認識し、既存の括弧対応処理で根号の範囲を保持する。係数付き・入れ子の LaTeX、Unicode、正規形を同じ表現に揃え、再度正規化しても結果が変わらないようにした。

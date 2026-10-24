@@ -34,7 +34,20 @@ _COMMANDS = [
 ]
 _UNICODE = {"≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
             "×": "*", "·": "*", "÷": "/"}
+_SYMBOLS = {
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
+    "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
+    "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "omicron": "ο",
+    "pi": "π", "rho": "ρ", "sigma": "σ", "tau": "τ", "upsilon": "υ",
+    "phi": "φ", "chi": "χ", "psi": "ψ", "omega": "ω",
+    "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ", "Xi": "Ξ",
+    "Pi": "Π", "Sigma": "Σ", "Upsilon": "Υ", "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω",
+    # Match NFKC's canonical forms for Unicode Greek symbol variants.
+    "varepsilon": "ε", "vartheta": "θ", "varkappa": "κ", "varpi": "π",
+    "varrho": "ρ", "varsigma": "ς", "varphi": "φ", "circ": "°", "infty": "∞",
+}
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
+_LAYOUT = re.compile(r"\\(?:\\|[,;:! ])|\\(?:begin|end)\s*\{[^{}]*\}|&")
 _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
                "text", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
@@ -118,6 +131,14 @@ def _content(text: str) -> str:
                 continue
             ch = text[pos]
             if not ch.isspace() and ch not in _DROP:
+                if pos and text[pos - 1].isspace() and (ch.isalnum() or ch == "."):
+                    # A removed layout/whitespace boundary must not join numbers
+                    # or manufacture a function name. Redundant groups are then
+                    # removed by the same token-aware grouping pass as usual.
+                    token = _TOKEN.match(text, pos)
+                    out.append(f"({token.group()})")
+                    pos = token.end()
+                    continue
                 out.append({"{": "(", "}": ")", "[": "(", "]": ")"}.get(ch, ch))
             pos += 1
     return "".join(out)
@@ -190,10 +211,14 @@ def skeleton(text: str) -> str:
     text = _SUPERSCRIPTS.sub(lambda m: "^(" + m.group().translate(_SUPERSCRIPT_MAP) + ")",
                              _FENCE.sub("", text))
     text = unicodedata.normalize("NFKC", text)
+    # Remove layout before parsing arguments: spacing can occur between a
+    # fraction/root command and its operand. Keep separators until _content.
+    text = _LAYOUT.sub(" ", text)
+    text = _COMMAND_WORD.sub(lambda m: " " if m.group()[1:] in _FORMATTING
+                             else _SYMBOLS.get(m.group()[1:], m.group()), text)
     text = _fractions(text)
     for pattern, repl in _COMMANDS:
         text = re.sub(pattern, repl, text)
-    text = _COMMAND_WORD.sub(lambda m: "" if m.group()[1:] in _FORMATTING else m.group(), text)
     for key, value in _UNICODE.items():
         text = text.replace(key, value)
     return _grouping(_content(text))

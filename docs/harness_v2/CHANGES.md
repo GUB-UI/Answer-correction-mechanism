@@ -1,5 +1,13 @@
 # Harness v2 changes
 
+## PR #12: remove LaTeX layout from OCR skeletons and canonicalize symbols
+
+- Remove line breaks `\\`, arbitrary `\begin` / `\end` environment markers, spacing commands, `\left` / `\right`, `\displaystyle`, and alignment `&` as separators before parsing fraction/root arguments. Preserve numeric and function token boundaries through the existing grouping pass.
+- Canonicalize Greek letters (including capitals and variants), `\circ` / `°`, and `\infty` / `∞` to common Unicode forms. Retain existing multiplication, division, inequality, and plus-minus rules, distinct unknown commands, and grouping/root/power scope.
+- Added regression coverage for multiline aligned LaTeX versus plain text (zero CER), symbol equivalence, boundaries after layout removal, and idempotence. Before the fix, 88 new cases failed.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **342 passed**, with no network or API calls.
+
 ## Fix 1: preserve canonical root scope after coefficients and variables
 
 - Recognize canonical `sqrt(...)` at any position, including immediately after digits or letters, using the existing balanced radicand parser. LaTeX, Unicode, and canonical roots now retain the same explicit scope when prefixed or nested, and repeated normalization preserves the result.
