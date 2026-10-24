@@ -341,3 +341,97 @@ def test_external_legacy_client_only_provenance_is_not_reused(case):
     storage.update_ocr_result(saved)
     assert run().items[0].ocr_id != first.ocr_id
     assert adapter.calls == 4
+
+
+def _managed_adoption(config, *, model_id="configured-A"):
+    """Managed manager that adopts an already-healthy process and never starts one."""
+    from src.runtime.services import GLM_OCR, ServiceManager, ServiceSpec
+
+    config = replace(config, services=replace(
+        config.services, mode="managed",
+        glm_ocr=replace(config.services.glm_ocr, model_id=model_id),
+    ))
+    manager = ServiceManager(
+        {GLM_OCR: ServiceSpec(name=GLM_OCR, command=["python", "-c", "pass"], port=config.ocr_api.port)},
+        config.run_dir,
+        mode="managed",
+        health_check=lambda url: True,
+    )
+    return config, manager
+
+
+@pytest.mark.parametrize("change", ["model", "revision", "settings"])
+def test_managed_adoption_records_loaded_identity_and_rejects_a_different_backend(case, backend, change):
+    storage, config, answer, options, adapter, run = case
+    config, manager = _managed_adoption(config)
+    storage.config = config
+    backend["payload"].update(model="loaded-B", revision="rev-B")
+    first = run(config=config, services=manager).items[0]
+    saved = storage.get_ocr_result(first.ocr_id)
+    assert any(event["action"] == "reuse_external" for event in manager.events)
+    assert not any(event["action"] == "start" for event in manager.events)
+    assert saved.provenance.model_id == "loaded-B"
+    assert saved.provenance.model_revision == "rev-B"
+    assert saved.provenance.model_id != config.ocr.model_name
+    assert saved.provenance.settings["server_model_id"] == "configured-A"
+    assert saved.provenance.settings["backend"] == {
+        "model": "loaded-B", "revision": "rev-B",
+        "settings": {"max_edge": 1024, "dtype": "float16"},
+    }
+    if change == "model":
+        backend["payload"]["model"] = "configured-A"
+    elif change == "revision":
+        backend["payload"]["revision"] = "rev-A"
+    else:
+        backend["payload"]["settings"] = {"max_edge": 2048, "dtype": "float16"}
+    second = run(config=config, services=manager).items[0]
+    assert second.ocr_id and second.ocr_id != first.ocr_id
+    adopted = storage.get_ocr_result(second.ocr_id).provenance
+    assert adopted.model_id == backend["payload"]["model"]
+    assert adopted.model_revision == backend["payload"]["revision"]
+    assert adopted.settings["backend"]["settings"] == backend["payload"]["settings"]
+    assert run(config=config, services=manager).items[0].ocr_id == second.ocr_id
+    assert adapter.calls == 4
+
+
+@pytest.mark.parametrize("change", ["missing_revision", "missing_settings", "empty_settings", "unavailable", "error"])
+def test_managed_unverifiable_backend_is_not_reused(case, backend, change):
+    storage, config, answer, options, adapter, run = case
+    config, manager = _managed_adoption(config)
+    storage.config = config
+    payload = backend["payload"]
+    payload.update(model="loaded-B", revision="rev-B")
+    if change.startswith("missing_"):
+        payload.pop(change.removeprefix("missing_"))
+    elif change == "empty_settings":
+        payload["settings"] = {}
+    elif change == "unavailable":
+        backend["error"] = OSError("backend unavailable")
+    elif change == "error":
+        payload["error"] = "load failed"
+    first = run(config=config, services=manager).items[0]
+    assert storage.get_ocr_result(first.ocr_id).provenance is None
+    second = run(config=config, services=manager).items[0]
+    assert second.ocr_id and second.ocr_id != first.ocr_id
+    assert storage.get_ocr_result(second.ocr_id).provenance is None
+    assert not any(event["action"] == "start" for event in manager.events)
+    assert adapter.calls == 4
+
+
+def test_managed_backend_change_during_ocr_discards_provenance(case, backend, monkeypatch):
+    storage, config, answer, options, adapter, run = case
+    config, manager = _managed_adoption(config)
+    storage.config = config
+    original_run = adapter.run
+
+    def change_backend(context):
+        result = original_run(context)
+        if adapter.calls == 2:
+            backend["payload"]["revision"] = "commit-b"
+        return result
+
+    monkeypatch.setattr(adapter, "run", change_backend)
+    first = run(config=config, services=manager).items[0]
+    assert storage.get_ocr_result(first.ocr_id).provenance is None
+    assert run(config=config, services=manager).items[0].ocr_id != first.ocr_id
+    assert adapter.calls == 4

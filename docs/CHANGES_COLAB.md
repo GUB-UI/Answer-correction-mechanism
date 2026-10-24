@@ -980,3 +980,14 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - `problem_id` が文字列でない、反復が正の整数でない、採点がオブジェクトでない、採点 status が文字列でない場合は理由にして comparable を false にする。例外にはしない。
 - その記録の得点は使わない。CLI は終了コード 2。出力は 0600、入力の権限は変えない。
+
+## PR #9 / Sol r5 修正1: managed OCR はロード済みモデルを記録する
+
+- managed モードの OCR provenance は、設定上のモデル名ではなく `/health` が返すロード済みの model、revision、有効な settings を記録する。設定側の `server_model_id` とコマンドハッシュは残す。
+- model、revision、または空でない settings を確認できないときは provenance を作らず、その結果は再利用しない。ページ処理の途中で backend が変わった場合も provenance を捨てる。
+- 手動起動した別モデルの出力を設定上のモデルとしてキャッシュしない回帰、確認できない health、処理中の変更を追加。
+
+## PR #9 / Sol r5 保留: 不完全な採点メタデータの拒否理由（未修正）
+
+- 修正していない。Sol r5 minor 2 を `docs/DEFERRED_REVIEW_ITEMS.md` に記録した。
+- 保存済み採点メタデータが欠けると再採点はされるが、バッチ項目と新しい結果の `reuse_unavailable_reason` は `None` のまま。望む理由名は `existing_grading_metadata_incomplete`。

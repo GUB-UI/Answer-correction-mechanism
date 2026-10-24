@@ -71,9 +71,12 @@ def run_ocr_for_images(
             suspect_reasons.extend(part.raw_output.get("ocr_suspect_reasons") or ["ocr_suspect"])
 
     combined = "\n\n".join(page_texts).strip()
-    # Confirm the external backend did not change while processing the pages.
+    # Confirm the loaded backend did not change while processing the pages.
     if provenance is not None:
-        if storage.config.services.mode == "external" and provenance.engine in {"glmocr_sdk", "xiaomi_ocr"}:
+        if (
+            storage.config.services.mode in {"external", "managed"}
+            and provenance.engine in {"glmocr_sdk", "xiaomi_ocr"}
+        ):
             current = ocr_provenance(
                 storage.config, image_paths, provider=provenance.engine, adapter=adapter,
                 apply_formula=bool(provenance.settings.get("formula_enabled")),
