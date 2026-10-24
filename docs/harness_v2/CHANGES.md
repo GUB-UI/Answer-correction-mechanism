@@ -666,3 +666,8 @@ Preserve overline, bar, vec, hat, dot, tilde, mathbf and text as distinct calls;
 ## PR #12 / Fix 9: Consume pure LaTeX layout arguments
 
 Strip balanced array column specs, environment positions, row spacing, hspace/vspace, tags, numbering controls, hline, sizing prefixes, invisible delimiters and `~`. Preserve structural separators and content brackets. Collision, equivalence and idempotence regressions: 441 related tests passed.
+
+
+## PR #12 / Fix 10: Make command radicands and incomplete input idempotent
+
+Read whole command arguments and validate nested bracket pairing. Boundary-marked incomplete commands remain opaque; orphan combining marks become explicit tokens; collapse separators after layout removal. Add command-root collision/equivalence/idempotence regressions and a deterministic 4,000-input fuzz test. 445 related tests passed; an additional 20,000 generated inputs were idempotent.

@@ -146,3 +146,26 @@ def test_fix_09_sizing_keeps_content_brackets(size):
 
 def test_fix_09_invisible_sizing_delimiter():
     check_forms([r'\left. x\right)', 'x)'], ['x'])
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\sqrt\ln x', '√\\ln x', r'\sqrt{\ln}x'], [r'\sqrt{l}nx']),
+    ([r'\sqrt\sin x', r'\sqrt{\sin}x'], [r'\sqrt{s}inx']),
+    ([r'\sqrt[3]\ln x', r'\sqrt[3]{\ln}x'], [r'\sqrt{3}\ln x']),
+])
+def test_fix_10_command_radicands(forms, different):
+    check_forms(forms, different)
+
+
+def test_fix_10_seeded_notation_fuzz_is_idempotent():
+    import random
+
+    rng = random.Random(12010)
+    tokens = ['a', '2', '13', '+', '-', '/', '*', '^', '_', '!', '=', ',', ' ', '\n',
+              '(', ')', '[', ']', '{', '}', r'\sqrt', '√', '∛', r'\ln', r'\alpha',
+              r'\frac', r'\overline', r'\text', r'\\', '&', '$', r'\(', r'\)',
+              'ⁿ', '₁', '①', '̅']
+    for _ in range(4000):
+        text = ''.join(rng.choices(tokens, k=rng.randrange(1, 16)))
+        normalized = skeleton(text)
+        assert skeleton(normalized) == normalized, repr(text)

@@ -13,7 +13,7 @@ import re
 import unicodedata
 
 _FENCE = re.compile(r"```[A-Za-z]*")
-_FRAC_HEAD = re.compile(r"\\[dt]?frac(?![A-Za-z])\s*")
+_FRAC_HEAD = re.compile(r"\\[dt]?frac(?![A-Za-z\u2063])\s*")
 # Canonical roots can directly follow a coefficient or variable, including
 # inside another root. Recognize them again without losing their scope.
 _ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|[√∛∜]|(?:sqrt|root)(?=\s*\()")
@@ -48,7 +48,7 @@ _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
 _LAYOUT = re.compile(r"\\[,;:! ()\[\]]|\$+")
 _ENVIRONMENTS = "pmatrix|bmatrix|vmatrix|Vmatrix|matrix|array|cases"
 _DECORATIONS = "overline|bar|vec|hat|dot|tilde|mathbf|text"
-_DECORATION_HEAD = re.compile(r"\\(?:" + _DECORATIONS + r")(?![A-Za-z])|(?:" + _DECORATIONS + r")(?=\()")
+_DECORATION_HEAD = re.compile(r"\\(?:" + _DECORATIONS + r")(?![A-Za-z\u2063])|(?:" + _DECORATIONS + r")(?=\()")
 _CALL_HEAD = re.compile(r"(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + r")(?=\()")
 _MATH_SPAN = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DOTALL)
 
@@ -107,7 +107,7 @@ def _layout(text: str) -> str:
             depth = max(0, depth - 1)
         out.append(";" if ch == "\n" and depth == 0 else " " if ch == "\n" else ch)
     text = re.sub(r"\s*;\s*(?:;\s*)*", ";", "".join(out)).strip("; ")
-    return _LAYOUT.sub(" ", text)
+    return re.sub(r"\s*;\s*(?:;\s*)*", ";", _LAYOUT.sub(" ", text)).strip("; ")
 
 _FORMATTING = {"left", "right", "mathrm", "mathit", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
@@ -120,19 +120,29 @@ _PRECEDENCE = {";": -1, "¦": -1, ",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<="
 
 def _group(text: str, start: int, *, delimiters: str = "{") -> tuple[str, int] | None:
     """Balanced group (or a single token) starting at ``start``."""
-    while start < len(text) and text[start].isspace():
+    while start < len(text) and (text[start].isspace() or text[start] == _BOUNDARY):
         start += 1
-    if start >= len(text):
+    if start >= len(text) or text[start] in "})]":
         return None
     if text[start] not in delimiters:
-        return text[start], start + 1
-    opening = text[start]
-    closing = {"{": "}", "(": ")", "[": "]"}[opening]
-    depth = 0
-    for index in range(start, len(text)):
-        depth += {opening: 1, closing: -1}.get(text[index], 0)
-        if depth == 0:
-            return text[start + 1:index], index + 1
+        if text[start] in "{([":
+            return None
+        command = _COMMAND_WORD.match(text, start)
+        return (command.group(), command.end()) if command else (text[start], start + 1)
+    stack = []
+    tokens = re.compile(r"\\[A-Za-z]+|\\.|.", re.DOTALL)
+    for token in tokens.finditer(text, start):
+        ch = token.group()
+        if ch in ("{", "(", "["):
+            stack.append((ch, token.start()))
+        elif ch in ("}", ")", "]"):
+            opening, begin = stack[-1]
+            if {"{": "}", "(": ")", "[": "]"}[opening] != ch:
+                if not (opening in "([" and ch in ")]" and "," in text[begin:token.start()]):
+                    return None
+            stack.pop()
+            if not stack:
+                return text[start + 1:token.start()], token.end()
     return None
 
 
@@ -170,7 +180,7 @@ def _fractions(text: str) -> str:
 
 def _radicand(text: str, start: int) -> tuple[str, int] | None:
     """Read a grouped expression, nested root, number, or single variable."""
-    while start < len(text) and text[start].isspace():
+    while start < len(text) and (text[start].isspace() or text[start] == _BOUNDARY):
         start += 1
     root = _ROOT_HEAD.match(text, start)
     if root:
@@ -346,7 +356,9 @@ def _combining_notation(text: str) -> str:
             inner = "\\" + marks[mark] + "{" + inner + "}"
         return inner
 
-    return re.sub(r"([^\s])([\u20d7\u0302\u0307\u0303]+)", decorate, text)
+    text = re.sub(r"([^\s])([\u20d7\u0302\u0307\u0303]+)", decorate, text)
+    return re.sub(r"[\u0304\u0305\u20d7\u0302\u0307\u0303]",
+                  lambda m: f"mark[{ord(m[0]):04x}]", text)
 
 
 def _unicode_notation(text: str) -> str:
