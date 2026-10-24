@@ -26,3 +26,13 @@ def check_forms(forms, different):
 def test_fix_01_indexed_roots(forms, different):
     check_forms(forms, different)
 
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'a_{n+1}', 'a_(n+1)'], ['a(n+1)', 'a_n+1']),
+    ([r'x_{2}', 'x_2'], ['x2']),
+    ([r'\log_{2} x', r'\log_2 x'], [r'\log 2x']),
+    ([r'a_{b_c}', 'a_(b_c)'], ['(a_b)_c']),
+])
+def test_fix_02_subscripts(forms, different):
+    check_forms(forms, different)

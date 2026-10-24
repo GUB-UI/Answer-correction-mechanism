@@ -626,3 +626,8 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider h
 ## PR #12 / Fix 1: Preserve root indices
 
 Parse optional root indices separately; Unicode cube/fourth roots share `root(index,radicand)`. Square roots retain `sqrt(...)`. Collision, equivalence, nested-root and idempotence regressions: 375 related tests passed.
+
+
+## PR #12 / Fix 2: Retain subscript operators
+
+Keep `_` with the same grouping rules as `^`; distinguish subscripts from baseline characters and factors. Correct the old fraction expectation. Collision, equivalence and idempotence regressions included; 379 related tests passed.

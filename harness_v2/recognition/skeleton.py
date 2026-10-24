@@ -53,9 +53,9 @@ _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
 # Token boundaries must survive removing groups: numbers, commands, and roots
 # cannot be manufactured by concatenating formerly separate operands.
 _TOKEN = re.compile(r"\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
-_DROP = {"_", "\u0304", "\u0305"}
+_DROP = { "\u0304", "\u0305"}
 _PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1, "±": 1,
-               "*": 2, "/": 2, "^": 4}
+               "*": 2, "/": 2, "^": 4, "_": 4}
 
 
 def _group(text: str, start: int, *, delimiters: str = "{") -> tuple[str, int] | None:
@@ -212,11 +212,11 @@ def _grouping(text: str) -> str:
             strength = _precedence(inner)
             left, right = out[-1:], text[end:end + 1]
             lp = _PRECEDENCE.get(left, 2) if left else -1
-            if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/^"):
+            if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/^_"):
                 lp = 3  # unary sign
             rp = _PRECEDENCE.get(right, 2) if right else -1
-            left_ok = strength > lp or (left == "^" and strength >= 3)
-            right_ok = strength > rp if right == "^" else strength >= rp
+            left_ok = strength > lp or (left in ("^", "_") and strength >= 3)
+            right_ok = strength > rp if right in ("^", "_") else strength >= rp
             signed_factor = (left and left not in _PRECEDENCE and inner[:1] in ("+", "-", "±"))
             tail = text[end:]
             joins_tokens = (_TOKEN.findall(out + inner + tail)

@@ -82,7 +82,7 @@ def test_cer_and_gate():
 @pytest.mark.parametrize("a,b", [
     (r"\frac{x^{2}}{3}", "x²/3"),
     (r"\frac{\sqrt{2}}{2}", "√2/2"),
-    (r"\frac{a_{1}}{b}", "a1/b"),
+    (r"\frac{a_{1}}{b}", "a_1/b"),
     (r"\frac{{1}}{2}", "1/2"),
     (r"\frac{1}{\frac{2}{3}}", "1/(2/3)"),
     (r"\frac12", "1/2"),
