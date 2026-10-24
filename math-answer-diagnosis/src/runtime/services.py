@@ -6,7 +6,7 @@ HTTP サーバーとして起動し、``exclusive_gpu`` が有効なら1つず�
 ``del model`` するより確実）。
 
 Mac（oMLX / mlx-vlm を手動起動する構成）では ``mode=external`` とし、
-ここでは何も起動・停止しない。
+ここでは起動しない。停止はどのモードでも所有権を確認してから行う。
 
 PID ファイルと排他ロックを run_dir に置くので、Streamlit とノートブック/CLI の
 どちらから操作しても同じ状態を共有できる。
@@ -173,27 +173,48 @@ class ServiceManager:
             return None
         return value if isinstance(value, dict) else None
 
+    def _holder_pids(self, record: dict[str, Any] | None) -> list[int]:
+        if not record:
+            return []
+        raw = record.get("holders")
+        if not isinstance(raw, list):
+            raw = [record.get("pid")]
+        holders: list[int] = []
+        for pid in raw:
+            if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or pid in holders:
+                continue
+            holders.append(pid)
+        return holders
+
+    def _write_owner(self, identity: str, holders: list[int]) -> None:
+        write_private(
+            self.owner_file(),
+            json.dumps({"pid": holders[-1], "holders": holders, "identity": identity}),
+        )
+
     def _claim_session(self) -> None:
-        """Record this configuration as the run-directory owner, or refuse.
+        """Record this process as a holder of the run directory, or refuse.
 
         Must run under the shared filesystem lock, before any service is stopped.
-        A live owner with a different launch identity blocks the caller. A dead
-        owner can be replaced. Matching identities may share the directory.
+        Every live holder is kept. A different launch identity is refused while
+        any of them remains. Dead holders are dropped, and a directory with no
+        live holder can be taken over. Matching identities share the directory.
         """
         identity = self._session_identity()
         record = self._owner_record()
-        pid = record.get("pid") if record else None
         same = bool(record) and record.get("identity") == identity
-        alive = isinstance(pid, int) and pid > 0 and _pid_alive(pid)
-        if record and not same and alive:
+        live = [pid for pid in self._holder_pids(record) if _pid_alive(pid)]
+        if live and not same:
             raise ServiceStartError(_SESSION_CONFLICT)
-        if same and alive and pid != os.getpid():
+        me = os.getpid()
+        if same:
+            holders = [pid for pid in live if pid != me]
+            holders.append(me)
+            if holders == self._holder_pids(record):
+                return
+            self._write_owner(identity, holders)
             return
-        if not same or not alive or pid != os.getpid():
-            write_private(
-                self.owner_file(),
-                json.dumps({"pid": os.getpid(), "identity": identity}),
-            )
+        self._write_owner(identity, [me])
 
     def _launch_identity(self, name: str, pid: int) -> dict[str, Any]:
         spec = json.dumps(asdict(self.specs[name]), sort_keys=True, default=str)
@@ -306,8 +327,7 @@ class ServiceManager:
 
     def stop(self, name: str) -> bool:
         with self._locked():
-            if self.managed:
-                self._claim_session()
+            self._claim_session()
             return self._stop_unlocked(name)
 
     def _stop_unlocked(self, name: str) -> bool:
@@ -337,8 +357,7 @@ class ServiceManager:
     def stop_all(self) -> list[str]:
         stopped: list[str] = []
         with self._locked():
-            if self.managed:
-                self._claim_session()
+            self._claim_session()
             for name in self.specs:
                 if self._stop_unlocked(name):
                     stopped.append(name)
