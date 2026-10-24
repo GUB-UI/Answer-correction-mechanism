@@ -6,7 +6,8 @@ scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 ``failed`` (grading status failed) or ``incomplete`` (missing, duplicate,
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
 nothing is filled in. Missing/empty plans, duplicate planned IDs, duplicate
-planned slots, and duplicate, missing or unexpected run IDs make the report
+planned slots, duplicate, missing or unexpected run IDs, and run provenance
+that is missing, mismatched, or from more than one experiment make the report
 non-comparable;
 any remaining metrics are diagnostic only.
 """
@@ -55,6 +56,21 @@ def _empty() -> dict:
             "newly_flagged_relative_to_O": 0, "unflagged_relative_to_O": 0}
 
 
+def _provenance_issue(job: dict, run: dict):
+    """Return ``(reason, experiment_identity)`` for one planned run."""
+    rid = job.get("request_id")
+    outputs = run.get("outputs") if isinstance(run, dict) else None
+    provenance = outputs.get("experiment_case") if isinstance(outputs, dict) else None
+    if not isinstance(provenance, dict):
+        return f"missing run provenance: {rid}", None
+    if any(provenance.get(field) != job.get(field) for field in ("case_id", "repetition", "problem_id")):
+        return f"run provenance differs from planned job: {rid}", None
+    identity = provenance.get("experiment_identity")
+    if not isinstance(identity, str) or not identity.strip():
+        return f"missing run provenance: {rid}", None
+    return None, identity
+
+
 def _finish(stats: dict) -> dict:
     stats["item_agreement"] = stats["items_equal"] / stats["items"] if stats["items"] else None
     stats["flag_rate"] = stats["flagged"] / stats["flag_denominator"] if stats["flag_denominator"] else None
@@ -97,6 +113,8 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
     for source, variant, rep in sorted(duplicate_slots, key=lambda slot: (str(slot[0]), str(slot[1]), str(slot[2]))):
         reasons.append(f"duplicate planned slot: {source}:{variant}:{rep}")
     cells = {}
+    identities = set()
+    provenance_reasons = []
     for job, source, variant, slot in parsed:
         ids = rubric_items.get(job.get("problem_id"))
         if not ids:
@@ -109,9 +127,23 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
         records = runs.get(job["request_id"], [])
         if job["request_id"] in duplicate_planned_ids or len(records) > 1:
             cell = {"outcome": "incomplete", "status": None, "scores": None}
+        elif not records:
+            cell = _cell(None, expected)
         else:
-            cell = _cell(records[0] if records else None, expected)
+            issue, identity = _provenance_issue(job, records[0])
+            if issue:
+                provenance_reasons.append(issue)
+                cell = {"outcome": "incomplete", "status": None, "scores": None}
+            else:
+                identities.add(identity)
+                cell = _cell(records[0], expected)
         cells[slot] = cell
+    reasons.extend(sorted(provenance_reasons))
+    if len(identities) > 1:
+        reasons.append("multiple experiment identities: " + ", ".join(sorted(identities)))
+        for slot, cell in list(cells.items()):
+            if cell["outcome"] == "ok":
+                cells[slot] = {"outcome": "incomplete", "status": None, "scores": None}
     totals = defaultdict(_empty)
     by_source = defaultdict(lambda: defaultdict(_empty))
     for (source, variant, rep), cell in sorted(cells.items()):

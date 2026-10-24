@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -58,6 +59,27 @@ def _run(rid, status, scores):
     return {"request_id": rid, "outputs": {"grading": {"status": status, "items": items}}}
 
 
+def _bind(jobs, runs, identity="experiment-A"):
+    """Attach provenance that matches each planned job. Tests of bad provenance skip this."""
+    planned = {}
+    if isinstance(jobs, list):
+        for job in jobs:
+            if isinstance(job, dict):
+                planned.setdefault(job.get("request_id"), job)
+    bound = []
+    for run in runs:
+        copied = copy.deepcopy(run)
+        job = planned.get(copied.get("request_id")) if isinstance(copied, dict) else None
+        outputs = copied.setdefault("outputs", {}) if isinstance(copied, dict) else None
+        if job is not None and isinstance(outputs, dict) and not isinstance(outputs.get("experiment_case"), dict):
+            outputs["experiment_case"] = {
+                "case_id": job["case_id"], "repetition": job["repetition"],
+                "problem_id": job["problem_id"], "experiment_identity": identity,
+            }
+        bound.append(copied)
+    return bound
+
+
 R = {"P": ["R1"]}
 
 
@@ -70,7 +92,8 @@ def test_report_pairs_by_repetition_and_classifies_outcomes():
     runs = [_run("P:manualO1", "validated", [("R1", 2)]), _run("P:manualO2", "validated", [("R1", 1)]),
             _run("P:manualF1", "validated", [("R1", 2)]), _run("P:manualF2", "review_required", [("R1", 2)]),
             _run("P:manualN1", "failed", None), _run("P:manualN2", "review_required", [("R1", 1)])]
-    report = challenge_report({"expected_runs": _jobs(), "runs": runs}, rubric_items=R)
+    jobs = _jobs()
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["comparable"] is True and report["reasons"] == []
     f, n = report["variants"]["F"], report["variants"]["N"]
     assert f["pairs"] == 2 and f["items_equal"] == 1 and f["item_agreement"] == 0.5
@@ -80,8 +103,9 @@ def test_report_pairs_by_repetition_and_classifies_outcomes():
 
 
 def test_missing_runs_are_counted_not_dropped():
+    jobs = _jobs()
     runs = [_run("P:manualO1", "validated", [("R1", 2)]), _run("P:manualF1", "validated", [("R1", 2)])]
-    report = challenge_report({"expected_runs": _jobs(), "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     f, o, n = (report["variants"][k] for k in "FON")
     assert f["scheduled"] == 2 and f["missing"] == 1 and f["pairs"] == 1
     assert o["missing"] == 1 and n["missing"] == 2 and n["item_agreement"] is None and n["flag_rate"] is None
@@ -90,8 +114,9 @@ def test_missing_runs_are_counted_not_dropped():
 
 
 def test_variant_without_valid_original_is_unpaired():
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
     runs = [_run("P:manualO1", "failed", None), _run("P:manualF1", "validated", [("R1", 2)])]
-    report = challenge_report({"expected_runs": _jobs(variants=("O", "F"), reps=(1,)), "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["variants"]["F"]["unpaired_no_valid_O"] == 1 and report["variants"]["F"]["pairs"] == 0
 
 
@@ -101,8 +126,8 @@ def test_failed_duplicate_nonfinite_and_unexpected_items_never_agree():
             _run("P:manualG1", "validated", [("R1", 0), ("R1", 1)]),
             _run("P:manualH1", "validated", [("R1", float("nan"))]),
             _run("P:manualI1", "validated", [("R1", 1), ("R9", 0)])]
-    report = challenge_report({"expected_runs": _jobs(variants=("O", "F", "G", "H", "I"), reps=(1,)),
-                               "runs": runs}, rubric_items=R)
+    jobs = _jobs(variants=("O", "F", "G", "H", "I"), reps=(1,))
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     v = report["variants"]
     assert v["F"]["failed"] == 1
     assert v["G"]["incomplete"] == v["H"]["incomplete"] == v["I"]["incomplete"] == 1
@@ -113,7 +138,7 @@ def test_by_source_keeps_transcriptions_separate():
     jobs = _jobs(sources=("P:manual_C0", "P:manual_C1"), variants=("O", "F"), reps=(1,))
     runs = [_run("P:manual_C0O1", "validated", [("R1", 1)]), _run("P:manual_C0F1", "validated", [("R1", 1)]),
             _run("P:manual_C1O1", "validated", [("R1", 1)]), _run("P:manual_C1F1", "review_required", [("R1", 0)])]
-    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["by_source"]["P:manual_C0"]["F"]["item_agreement"] == 1.0
     assert report["by_source"]["P:manual_C1"]["F"]["item_agreement"] == 0.0
     assert report["by_source"]["P:manual_C1"]["F"]["newly_flagged_relative_to_O"] == 1
@@ -129,12 +154,13 @@ def test_rubric_ids_are_required_and_fail_closed():
 
 
 def test_equally_truncated_or_unexpected_scores_are_incomplete():
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
     runs = [_run("P:manualO1", "validated", [("R1", 1)]), _run("P:manualF1", "validated", [("R1", 1)])]
-    report = challenge_report({"expected_runs": _jobs(variants=("O", "F"), reps=(1,)), "runs": runs},
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)},
                               rubric_items={"P": ["R1", "R2"]})
     assert report["variants"]["F"]["pairs"] == 0 and report["variants"]["O"]["incomplete"] == 1
     runs = [_run("P:manualO1", "validated", [("X", 1)]), _run("P:manualF1", "validated", [("X", 1)])]
-    report = challenge_report({"expected_runs": _jobs(variants=("O", "F"), reps=(1,)), "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["variants"]["F"]["incomplete"] == 1 and report["variants"]["F"]["pairs"] == 0
 
 
@@ -146,7 +172,7 @@ def test_duplicate_request_ids_are_invalid_and_neither_record_is_used(variant, d
     rid = f"P:manual{variant}1"
     duplicate = _run(rid, "review_required", [("R1", 0)])
     runs.insert(0 if duplicate_first else len(runs), duplicate)
-    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["comparable"] is False
     assert report["reasons"] == [f"duplicate request_id: {rid}"]
     assert report["variants"][variant]["incomplete"] == 1
@@ -159,7 +185,7 @@ def test_unexpected_request_id_invalidates_an_otherwise_complete_report():
     jobs = _jobs(variants=("O", "F"), reps=(1,))
     runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs]
     runs.append(_run("unscheduled", "validated", [("R1", 0)]))
-    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["comparable"] is False
     assert report["reasons"] == ["unexpected request_id: unscheduled"]
     assert report["variants"]["F"]["scheduled"] == 1
@@ -169,7 +195,7 @@ def test_all_request_id_problems_are_reported_together():
     jobs = _jobs(variants=("O", "F"), reps=(1,))
     runs = [_run("P:manualO1", "validated", [("R1", 1)])] * 2
     runs += [_run("unscheduled", "failed", None)] * 2
-    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["comparable"] is False
     assert report["reasons"] == [
         "duplicate request_id: P:manualO1", "duplicate request_id: unscheduled",
@@ -217,7 +243,7 @@ def test_duplicate_planned_ids_leave_only_unambiguous_pairs_as_diagnostics():
         if job["repetition"] == 1:
             job["request_id"] = "same"
     runs = [_run(rid, "validated", [("R1", 1)]) for rid in {job["request_id"] for job in jobs}]
-    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["comparable"] is False
     assert report["reasons"] == ["duplicate planned request_id: same"]
     assert report["variants"]["F"]["pairs"] == 1
@@ -240,7 +266,7 @@ def test_cli_marks_request_id_integrity_in_report_and_exit_code(tmp_path, monkey
         for job in jobs:
             job["request_id"] = "same"
         runs = [_run("same", "validated", [("R1", 1)])]
-    payload = {"expected_runs": jobs, "runs": runs}
+    payload = {"expected_runs": jobs, "runs": _bind(jobs, runs)}
     if problem == "absent plan":
         payload = {}
     elif problem == "empty plan":
@@ -282,7 +308,7 @@ def test_duplicate_planned_slots_do_not_overwrite(reverse):
     if reverse:
         jobs.reverse()
         runs.reverse()
-    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    report = challenge_report({"expected_runs": jobs, "runs": _bind(jobs, runs)}, rubric_items=R)
     assert report["comparable"] is False
     assert report["reasons"] == [
         "duplicate planned slot: P:manual:F:1",
@@ -306,13 +332,81 @@ def test_duplicate_planned_slot_cli_exits_2_without_changing_inputs(tmp_path, mo
     results_path = tmp_path / "results.json"
     out = tmp_path / "nested" / "report.json"
     tmp_path.chmod(0o755)
-    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": _bind(jobs, runs)}))
     results_path.chmod(0o644)
     monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
     code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
     report = json.loads(out.read_text())
     assert code == 2 and report["comparable"] is False
     assert any(reason.startswith("duplicate planned slot:") for reason in report["reasons"])
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (out.parent.stat().st_mode & 0o777) == 0o700
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755
+
+
+def _pair(identity="experiment-A", *, o_case=None, f_case=None):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = _bind(jobs, [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs], identity=identity)
+    if o_case is not None:
+        runs[0]["outputs"]["experiment_case"].update(o_case)
+    if f_case is not None:
+        runs[1]["outputs"]["experiment_case"].update(f_case)
+    return jobs, runs
+
+
+@pytest.mark.parametrize("change", ["missing", "case_id", "repetition", "problem_id", "identity_blank"])
+def test_run_provenance_must_match_the_planned_job(change):
+    jobs, runs = _pair()
+    if change == "missing":
+        runs[1]["outputs"].pop("experiment_case")
+        expected = "missing run provenance: P:manualF1"
+    elif change == "identity_blank":
+        runs[1]["outputs"]["experiment_case"]["experiment_identity"] = " "
+        expected = "missing run provenance: P:manualF1"
+    else:
+        runs[1]["outputs"]["experiment_case"][change] = {"case_id": "other:F", "repetition": 9, "problem_id": "Q"}[change]
+        expected = "run provenance differs from planned job: P:manualF1"
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert expected in report["reasons"]
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+
+def test_different_experiment_identities_are_not_compared():
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = _bind(jobs, [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs])
+    runs[1]["outputs"]["experiment_case"]["experiment_identity"] = "experiment-B"
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == ["multiple experiment identities: experiment-A, experiment-B"]
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["items"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+
+def test_matching_provenance_remains_comparable():
+    jobs, runs = _pair()
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is True and report["reasons"] == []
+    assert report["variants"]["F"]["item_agreement"] == 1
+
+
+def test_missing_provenance_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs]
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "out" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert any(reason.startswith("missing run provenance:") for reason in report["reasons"])
+    assert report["variants"]["F"]["item_agreement"] is None
     assert (out.stat().st_mode & 0o777) == 0o600
     assert (out.parent.stat().st_mode & 0o777) == 0o700
     assert (results_path.stat().st_mode & 0o777) == 0o644

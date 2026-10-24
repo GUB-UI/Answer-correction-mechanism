@@ -707,3 +707,7 @@ The complete suite was also attempted with a temporary audit hook blocking conne
 ## PR #12 / Challenge fix 1: Invalidate duplicate planned slots
 
 Distinct planned request IDs that share a source, variant, and repetition no longer overwrite one another. The report is not comparable, names `duplicate planned slot`, and does not use either job's scores. A merged two-config plan where only one config agrees stays non-comparable in either order. The CLI exits 2. The report file is 0600, a new directory is 0700, and input permissions stay unchanged.
+
+## PR #12 / Challenge fix 2: Check run provenance against the plan
+
+Each run's `outputs.experiment_case` must match the planned case ID, repetition, and problem ID and carry an experiment identity. Missing provenance is a reason. Compared runs must share one experiment identity. Mismatched runs contribute no scores. The report is not comparable and the CLI exits 2. Output stays 0600 and input permissions are unchanged.
