@@ -1,0 +1,9 @@
+{"type": "object", "additionalProperties": false,
+ "required": ["request_id", "proposal_id", "snapshot_id", "baseline_commit", "candidate_commit", "cause", "changed_components", "expected_effect", "verdict", "reasons"],
+ "properties": {
+  "request_id": {"type": "string", "minLength": 1}, "proposal_id": {"type": "string", "minLength": 1},
+  "snapshot_id": {"type": "string", "minLength": 64}, "baseline_commit": {"type": "string", "minLength": 40},
+  "candidate_commit": {"type": "string", "minLength": 40}, "cause": {"type": "string"},
+  "changed_components": {"type": "array", "items": {"type": "string"}}, "expected_effect": {"type": "string"},
+  "verdict": {"type": "string", "enum": ["improved", "not_improved", "regressed", "incomparable"]},
+  "reasons": {"type": "array", "items": {"type": "string"}}}}
