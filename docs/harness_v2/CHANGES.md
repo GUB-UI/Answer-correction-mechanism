@@ -723,3 +723,7 @@ A planned source and repetition that has no original (O) job, or no variant job,
 ## PR #12 / Challenge fix 5: Malformed input invalidates instead of crashing
 
 A results object that is not an object, a `runs` value that is not a list, a run that is not a record, a planned job missing its request ID, case ID, or repetition, and an unhashable request ID each produce an explicit reason. The report is not comparable and the CLI exits 2. Those values are not pairing keys, so they cannot overwrite another slot. Scores are not filled in. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge re-review fix 1: Compare every planned provenance field
+
+Each run's `experiment_case` must match every field on its planned job, including `request_id`, `input_version`, `input_sha256`, and `rubric_sha256`. When the results declare an experiment `identity`, every compared run must carry that identity. A mismatch is non-comparable, the CLI exits 2, and the scores are not used. Output stays 0600 and input permissions are unchanged.

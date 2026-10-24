@@ -72,10 +72,7 @@ def _bind(jobs, runs, identity="experiment-A"):
         job = planned.get(copied.get("request_id")) if isinstance(copied, dict) else None
         outputs = copied.setdefault("outputs", {}) if isinstance(copied, dict) else None
         if job is not None and isinstance(outputs, dict) and not isinstance(outputs.get("experiment_case"), dict):
-            outputs["experiment_case"] = {
-                "case_id": job["case_id"], "repetition": job["repetition"],
-                "problem_id": job["problem_id"], "experiment_identity": identity,
-            }
+            outputs["experiment_case"] = {**job, "experiment_identity": identity}
         bound.append(copied)
     return bound
 
@@ -384,6 +381,61 @@ def test_different_experiment_identities_are_not_compared():
     assert report["variants"]["F"]["pairs"] == 0
     assert report["variants"]["F"]["items"] == 0
     assert report["variants"]["F"]["item_agreement"] is None
+
+
+@pytest.mark.parametrize("field,value", [
+    ("input_sha256", "0" * 64),
+    ("rubric_sha256", "1" * 64),
+    ("input_version", "other-version"),
+    ("request_id", "other-request"),
+])
+def test_every_planned_provenance_field_must_match(field, value):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    for job in jobs:
+        job["input_sha256"] = "a" * 64
+        job["rubric_sha256"] = "b" * 64
+        job["input_version"] = job["case_id"].rsplit(":", 1)[-1]
+    runs = _bind(jobs, [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs])
+    runs[1]["outputs"]["experiment_case"][field] = value
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "run provenance differs from planned job: P:manualF1" in report["reasons"]
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+
+def test_declared_experiment_identity_binds_every_run():
+    jobs, runs = _pair()
+    mismatch = challenge_report(
+        {"identity": "experiment-B", "expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert mismatch["comparable"] is False
+    assert "run provenance differs from declared experiment identity: P:manualO1" in mismatch["reasons"]
+    assert "run provenance differs from declared experiment identity: P:manualF1" in mismatch["reasons"]
+    assert mismatch["variants"]["F"]["pairs"] == 0
+    assert mismatch["variants"]["F"]["item_agreement"] is None
+    match = challenge_report(
+        {"identity": "experiment-A", "expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert match["comparable"] is True and match["reasons"] == []
+    assert match["variants"]["F"]["item_agreement"] == 1
+
+
+def test_declared_identity_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch):
+    jobs, runs = _pair()
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "out" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps({"identity": "other-experiment", "expected_runs": jobs, "runs": runs}))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert any(reason.startswith("run provenance differs from declared experiment identity:") for reason in report["reasons"])
+    assert report["variants"]["F"]["item_agreement"] is None
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (out.parent.stat().st_mode & 0o777) == 0o700
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755
 
 
 def test_matching_provenance_remains_comparable():

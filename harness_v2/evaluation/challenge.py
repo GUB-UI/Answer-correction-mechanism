@@ -7,7 +7,8 @@ scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
 nothing is filled in. Missing/empty plans, duplicate planned IDs, duplicate
 planned slots, duplicate, missing or unexpected run IDs, and run provenance
-that is missing, mismatched, or from more than one experiment, request
+that is missing, mismatched against any planned field or the declared
+experiment identity, or from more than one experiment, request
 IDs that are not non-empty strings, unhashable IDs, a planned repetition
 that lacks its original or a variant, and malformed results, job plans, or
 run records make the report non-comparable;
@@ -100,18 +101,24 @@ def _assemble(reasons, totals, by_source) -> dict:
                           for src, vs in sorted(by_source.items())}}
 
 
-def _provenance_issue(job: dict, run: dict):
-    """Return ``(reason, experiment_identity)`` for one planned run."""
+def _provenance_issue(job: dict, run: dict, declared=_MISSING):
+    """Return ``(reason, experiment_identity)`` for one planned run.
+
+    Every field on the planned job must match, including input and rubric
+    identity. A declared experiment identity must match too.
+    """
     rid = job.get("request_id")
     outputs = run.get("outputs") if isinstance(run, dict) else None
     provenance = outputs.get("experiment_case") if isinstance(outputs, dict) else None
     if not isinstance(provenance, dict):
         return f"missing run provenance: {rid}", None
-    if any(provenance.get(field) != job.get(field) for field in ("case_id", "repetition", "problem_id")):
+    if any(provenance.get(field) != value for field, value in job.items()):
         return f"run provenance differs from planned job: {rid}", None
     identity = provenance.get("experiment_identity")
     if not isinstance(identity, str) or not identity.strip():
         return f"missing run provenance: {rid}", None
+    if declared is not _MISSING and identity != declared:
+        return f"run provenance differs from declared experiment identity: {rid}", None
     return None, identity
 
 
@@ -180,6 +187,7 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
     cells = {}
     identities = set()
     provenance_reasons = []
+    declared = results["identity"] if "identity" in results else _MISSING
     for job, source, variant, slot in parsed:
         ids = rubric_items.get(job.get("problem_id"))
         if not ids:
@@ -195,7 +203,7 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
         elif not records:
             cell = _cell(None, expected)
         else:
-            issue, identity = _provenance_issue(job, records[0])
+            issue, identity = _provenance_issue(job, records[0], declared)
             if issue:
                 provenance_reasons.append(issue)
                 cell = {"outcome": "incomplete", "status": None, "scores": None}

@@ -945,3 +945,8 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - `/health` の `model` など fingerprint 以外のフィールドにサロゲートが含まれても、応答全体を UTF-8 で送る。符号化できないときは ASCII エスケープに落とす。
 - 既定の served name がモデル ID そのものである backend の回帰テストを追加。fingerprint が作れないときは null のまま、health は 200 を返す。
+
+## PR #12 / challenge 再レビュー修正1: 計画の出自フィールドをすべて照合する
+
+- 実行の `experiment_case` は、計画ジョブの全フィールド（`request_id`、`input_version`、`input_sha256`、`rubric_sha256` を含む）と一致しなければならない。結果に実験 `identity` があるときは、比較する実行もその identity を持つ。
+- 不一致は comparable を false にし、得点は使わない。CLI は終了コード 2。出力は 0600、入力の権限は変えない。
