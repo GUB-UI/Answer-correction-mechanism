@@ -61,7 +61,8 @@ def test_exact_grading_configuration_is_stored_and_reused(case):
     # Reload from disk, rather than comparing an in-memory result only.
     saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
     metadata = saved.grading_metadata
-    assert metadata["model_id"] == config.diagnosis.model_name
+    assert metadata["model_id"] == "loaded-weights-A"
+    assert metadata["model_alias"] == config.diagnosis.model_name
     assert metadata["provider"] == "lmstudio"
     assert len(metadata["prompt_version"]) == len(metadata["rubric_identity"]) == 64
     settings = metadata["generation_settings"]["request"]
@@ -123,7 +124,7 @@ def test_grading_configuration_change_requires_regrading(case, monkeypatch, chan
 
 @pytest.mark.parametrize("missing", [
     "all", "null", "empty", "provider", "model_id", "prompt_version", "rubric_identity",
-    "generation_settings", "request_settings", "backend",
+    "generation_settings", "request_settings", "backend", "model_alias",
 ])
 def test_legacy_or_incomplete_metadata_is_never_reused(case, missing):
     storage, config, options, client, run = case
@@ -487,3 +488,25 @@ def test_changed_fingerprint_reason_is_persisted(case):
     saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
     assert saved.grading_metadata is None
     assert saved.reuse_unavailable_reason == "grading_configuration_changed_during_generation"
+
+
+def test_metadata_records_loaded_model_and_keeps_request_alias(case):
+    storage, config, options, client, run = case
+    first = run()
+    saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
+    assert saved.grading_metadata["model_id"] == "loaded-weights-A"
+    assert saved.grading_metadata["model_alias"] == config.diagnosis.model_name
+    assert saved.model_name == config.diagnosis.model_name
+
+
+def test_model_identity_mismatch_never_reuses_even_if_metadata_equal(case, monkeypatch):
+    storage, config, options, client, run = case
+    first = run()
+    saved = storage.get_diagnosis_result(first.diagnosis_id)
+    saved.grading_metadata["model_id"] = "different-loaded-model"
+    monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [saved])
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata",
+                        lambda self, context, **kwargs: saved.grading_metadata)
+    again = run()
+    assert again.diagnosis_id != first.diagnosis_id
+    assert storage.get_diagnosis_result(again.diagnosis_id).grading_metadata is None
