@@ -445,3 +445,34 @@ def test_invalid_request_id_cli_exits_2_without_changing_inputs(tmp_path, monkey
     assert (out.stat().st_mode & 0o777) == 0o600
     assert (results_path.stat().st_mode & 0o777) == 0o644
     assert (tmp_path.stat().st_mode & 0o777) == 0o755
+
+
+@pytest.mark.parametrize("missing", ["O", "F"])
+def test_planned_slot_without_original_or_variant_is_not_comparable(missing):
+    variant = "F" if missing == "O" else "O"
+    jobs = _jobs(variants=(variant,), reps=(1,))
+    runs = _bind(jobs, [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs])
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    reason = "missing planned original: P:manual:1" if missing == "O" else "missing planned variant: P:manual:1"
+    assert reason in report["reasons"]
+    assert report["variants"][variant]["pairs"] == 0
+    assert report["variants"][variant]["item_agreement"] is None
+
+
+def test_missing_original_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch):
+    jobs = _jobs(variants=("F",), reps=(1,))
+    runs = _bind(jobs, [_run(jobs[0]["request_id"], "validated", [("R1", 1)])])
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "out" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert "missing planned original: P:manual:1" in report["reasons"]
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755

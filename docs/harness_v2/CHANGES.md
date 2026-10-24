@@ -715,3 +715,7 @@ Each run's `outputs.experiment_case` must match the planned case ID, repetition,
 ## PR #12 / Challenge fix 3: Reject empty and None request IDs
 
 Only non-empty strings are request IDs. None, blank strings, and other hashable non-strings do not match each other and make the report non-comparable with `invalid request_id`. The CLI exits 2. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge fix 4: A slot without its original or variant is not comparable
+
+A planned source and repetition that has no original (O) job, or no variant job, is non-comparable. The reason is `missing planned original` or `missing planned variant`, not only an unpaired counter. The CLI exits 2. Scores are not filled in. Output stays 0600 and input permissions are unchanged.

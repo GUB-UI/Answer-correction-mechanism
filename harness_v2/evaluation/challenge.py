@@ -8,7 +8,8 @@ unexpected or non-finite item scores). Only ``ok`` pairs are compared;
 nothing is filled in. Missing/empty plans, duplicate planned IDs, duplicate
 planned slots, duplicate, missing or unexpected run IDs, and run provenance
 that is missing, mismatched, or from more than one experiment, and request
-IDs that are not non-empty strings, make the report non-comparable;
+IDs that are not non-empty strings, and a planned repetition that lacks its
+original or a variant, make the report non-comparable;
 any remaining metrics are diagnostic only.
 """
 
@@ -166,6 +167,15 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
         for slot, cell in list(cells.items()):
             if cell["outcome"] == "ok":
                 cells[slot] = {"outcome": "incomplete", "status": None, "scores": None}
+    planned_groups = defaultdict(set)
+    for source, variant, rep in cells:
+        planned_groups[(source, rep)].add(variant)
+    for source, rep in sorted(planned_groups, key=lambda item: (str(item[0]), str(item[1]))):
+        variants = planned_groups[(source, rep)]
+        if "O" not in variants:
+            reasons.append(f"missing planned original: {source}:{rep}")
+        if all(variant == "O" for variant in variants):
+            reasons.append(f"missing planned variant: {source}:{rep}")
     totals = defaultdict(_empty)
     by_source = defaultdict(lambda: defaultdict(_empty))
     for (source, variant, rep), cell in sorted(cells.items()):
