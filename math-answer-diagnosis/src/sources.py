@@ -16,11 +16,29 @@ SOURCE_KIND_LABELS = {
 }
 
 
-def resolve_stored_path(project_root: Path, image_path: str) -> Path:
+def resolve_stored_path(
+    project_root: Path,
+    image_path: str,
+    data_dir: Path | None = None,
+) -> Path:
+    """保存済みパスを実ファイルへ解決する。
+
+    `data/...` はデータ置き場（Google Drive 等）基準で解決する。
+    他マシンの絶対パス（例: Mac で登録した答案）は、同名ファイルが
+    データ置き場の images/ にあればそちらを使う。
+    """
     path = Path(image_path)
-    if not path.is_absolute():
-        path = project_root / path
-    return path
+    if path.is_absolute():
+        if path.exists() or data_dir is None:
+            return path
+        if "images" in path.parts:
+            candidate = data_dir / "images" / path.name
+            if candidate.exists():
+                return candidate
+        return path
+    if data_dir is not None and path.parts and path.parts[0] == "data":
+        return data_dir.joinpath(*path.parts[1:])
+    return project_root / path
 
 
 def infer_input_kind(text: str | None, image_paths: list[str]) -> str:

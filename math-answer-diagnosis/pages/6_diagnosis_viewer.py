@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src.ui_common import (
+    require_password,
     diagnosis_label,
     get_storage,
     show_answer_image,
@@ -14,6 +15,7 @@ from src.ui_common import (
 )
 
 st.set_page_config(page_title="診断結果確認", layout="wide")
+require_password()
 st.title("診断結果確認")
 
 storage = get_storage()
@@ -48,7 +50,9 @@ with col1:
     st.metric("得点", f"{diagnosis.score} / {diagnosis.max_score}")
     st.metric("信頼度", f"{diagnosis.confidence:.2f}")
 with col2:
-    if diagnosis.possible_ocr_issue:
+    if diagnosis.review_status == "review_required":
+        st.error("要教師確認（review_required）。この得点は確定ではありません。")
+    elif diagnosis.possible_ocr_issue:
         st.error("possible_ocr_issue: **あり** — OCR誤りの可能性を確認してください。")
     else:
         st.success("possible_ocr_issue: なし")
@@ -74,6 +78,9 @@ else:
     st.warning("対応する OCR 結果が見つかりません。")
 
 st.subheader("診断結果")
+if diagnosis.question_scores:
+    st.write("**設問ごとの得点**")
+    st.dataframe(diagnosis.question_scores, use_container_width=True)
 st.write("**誤り分類:**", ", ".join(diagnosis.error_categories) or "なし")
 st.write("**reasoning_summary**")
 st.text(diagnosis.reasoning_summary)

@@ -226,3 +226,65 @@ UNIMERNET_BASE_URL=http://127.0.0.1:8091
 DIAGNOSIS_PROVIDER=omlx
 DIAGNOSIS_MODEL_NAME=Qwen3.8-27B-oQ4e-mtp
 ```
+
+## Google Colab（CUDA）
+
+Mac の oMLX / mlx-vlm はそのまま使えます。Colab では同じアプリが、GPU 上の別サーバーに接続します。モデルは同時に載せず、**Xiaomi-OCR-0（代替は GLM-OCR）→ 診断LLM** の順に1つずつ起動します。UniMERNet は `UNIMERNET_ENABLED=false` が既定です。
+
+起動後の画面は「資料を登録」です。自動タグ付けも診断と同じ OpenAI 互換サーバーを使います。Colab では画像の読み取りが終わってから診断 LLM を起動します。`TAGGING_MODEL_NAME` は空のままにし、載せる重みは `LLM_MODEL_ID` の1つだけにします。教師採点はサイドバーの「教師採点との比較」です。
+
+手順の全体は `notebooks/colab_answer_correction.ipynb` です。変更の一覧は [`docs/CHANGES_COLAB.md`](../docs/CHANGES_COLAB.md) です。
+
+```bash
+cd math-answer-diagnosis
+bash scripts/colab_setup.sh
+export APP_CONFIG_FILE=config.colab.yaml
+export APP_DATA_DIR=/content/drive/MyDrive/answer-correction   # セッションが終わっても残す場所
+export HF_HOME="${APP_DATA_DIR}/hf-cache"                     # 重みの再ダウンロードを避ける
+python3 -m src gpu-profile --write-env .env
+bash scripts/start_streamlit_tunnel.sh                        # 表示された https URL を開く
+```
+
+公開 URL になるので、`.env` に `APP_PASSWORD` を入れてください。
+
+`scripts/colab_setup.sh` と `gpu-profile --write-env` は、Mac 用の `.env` を上書きして `OCR_PROVIDER=xiaomi_ocr`、`OCR_MODEL_NAME=SeerRay-Lab/Xiaomi-OCR-0`、`UNIMERNET_ENABLED=false`、`DIAGNOSIS_PROVIDER=colab_cuda` にします。環境変数は `config.colab.yaml` より優先されるためです。OCR サーバーの待受は 8081 です（Colab の 8080 は別プロセスが使います）。使用中なら次の空きポートにずらします。事前量子化の 27B はチェックポイントの計算 dtype（float16）で読みます。
+
+手書きはページ全体を Xiaomi-OCR-0 に渡します。GLM-OCR に戻すときは `OCR_PROVIDER=glmocr_sdk` と `OCR_MODEL_NAME=zai-org/GLM-OCR` です。`GLMOCR_MIN_EDGE` / `GLMOCR_MAX_EDGE` / `GLMOCR_PROMPT_SUFFIX` は GLM 用で、品質は保証しません。UniMERNet をオンにしたときは `formula_summary` を見てください。`raw_text` と `used_text` は、人手修正前は同じ文字列です。
+
+Colab で使う環境変数:
+
+```env
+APP_CONFIG_FILE=config.colab.yaml
+OCR_PROVIDER=xiaomi_ocr
+OCR_MODEL_NAME=SeerRay-Lab/Xiaomi-OCR-0
+XIAOMI_OCR_MODEL_ID=SeerRay-Lab/Xiaomi-OCR-0
+OCR_API_HOST=127.0.0.1
+OCR_API_PORT=8081
+UNIMERNET_ENABLED=false
+DIAGNOSIS_PROVIDER=colab_cuda
+SERVICE_MODE=managed
+```
+
+GLM-OCR に戻すときだけ `OCR_PROVIDER=glmocr_sdk` と `OCR_MODEL_NAME=zai-org/GLM-OCR` にします。UniMERNet を試すときは `UNIMERNET_ENABLED=true` です。
+
+### 診断モデル（Qwen3.8-27B の 4bit）
+
+呼んでいる「Qwen3.8-27B 4bit」は Hugging Face 上の次のモデルです。`LLM_MODEL_ID` で差し替えできます。
+
+| GPU | 使うモデル | 量子化 |
+| --- | --- | --- |
+| A100 40GB など 40GB 級 | `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`（約 22GB） | 保存時から 4bit |
+| L4 など 24GB 級 | `Qwen/Qwen3.8-27B` | 読み込み時に NF4 |
+| T4 16GB | `Qwen/Qwen3.5-9B`（27B は載らない） | 読み込み時に NF4 |
+
+T4 の結果は 27B の結果と混ぜないでください。`gpu-profile` が `DIAGNOSIS_MODEL_NAME` を分けて書きます。llama.cpp の GGUF を使う場合は `LLM_SERVER_COMMAND` に、その OpenAI 互換サーバーの起動コマンドを書けます。
+
+### 答案の一括処理と教師採点との比較
+
+```bash
+python3 -m src batch --problem-id prob_xxxxxxxx
+python3 -m src import-teacher teacher.csv --apply-allocation
+python3 -m src compare --recheck --out comparison.csv
+```
+
+画面からも同じ操作ができます（「教師採点との比較」）。CSV は1行が生徒×設問で、テンプレートは画面から落とせます。差が満点の 20% 以上（`COMPARE_RATIO_THRESHOLD`）の項目を不一致として記録し、再チェックします。再チェックは新しい診断として保存し、元の採点は残します。既定の `blind` は教師の点数をモデルに見せません。

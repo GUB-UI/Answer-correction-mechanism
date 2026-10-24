@@ -1,0 +1,10 @@
+# Colab の GPU 版 PyTorch はランタイムに入っているので、ここでは入れ直さない。
+# torch が 2.10 未満だと glmocr[selfhosted] が引き上げることがある。
+-r requirements.txt
+# Xiaomi-OCR-0（Qwen3.5-0.8B）は Qwen3_5ForConditionalGeneration が要る。torch は入れ直さない。
+transformers>=5.17.0
+accelerate>=1.0
+bitsandbytes>=0.45
+sentencepiece
+huggingface_hub
+glmocr[selfhosted]

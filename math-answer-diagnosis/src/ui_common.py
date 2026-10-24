@@ -25,6 +25,21 @@ def get_storage() -> Storage:
     return Storage(get_config())
 
 
+def require_password() -> None:
+    """公開トンネル向けの簡易パスワード。APP_PASSWORD が空なら何もしない。"""
+    password = get_config().app_password
+    if not password or st.session_state.get("app_authed"):
+        return
+    st.title("高校数学答案診断")
+    entered = st.text_input("パスワード", type="password")
+    if st.button("入る"):
+        if entered == password:
+            st.session_state["app_authed"] = True
+            st.rerun()
+        st.error("パスワードが違います。")
+    st.stop()
+
+
 def resolve_image_path(image_path: str) -> Path:
     return resolve_stored_path(PROJECT_ROOT, image_path)
 

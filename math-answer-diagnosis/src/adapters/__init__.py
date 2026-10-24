@@ -8,6 +8,7 @@ from src.adapters.mock_adapters import MockDiagnosisAdapter, MockOCRAdapter
 from src.adapters.ocr_adapter import (
     GLMOCRSdkAdapter,
     ManualCorrectionOCRAdapter,
+    XiaomiOCRAdapter,
     create_ocr_adapter,
 )
 
@@ -20,6 +21,7 @@ __all__ = [
     "MockDiagnosisAdapter",
     "MockOCRAdapter",
     "OCRAdapter",
+    "XiaomiOCRAdapter",
     "create_diagnosis_adapter",
     "create_ocr_adapter",
 ]

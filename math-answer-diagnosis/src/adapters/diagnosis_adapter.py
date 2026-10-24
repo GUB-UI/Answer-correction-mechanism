@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 from src.adapters.base import DiagnosisAdapter, DiagnosisRunContext
-from src.adapters.diagnosis_helpers import build_diagnosis_result, parse_diagnosis_json
+from src.adapters.diagnosis_helpers import (
+    build_diagnosis_result,
+    build_grading_metadata,
+    format_score_allocation,
+    parse_diagnosis_json,
+    valid_backend_fingerprint,
+)
 from src.adapters.lmstudio_client import LMStudioClient
 from src.adapters.mock_adapters import MockDiagnosisAdapter
 from src.config import AppConfig, load_config
@@ -9,37 +15,94 @@ from src.models import DiagnosisResult
 from src.prompts import DEFAULT_DIAGNOSIS_PROMPT_TYPE, DIAGNOSIS_PROMPTS
 
 
+# いずれも OpenAI 互換 API を叩く。colab_cuda は scripts/llm_server.py（Colab の GPU）。
+_UNSET = object()
+
+DIAGNOSIS_SERVER_PROVIDERS = {"omlx", "lmstudio", "lm_studio", "openai", "colab_cuda"}
+
+
 class LMStudioDiagnosisAdapter(DiagnosisAdapter):
+    generation_settings = {
+        "response_format_json": False,
+        "temperature": 0.0,
+        "max_tokens": 1536,
+        "disable_thinking": True,
+    }
+
     def __init__(
         self,
         config: AppConfig | None = None,
         lmstudio_client: LMStudioClient | None = None,
+        transport: str = "omlx",
     ) -> None:
         self.config = config or load_config()
         self.lmstudio_client = lmstudio_client or LMStudioClient(self.config)
+        self.transport = transport
+        self.reuse_unavailable_reason: str | None = None
 
-    def run(self, context: DiagnosisRunContext) -> dict:
+    def _messages(self, context: DiagnosisRunContext) -> list[dict]:
         prompt_type = context.prompt_type or DEFAULT_DIAGNOSIS_PROMPT_TYPE
         system_prompt = DIAGNOSIS_PROMPTS.get(
             prompt_type,
             DIAGNOSIS_PROMPTS[DEFAULT_DIAGNOSIS_PROMPT_TYPE],
         )
         user_prompt = self._build_user_prompt(context)
-        messages = [
+        return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        raw_text = self.lmstudio_client.chat_completion(
-            messages=messages,
+
+    def backend_fingerprint(self) -> dict | None:
+        fingerprint_builder = getattr(self.lmstudio_client, "backend_fingerprint", None)
+        backend = fingerprint_builder() if fingerprint_builder else None
+        if not valid_backend_fingerprint(backend):
+            reason = getattr(self.lmstudio_client, "fingerprint_unavailable_reason", None)
+            self.reuse_unavailable_reason = reason if isinstance(reason, str) and reason else "backend_fingerprint_unavailable"
+            return None
+        self.reuse_unavailable_reason = None
+        return backend
+
+    def grading_metadata(self, context: DiagnosisRunContext, *, backend=_UNSET) -> dict | None:
+        if backend is _UNSET:
+            backend = self.backend_fingerprint()
+        if not valid_backend_fingerprint(backend):
+            self.reuse_unavailable_reason = self.reuse_unavailable_reason or "backend_fingerprint_unavailable"
+            return None
+        self.reuse_unavailable_reason = None
+        request_builder = getattr(self.lmstudio_client, "prepare_chat_request", None)
+        if not callable(request_builder):
+            self.reuse_unavailable_reason = "final_request_unavailable"
+            return None
+        request = request_builder(
+            messages=self._messages(context),
             model=context.model_name or self.config.diagnosis.model_name,
-            response_format_json=False,
-            temperature=0.0,
-            max_tokens=1024,
-            disable_thinking=True,
+            **self.generation_settings,
+        )
+        if not isinstance(request, dict) or not isinstance(request.get("messages"), list):
+            self.reuse_unavailable_reason = "final_request_unavailable"
+            return None
+        settings = {"request": self.generation_settings, "backend": backend}
+        return build_grading_metadata(
+            context, provider=self.transport, messages=request["messages"],
+            generation_settings=settings,
+        )
+
+    def run(self, context: DiagnosisRunContext) -> dict:
+        from src.runtime.services import LLM, get_service_manager
+
+        get_service_manager(self.config).ensure(LLM)
+        return self.run_prepared(context)
+
+    def run_prepared(self, context: DiagnosisRunContext) -> dict:
+        """Run after the batch has ensured the service once."""
+        raw_text = self.lmstudio_client.chat_completion(
+            messages=self._messages(context),
+            model=context.model_name or self.config.diagnosis.model_name,
+            **self.generation_settings,
         )
         parsed = parse_diagnosis_json(raw_text)
-        parsed["_transport"] = "omlx"
-        parsed["_prompt_type"] = prompt_type
+        parsed["_transport"] = self.transport
+        parsed["_prompt_type"] = context.prompt_type or DEFAULT_DIAGNOSIS_PROMPT_TYPE
         return parsed
 
     def to_diagnosis_result(
@@ -59,13 +122,19 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
     @staticmethod
     def _build_user_prompt(context: DiagnosisRunContext) -> str:
         problem = context.problem
-        return (
+        prompt = (
             "以下の情報をもとに診断してください。\n\n"
             f"【問題文】\n{problem.problem_text}\n\n"
             f"【模範解答】\n{problem.correct_answer}\n\n"
             f"【採点基準】\n{problem.rubric}\n\n"
-            f"【OCR結果 used_text】\n{context.used_text}\n"
         )
+        allocation = format_score_allocation(problem.score_allocation)
+        if allocation:
+            prompt += f"【配点】\n{allocation}\n\n"
+        prompt += f"【OCR結果 used_text】\n{context.used_text}\n"
+        if context.extra_instructions:
+            prompt += f"\n{context.extra_instructions.strip()}\n"
+        return prompt
 
 
 def create_diagnosis_adapter(
@@ -76,6 +145,6 @@ def create_diagnosis_adapter(
     selected = (provider or cfg.diagnosis.provider).lower()
     if selected == "mock":
         return MockDiagnosisAdapter()
-    if selected in {"omlx", "lmstudio", "lm_studio", "openai"}:
-        return LMStudioDiagnosisAdapter(config=cfg)
+    if selected in DIAGNOSIS_SERVER_PROVIDERS:
+        return LMStudioDiagnosisAdapter(config=cfg, transport=selected)
     raise ValueError(f"Unsupported diagnosis provider: {selected}")

@@ -12,7 +12,7 @@ from src.intake import IntakeDocument, analyze_intake, assign_problem_tags, save
 from src.models import DEFAULT_RUBRIC
 from src.ocr_runner import run_ocr_for_images
 from src.sources import IMAGE_UPLOAD_TYPES
-from src.ui_common import get_config, get_storage, provider_index, problem_label, show_images
+from src.ui_common import get_config, get_storage, problem_label, provider_index, require_password, show_images
 from src.ui_theme import apply_theme, intake_hero, intake_steps
 
 
@@ -41,6 +41,7 @@ def _clear_intake():
 
 st.set_page_config(page_title="資料登録・自動タグ付け", layout="wide")
 apply_theme()
+require_password()
 intake_hero()
 progress_slot = st.empty()
 

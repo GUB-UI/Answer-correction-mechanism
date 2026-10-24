@@ -302,3 +302,42 @@ def test_correcting_initially_identical_groups_can_split_them_into_distinct_prob
     api.save_intake_batch(storage, batch, student_id="s1", reviewed=True)
     assert len(storage.list_problems()) == 2
     assert len({answer.problem_id for answer in storage.list_answers()}) == 2
+
+
+def test_analyze_intake_loads_managed_llm_before_chat(tmp_path, monkeypatch):
+    """Colab keeps one GPU model. Tagging must start the LLM after OCR has run."""
+    api = intake_module()
+    config = replace(load_config(tmp_path).services, mode="managed")
+    config = replace(load_config(tmp_path), services=config)
+    calls = []
+
+    class Manager:
+        def ensure(self, name):
+            calls.append(name)
+
+    class Client:
+        def chat_completion(self, **kwargs):
+            assert calls == ["llm"]
+            return response()
+
+    monkeypatch.setattr("src.runtime.services.get_service_manager", lambda _config: Manager())
+    monkeypatch.setattr(api, "LMStudioClient", lambda _config: Client())
+    batch = api.analyze_intake(config, documents(), [])
+    assert batch.groups and calls == ["llm"]
+
+
+def test_injected_tagging_client_does_not_start_a_server(tmp_path, monkeypatch):
+    api = intake_module()
+    config = load_config(tmp_path)
+
+    def fail_manager(_config):
+        raise AssertionError("an injected client must not start services")
+
+    monkeypatch.setattr("src.runtime.services.get_service_manager", fail_manager)
+
+    class Client:
+        def chat_completion(self, **kwargs):
+            return response()
+
+    batch = api.analyze_intake(config, documents(), [], client=Client())
+    assert batch.groups

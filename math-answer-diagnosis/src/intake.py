@@ -175,7 +175,13 @@ def analyze_intake(
     if len(payload) > 60000:
         raise ValueError("資料と既存問題が多すぎます。入力を分けるか、既存問題の検索範囲を絞ってください。")
     model_name = config.tagging_model_name or config.diagnosis.model_name
-    raw = (client or LMStudioClient(config)).chat_completion(
+    if client is None:
+        # Colab の managed では OCR を卸してから診断LLMを載せる。Mac の external では何もしない。
+        from src.runtime.services import LLM, get_service_manager
+
+        get_service_manager(config).ensure(LLM)
+        client = LMStudioClient(config)
+    raw = client.chat_completion(
         messages=[{"role": "system", "content": TAGGING_PROMPT},
                   {"role": "user", "content": payload}],
         model=model_name, response_format_json=True, temperature=0.0,

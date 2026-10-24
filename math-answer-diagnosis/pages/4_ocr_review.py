@@ -5,6 +5,7 @@ import streamlit as st
 from src.adapters import ManualCorrectionOCRAdapter
 from src.sources import SOURCE_KIND_LABELS
 from src.ui_common import (
+    require_password,
     get_storage,
     ocr_label,
     show_answer_image,
@@ -13,6 +14,7 @@ from src.ui_common import (
 )
 
 st.set_page_config(page_title="OCR確認・修正", layout="wide")
+require_password()
 st.title("OCR確認・修正")
 st.caption(
     "診断結果が不自然な場合に、OCRの責任範囲を確認するためのページです。"
@@ -96,7 +98,7 @@ if submitted:
             ocr_suspect=ocr_suspect,
             correction_note=correction_note.strip() or None,
         )
-        st.success("OCR結果を更新しました。")
+        st.success("手動転記を別の入力として保存しました。")
         st.write(f"**human_corrected:** {updated.human_corrected}")
         st.write(f"**ocr_suspect:** {updated.ocr_suspect}")
         if updated.correction_note:

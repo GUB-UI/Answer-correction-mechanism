@@ -19,3 +19,4 @@ data/models/
 .DS_Store
 .streamlit/*
 !.streamlit/config.toml
+.run/

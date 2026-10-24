@@ -3,13 +3,21 @@ from __future__ import annotations
 from typing import Any
 
 from src.adapters.base import OCRAdapter, OCRRunContext
-from src.models import OCRResult, utc_now_iso
-from src.sources import resolve_stored_path
+from src.models import OCRProvenance, OCRResult, utc_now_iso
+from src.ocr_provenance import image_hashes, ocr_provenance
 from src.storage import Storage
 
 GLMOCR_SDK_ERROR_MESSAGE = """GLM-OCR SDKの実行に失敗しました。
-mlx-vlm サーバー（既定: http://localhost:8080）が起動していることと、
-公式SDKのインストールを確認してください。"""
+OCRサーバー（既定: http://127.0.0.1:8080。Mac は mlx-vlm、Colab は scripts/glmocr_server.py）が
+起動していることと、公式SDKのインストールを確認してください。
+Colab（SERVICE_MODE=managed）ではサーバーは自動起動されます。ログは .run/ 以下を確認してください。"""
+
+
+class _AutomaticProvenance:
+    """Distinguish omitted provenance from explicitly unverifiable identity."""
+
+
+_AUTOMATIC_PROVENANCE = _AutomaticProvenance()
 
 
 def run_ocr_for_images(
@@ -20,17 +28,29 @@ def run_ocr_for_images(
     source_id: str,
     image_paths: list[str],
     engine: str,
+    provenance: OCRProvenance | None | _AutomaticProvenance = _AUTOMATIC_PROVENANCE,
 ) -> OCRResult:
     if not image_paths:
         raise ValueError("OCRする画像がありません。")
 
+    if isinstance(provenance, _AutomaticProvenance):
+        provider = {
+            "MockOCRAdapter": "mock",
+            "GLMOCRSdkAdapter": "glmocr_sdk",
+            "XiaomiOCRAdapter": "xiaomi_ocr",
+        }.get(type(adapter).__name__, storage.config.ocr.provider)
+        provenance = ocr_provenance(
+            storage.config, image_paths, provider=provider, adapter=adapter,
+            apply_formula=bool(getattr(adapter, "apply_formula", False)),
+        )
     page_texts: list[str] = []
     page_raw: list[dict[str, Any]] = []
     engine_names: list[str] = []
+    suspect_reasons: list[str] = []
     answer_id = source_id if source_kind == "student_answer" else ""
 
     for index, rel in enumerate(image_paths, start=1):
-        image_path = resolve_stored_path(storage.config.project_root, rel)
+        image_path = storage.config.resolve_path(rel)
         if not image_path.is_file():
             raise FileNotFoundError(f"画像が見つかりません: {image_path}")
         part = adapter.run(
@@ -47,22 +67,40 @@ def run_ocr_for_images(
         page_texts.append(label)
         page_raw.append(part.raw_output)
         engine_names.append(part.ocr_engine)
+        if part.ocr_suspect:
+            suspect_reasons.extend(part.raw_output.get("ocr_suspect_reasons") or ["ocr_suspect"])
 
     combined = "\n\n".join(page_texts).strip()
+    # Confirm the loaded backend did not change while processing the pages.
+    if provenance is not None:
+        if (
+            storage.config.services.mode in {"external", "managed"}
+            and provenance.engine in {"glmocr_sdk", "xiaomi_ocr"}
+        ):
+            current = ocr_provenance(
+                storage.config, image_paths, provider=provenance.engine, adapter=adapter,
+                apply_formula=bool(provenance.settings.get("formula_enabled")),
+            )
+            if current != provenance:
+                provenance = None
+        elif image_hashes(storage.config, image_paths) != provenance.image_sha256:
+            provenance = None
     result = OCRResult(
+        provenance=provenance,
         ocr_id=storage.generate_id("ocr"),
         answer_id=answer_id,
         ocr_engine="+".join(dict.fromkeys(engine_names)) or engine,
         raw_text=combined,
         used_text=combined,
         uncertain_parts=[],
-        ocr_suspect=False,
+        ocr_suspect=bool(suspect_reasons),
         human_corrected=False,
         correction_note=None,
         raw_output={
             "source_kind": source_kind,
             "source_id": source_id,
             "pages": page_raw,
+            "ocr_suspect_reasons": suspect_reasons,
         },
         created_at=utc_now_iso(),
         source_kind=source_kind,

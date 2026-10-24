@@ -7,6 +7,7 @@ from src.ocr_runner import typed_text_as_ocr
 from src.sources import IMAGE_UPLOAD_TYPES, answer_image_paths, infer_input_kind
 from src.storage import validate_anonymized_id
 from src.ui_common import (
+    require_password,
     answer_label,
     get_storage,
     problem_label,
@@ -14,6 +15,7 @@ from src.ui_common import (
 )
 
 st.set_page_config(page_title="答案登録", layout="wide")
+require_password()
 st.title("答案登録")
 st.caption("答案は画像（複数枚）、テキスト、またはその両方で登録できます。")
 

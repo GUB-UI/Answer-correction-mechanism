@@ -1,0 +1,58 @@
+# Google Colab（CUDA）向け。Mac の config.yaml は変更しない。
+# ノートブックは APP_CONFIG_FILE=config.colab.yaml を設定してこれを読む。
+# GPU ごとのモデル差（A100 / L4 / T4）は `python -m src gpu-profile --write-env .env`
+# が .env に書き、ここより優先される。
+runtime:
+  device: colab_gpu
+  use_omlx: true
+
+ocr:
+  # 手書きの主 OCR。GLM-OCR に戻すときは provider を glmocr_sdk、model を zai-org/GLM-OCR にする。
+  provider: xiaomi_ocr
+  model_name: SeerRay-Lab/Xiaomi-OCR-0
+  api:
+    host: 127.0.0.1
+    # Colab VM の 8080 は node が使用中。空いていなければ起動時に次のポートへずらす。
+    port: 8081
+    layout_device: cuda
+    # GLM-OCR に戻したときの実験用。Xiaomi の拡大は XIAOMI_OCR_MIN_EDGE（既定オフ）。
+    min_edge: 0
+    max_edge: 0
+    prompt_suffix: ""
+  formula:
+    # A100 の掃引では複数行を UniMERNet に渡すと本文が壊れた。既定はオフ。
+    enabled: false
+    model_name: wanderkid/unimernet_small
+    base_url: http://127.0.0.1:8091
+
+omlx:
+  base_url: http://127.0.0.1:8000/v1
+  api_key: local
+
+models:
+  diagnosis:
+    provider: colab_cuda
+    model_name: Qwen3.8-27B-bnb4
+
+services:
+  mode: managed
+  exclusive_gpu: true
+  startup_timeout_sec: 1800
+  glm_ocr:
+    model_id: zai-org/GLM-OCR
+  xiaomi_ocr:
+    model_id: SeerRay-Lab/Xiaomi-OCR-0
+  llm:
+    port: 8000
+    model_id: unsloth/Qwen3.8-27B-unsloth-bnb-4bit
+    quantization: bnb4
+    max_new_tokens: 2048
+
+comparison:
+  ratio_threshold: 0.2
+  abs_threshold:
+  recheck_mode: blind
+
+safety:
+  require_anonymization: true
+  store_raw_images_locally: true

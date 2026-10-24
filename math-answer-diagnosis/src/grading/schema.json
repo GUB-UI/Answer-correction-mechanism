@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gub-ui.local/grading-output.schema.json",
+  "title": "Rubric grading output",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["rubric_scores", "score", "max_score"],
+  "properties": {
+    "question_id": {"type": "string"},
+    "score": {"type": "number"},
+    "max_score": {"type": "number"},
+    "needs_review": {"type": "boolean"},
+    "grading_uncertain": {"type": "boolean"},
+    "ocr_uncertain": {"type": "boolean"},
+    "review_reason": {"type": "string"},
+    "overall_reason": {"type": "string"},
+    "rubric_scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["item_id", "score", "max_score", "reason", "evidence"],
+        "properties": {
+          "item_id": {"type": "string"},
+          "score": {"type": "number"},
+          "max_score": {"type": "number"},
+          "reason": {"type": "string"},
+          "evidence": {"type": "string"}
+        }
+      }
+    }
+  }
+}

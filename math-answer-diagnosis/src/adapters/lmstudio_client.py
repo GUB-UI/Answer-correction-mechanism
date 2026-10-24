@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
 from typing import Any
 
 from openai import OpenAI
 
+from src.adapters.diagnosis_helpers import valid_backend_fingerprint
 from src.config import AppConfig
 
 # Qwen 3.5/3.8 の思考モードを REST API から確実に切るためのプレフィル。
@@ -16,14 +19,46 @@ class LMStudioClient:
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self.fingerprint_unavailable_reason: str | None = None
         self._client = OpenAI(
             base_url=config.lmstudio.base_url,
             api_key=config.lmstudio.api_key,
-            timeout=180.0,
+            # Colab の 27B 4bit は1件数分かかることがあるため既定を長めにする。
+            timeout=float(os.environ.get("LLM_REQUEST_TIMEOUT_SEC", "600")),
         )
 
-    def chat_completion(
-        self,
+    def backend_fingerprint(self) -> dict[str, Any] | None:
+        """Require loaded identity and effective settings from the actual endpoint.
+
+        An OpenAI model listing or response model alias cannot verify the weights
+        or server-side generation overrides. Unsupported servers disable reuse.
+        """
+        from http.client import HTTPException
+        from urllib.request import Request, urlopen
+
+        self.fingerprint_unavailable_reason = None
+        url = str(self._client.base_url).rstrip("/") + "/health"
+        request = Request(url, headers={"Authorization": f"Bearer {self.config.lmstudio.api_key}"})
+        try:
+            with urlopen(request, timeout=2) as response:
+                payload = json.load(response)
+        except TimeoutError:
+            self.fingerprint_unavailable_reason = "backend_health_timeout"
+            return None
+        except (OSError, ValueError, HTTPException) as exc:
+            self.fingerprint_unavailable_reason = f"backend_health_unavailable:{type(exc).__name__}"
+            return None
+        if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("error"):
+            self.fingerprint_unavailable_reason = "backend_health_invalid_response"
+            return None
+        fingerprint = payload.get("backend_fingerprint")
+        if not valid_backend_fingerprint(fingerprint):
+            self.fingerprint_unavailable_reason = "backend_fingerprint_unavailable"
+            return None
+        return fingerprint
+
+    @staticmethod
+    def prepare_chat_request(
         *,
         messages: list[dict[str, Any]],
         model: str | None = None,
@@ -31,8 +66,9 @@ class LMStudioClient:
         temperature: float = 0.2,
         max_tokens: int = 1024,
         disable_thinking: bool = True,
-    ) -> str:
-        payload_messages = list(messages)
+    ) -> dict[str, Any]:
+        """Build the final JSON messages once for both hashing and transmission."""
+        payload_messages = json.loads(json.dumps(messages, ensure_ascii=False))
         if disable_thinking:
             last = payload_messages[-1] if payload_messages else None
             if last is None or last.get("role") != "assistant":
@@ -52,6 +88,22 @@ class LMStudioClient:
             kwargs["model"] = model
         if response_format_json:
             kwargs["response_format"] = {"type": "json_object"}
+        return kwargs
+
+    def chat_completion(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        response_format_json: bool = False,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+        disable_thinking: bool = True,
+    ) -> str:
+        kwargs = self.prepare_chat_request(
+            messages=messages, model=model, response_format_json=response_format_json,
+            temperature=temperature, max_tokens=max_tokens, disable_thinking=disable_thinking,
+        )
 
         try:
             response = self._client.chat.completions.create(**kwargs)
