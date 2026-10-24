@@ -58,3 +58,10 @@ def test_fix_03_factorial_and_inequality(forms, different):
 ])
 def test_fix_04_bracket_kinds_and_separators(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('command', [r'\sin', r'\log', r'\cos', r'\unknown'])
+def test_fix_05_synthetic_boundaries_are_not_parentheses(command):
+    check_forms([command + ' x^2', command + '  x^{2}'],
+                [command + '(x)^2', command + 'x^2'])
+    check_forms([command + ' x', '(' + command + ') x'], [command + 'x'])

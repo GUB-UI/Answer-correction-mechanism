@@ -641,3 +641,8 @@ Give postfix `!` highest precedence and tokenize `!=`, `<=`, `>=` atomically. Gr
 ## PR #12 / Fix 4: Preserve bracket kinds and comma scope
 
 Retain square/literal curly brackets and half-open intervals. Commas are separators that retain their enclosing parentheses; nested coordinates remain distinct from bare lists. Collision, equivalence and idempotence regressions: 389 related tests passed.
+
+
+## PR #12 / Fix 5: Separate lexical boundaries from parentheses
+
+Use U+2063 for command/whitespace token boundaries instead of synthetic parentheses. Retain real parentheses after commands so function argument and power scope remain distinct. Collision, equivalence and idempotence regressions: 393 related tests passed.

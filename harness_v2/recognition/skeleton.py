@@ -53,6 +53,7 @@ _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
 # Token boundaries must survive removing groups: numbers, commands, and roots
 # cannot be manufactured by concatenating formerly separate operands.
 _TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
+_BOUNDARY = "\u2063"  # Canonical token boundary, never a mathematical parenthesis.
 _DROP = { "\u0304", "\u0305"}
 _PRECEDENCE = {",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4, "_": 4}
@@ -153,9 +154,10 @@ def _content(text: str) -> str:
         else:
             command = _COMMAND_WORD.match(text, pos)
             if command:
-                # Group unknown commands so adjacent letters cannot extend the
-                # command name when whitespace/formatting is removed.
-                out.append(f"({command.group()})")
+                # A dedicated boundary keeps command names separate from operands.
+                out.append(command.group())
+                if text[command.end():command.end() + 1] != _BOUNDARY:
+                    out.append(_BOUNDARY)
                 pos = command.end()
                 continue
             ch = text[pos]
@@ -167,11 +169,13 @@ def _content(text: str) -> str:
                 continue
             if not ch.isspace() and ch not in _DROP:
                 if pos and text[pos - 1].isspace() and (ch.isalnum() or ch == "."):
-                    # A removed layout/whitespace boundary must not join numbers
-                    # or manufacture a function name. Redundant groups are then
-                    # removed by the same token-aware grouping pass as usual.
+                    # Preserve lexical boundaries without inventing mathematical groups.
                     token = _TOKEN.match(text, pos)
-                    out.append(f"({token.group()})")
+                    prefix = "".join(out)
+                    if (_TOKEN.findall(prefix + text[pos:])
+                            != _TOKEN.findall(prefix) + _TOKEN.findall(text[pos:])):
+                        out.append(_BOUNDARY)
+                    out.append(token.group())
                     pos = token.end()
                     continue
                 out.append({"{": "(", "}": ")"}.get(ch, ch))
@@ -183,6 +187,9 @@ def _precedence(text: str) -> int:
     """Weakest top-level operation; adjacency is implicit multiplication."""
     weakest, operand, pos = 6, False, 0
     while pos < len(text):
+        if text[pos] == _BOUNDARY:
+            pos += 1
+            continue
         ch = text[pos:pos + 2] if text[pos:pos + 2] in _PRECEDENCE else text[pos]
         if ch in _PRECEDENCE:
             unary = ch in "+-±" and not operand
@@ -238,7 +245,9 @@ def _grouping(text: str) -> str:
             tail = text[end:]
             joins_tokens = (_TOKEN.findall(out + inner + tail)
                             != _TOKEN.findall(out) + _TOKEN.findall(inner) + _TOKEN.findall(tail))
+            command_argument = re.search(r"\\[A-Za-z]+" + _BOUNDARY + r"$", out)
             out += (inner if inner and left_ok and right_ok and not signed_factor and not joins_tokens
+                    and not command_argument
                     else f"({inner})")
         pos = end
     return out

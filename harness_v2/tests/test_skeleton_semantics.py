@@ -334,8 +334,8 @@ def test_math_mode_delimiters_preserve_token_boundaries(opening, closing, left, 
 
 @pytest.mark.parametrize("text,expected", [
     (r"\{x\}", r"\{x\}"),
-    (r"\lbrack x\rbrack", r"\lbrack(x)\rbrack"),
-    (r"\langle x\rangle", r"\langle(x)\rangle"),
+    (r"\lbrack x\rbrack", "\\lbrack\u2063x\\rbrack\u2063"),
+    (r"\langle x\rangle", "\\langle\u2063x\\rangle\u2063"),
 ])
 def test_escaped_content_brackets_survive_math_mode_removal(text, expected):
     for wrapped in (text, r"\(" + text + r"\)", r"\[" + text + r"\]", "$" + text + "$"):
