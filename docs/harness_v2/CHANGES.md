@@ -631,3 +631,8 @@ Parse optional root indices separately; Unicode cube/fourth roots share `root(in
 ## PR #12 / Fix 2: Retain subscript operators
 
 Keep `_` with the same grouping rules as `^`; distinguish subscripts from baseline characters and factors. Correct the old fraction expectation. Collision, equivalence and idempotence regressions included; 379 related tests passed.
+
+
+## PR #12 / Fix 3: Separate postfix factorial from relations
+
+Give postfix `!` highest precedence and tokenize `!=`, `<=`, `>=` atomically. Group removal cannot manufacture inequality from factorial followed by equality. Collision, equivalence and idempotence regressions: 383 related tests passed.

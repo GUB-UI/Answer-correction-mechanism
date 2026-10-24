@@ -36,3 +36,13 @@ def test_fix_01_indexed_roots(forms, different):
 ])
 def test_fix_02_subscripts(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('forms,different', [
+    (['(n+1)!', '{n+1}!'], ['n+1!']),
+    (['(2n)!', '{2n}!'], ['2n!']),
+    (['x!=y', 'x≠y', r'x\neq y'], ['x!y', '(x!)=y']),
+    (['(x^2)!', '{x^2}!'], ['x^2!']),
+])
+def test_fix_03_factorial_and_inequality(forms, different):
+    check_forms(forms, different)

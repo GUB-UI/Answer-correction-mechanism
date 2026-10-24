@@ -52,9 +52,9 @@ _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
                "text", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
 # cannot be manufactured by concatenating formerly separate operands.
-_TOKEN = re.compile(r"\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
+_TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _DROP = { "\u0304", "\u0305"}
-_PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1, "±": 1,
+_PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4, "_": 4}
 
 
@@ -167,14 +167,14 @@ def _content(text: str) -> str:
 
 def _precedence(text: str) -> int:
     """Weakest top-level operation; adjacency is implicit multiplication."""
-    weakest, operand, pos = 5, False, 0
+    weakest, operand, pos = 6, False, 0
     while pos < len(text):
-        ch = text[pos]
+        ch = text[pos:pos + 2] if text[pos:pos + 2] in _PRECEDENCE else text[pos]
         if ch in _PRECEDENCE:
             unary = ch in "+-±" and not operand
             weakest = min(weakest, 3 if unary else _PRECEDENCE[ch])
-            operand = False
-            pos += 1
+            operand = operand if ch == "!" else False
+            pos += len(ch)
             continue
         if operand:
             weakest = min(weakest, 2)
@@ -210,7 +210,8 @@ def _grouping(text: str) -> str:
             out += f"{root.group()}({inner})"
         else:
             strength = _precedence(inner)
-            left, right = out[-1:], text[end:end + 1]
+            left = out[-2:] if out[-2:] in _PRECEDENCE else out[-1:]
+            right = text[end:end + 2] if text[end:end + 2] in _PRECEDENCE else text[end:end + 1]
             lp = _PRECEDENCE.get(left, 2) if left else -1
             if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/^_"):
                 lp = 3  # unary sign
