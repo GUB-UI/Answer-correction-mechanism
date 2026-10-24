@@ -651,3 +651,8 @@ Use U+2063 for command/whitespace token boundaries instead of synthetic parenthe
 ## PR #12 / Fix 6: Preserve rows, columns, spans and matrix identity
 
 Canonicalize top-level newlines, LaTeX row breaks and math-span boundaries to `;`, columns to `¦`. Retain pmatrix/bmatrix/vmatrix/Vmatrix/matrix/array/cases names and dimensions. Correct old tests that expected merged expressions. Collision, equivalence and idempotence regressions: 398 related tests passed.
+
+
+## PR #12 / Fix 7: Protect Unicode scripts and enclosed numbers
+
+Map complete Unicode `<super>`/`<sub>` runs to `^`/`_` before NFKC, including letters, Greek characters and operators. Preserve enclosed numerals as distinct characters rather than folding them into baseline digits. Collision, equivalence and idempotence regressions: 414 related tests passed.

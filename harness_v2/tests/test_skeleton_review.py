@@ -83,3 +83,24 @@ def test_fix_06_environment_identity(environment):
     check_forms([rf'\begin{{{environment}}}a&b\\c&d\end{{{environment}}}',
                  environment + '(a¦b;c¦d)'],
                 ['a¦b;c¦d', environment + '(a¦b¦c¦d)'])
+
+
+@pytest.mark.parametrize('forms,different', [
+    (['2ⁿ', '2^n'], ['2n', '2_n']),
+    (['xⁿ', 'x^{n}'], ['x_n', 'xn']),
+    (['xₙ₊₁', 'x_{n+1}'], ['x^(n+1)', 'xn+1']),
+    (['x⁽ⁿ⁺¹⁾', 'x^{(n+1)}'], ['x(n+1)']),
+    (['xᵝ', r'x^\beta'], ['xβ']),
+    (['①2x=4', '① 2x=4'], ['12x=4', '1 2x=4']),
+    (['⑴x', '⑴ x'], ['(1)x']),
+])
+def test_fix_07_unicode_scripts_and_enclosed_numbers(forms, different):
+    check_forms(forms, different)
+
+
+@pytest.mark.parametrize('glyph,operator,base', [
+    ('ᵃ', '^', 'a'), ('ʰ', '^', 'h'), ('ᶜ', '^', 'c'), ('⁼', '^', '='),
+    ('ᵞ', '^', 'γ'), ('ₐ', '_', 'a'), ('ᵢ', '_', 'i'), ('ᵦ', '_', 'β'), ('₌', '_', '='),
+])
+def test_fix_07_non_digit_script_characters(glyph, operator, base):
+    check_forms(['x' + glyph, 'x' + operator + '(' + base + ')'], ['x' + base])

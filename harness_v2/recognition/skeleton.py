@@ -17,8 +17,6 @@ _FRAC_HEAD = re.compile(r"\\[dt]?frac(?![A-Za-z])\s*")
 # Canonical roots can directly follow a coefficient or variable, including
 # inside another root. Recognize them again without losing their scope.
 _ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|[√∛∜]|(?:sqrt|root)(?=\s*\()")
-_SUPERSCRIPTS = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+")
-_SUPERSCRIPT_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _BARRED = re.compile(r"(?:[^\s\u0304\u0305][\u0304\u0305]+)+")
 _COMMANDS = [
@@ -275,11 +273,46 @@ def _grouping(text: str) -> str:
     return out
 
 
+def _unicode_notation(text: str) -> str:
+    """Protect scripts and enclosed numbers before compatibility folding."""
+    out, plain, script, kind = [], [], [], ""
+
+    def flush_script():
+        if script:
+            out.append(kind + "(" + unicodedata.normalize("NFKC", "".join(script)) + ")")
+            script.clear()
+
+    def flush_plain():
+        out.append(unicodedata.normalize("NFKC", "".join(plain)))
+        plain.clear()
+
+    for ch in text:
+        decomposition = unicodedata.decomposition(ch).split()
+        tag = decomposition[0] if decomposition else ""
+        operator = {"<super>": "^", "<sub>": "_"}.get(tag, "")
+        if operator:
+            flush_plain()
+            if operator != kind:
+                flush_script()
+            kind = operator
+            script.extend(chr(int(code, 16)) for code in decomposition[1:])
+        else:
+            flush_script()
+            name = unicodedata.name(ch, "")
+            enclosed = (unicodedata.numeric(ch, None) is not None
+                        and any(label in name for label in ("CIRCLED", "PARENTHESIZED", "FULL STOP", "DINGBAT")))
+            if enclosed:
+                flush_plain()
+                out.append(ch)
+            else:
+                plain.append(ch)
+    flush_script()
+    flush_plain()
+    return "".join(out)
+
+
 def skeleton(text: str) -> str:
-    # NFKC alone would flatten superscripts into ordinary baseline digits.
-    text = _SUPERSCRIPTS.sub(lambda m: "^(" + m.group().translate(_SUPERSCRIPT_MAP) + ")",
-                             _FENCE.sub("", text))
-    text = unicodedata.normalize("NFKC", text)
+    text = _unicode_notation(_FENCE.sub("", text))
     # Remove layout before parsing arguments: spacing can occur between a
     # fraction/root command and its operand. Keep separators until _content.
     text = _layout(text)
