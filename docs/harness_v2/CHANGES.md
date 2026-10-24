@@ -731,3 +731,7 @@ Each run's `experiment_case` must match every field on its planned job, includin
 ## PR #12 / Skeleton re-review fix 2: Keep content brackets inside roots
 
 Square brackets that belong to the radicand stay in the skeleton, including after a root index. `√[x]` matches `\sqrt{[x]}` and stays distinct from `√x`. Parentheses and curly braces still delimit a radicand. Existing root, grouping, and idempotence behavior is unchanged.
+
+## PR #12 / Skeleton re-review fix 3: Keep an explicit bar inside a root
+
+A bar that wraps a radicand is removed only when it is an overline, the form produced by the root's own vinculum. An explicit `\bar` stays a decoration, so `\sqrt{\bar{z}}` is `sqrt(bar(z))` and does not match `\sqrt{z}`. A vinculum overline around that bar is still removed.

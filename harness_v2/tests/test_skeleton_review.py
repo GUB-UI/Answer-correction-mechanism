@@ -243,3 +243,13 @@ def test_fix_12_factorial_equality_keeps_lexical_boundary():
 ])
 def test_rereview_fix_2_root_content_brackets(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\sqrt{\bar{z}}', r'√\bar{z}', 'sqrt(bar(z))'], [r'\sqrt{z}', r'\sqrt{\overline{z}}', 'sqrt(z)']),
+    ([r'\sqrt{\overline{\bar{z}}}', 'sqrt(bar(z))'], [r'\sqrt{\bar{z}\bar{z}}']),
+    ([r'\sqrt{x+\bar{z}}', 'sqrt(x+bar(z))'], ['sqrt(x+z)', 'sqrt(bar(x+z))']),
+    ([r'\sqrt{\bar{\bar{z}}}', 'sqrt(bar(bar(z)))'], ['sqrt(z)', 'sqrt(bar(z))']),
+])
+def test_rereview_fix_3_explicit_bar_inside_roots(forms, different):
+    check_forms(forms, different)

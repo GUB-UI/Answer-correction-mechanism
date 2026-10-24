@@ -235,8 +235,10 @@ def _content(text: str) -> str:
             if _precedence(index_content) == -1:
                 index_content = f"({index_content})"
             argument = f"{index_content}," if index is not None else ""
+            # An overline that wraps the whole radicand is the root's own
+            # vinculum. An explicit bar is a mathematical decoration and stays.
             vinculum = _DECORATION_HEAD.match(inner.strip())
-            if vinculum and vinculum.group().lstrip("\\") in ("overline", "bar"):
+            if vinculum and vinculum.group().lstrip("\\") == "overline":
                 group = _group(inner.strip(), vinculum.end(), delimiters="{(")
                 if group and group[1] == len(inner.strip()):
                     inner = group[0]
