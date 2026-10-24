@@ -16,7 +16,7 @@ _FENCE = re.compile(r"```[A-Za-z]*")
 _FRAC_HEAD = re.compile(r"\\[dt]?frac(?![A-Za-z])\s*")
 # Canonical roots can directly follow a coefficient or variable, including
 # inside another root. Recognize them again without losing their scope.
-_ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|√|sqrt(?=\s*\()")
+_ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|[√∛∜]|(?:sqrt|root)(?=\s*\()")
 _SUPERSCRIPTS = re.compile(r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+")
 _SUPERSCRIPT_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
@@ -52,7 +52,7 @@ _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
                "text", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
 # cannot be manufactured by concatenating formerly separate operands.
-_TOKEN = re.compile(r"\\[A-Za-z]+|sqrt(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
+_TOKEN = re.compile(r"\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _DROP = {"_", "\u0304", "\u0305"}
 _PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4}
@@ -100,8 +100,7 @@ def _radicand(text: str, start: int) -> tuple[str, int] | None:
         start += 1
     root = _ROOT_HEAD.match(text, start)
     if root:
-        inner = _radicand(text, root.end())
-        end = inner[1] if inner else root.end()
+        _, _, end = _root_argument(text, root)
         return text[start:end], end
     barred = _BARRED.match(text, start)
     if barred:
@@ -112,15 +111,31 @@ def _radicand(text: str, start: int) -> tuple[str, int] | None:
     return _group(text, start, delimiters="{([")
 
 
+def _root_argument(text: str, root: re.Match) -> tuple[str | None, str, int]:
+    """Read an optional LaTeX root index separately from its radicand."""
+    start = root.end()
+    index = {"∛": "3", "∜": "4"}.get(root.group())
+    if root.group() == r"\sqrt":
+        start = start + len(text[start:]) - len(text[start:].lstrip())
+        if text[start:start + 1] == "[":
+            group = _group(text, start, delimiters="[")
+            if group:
+                index, start = group
+    argument = _radicand(text, start)
+    inner, end = argument if argument else ("", start)
+    return index, inner, end
+
+
 def _content(text: str) -> str:
     """Strip formatting, retaining root scope and expression grouping."""
     out, pos = [], 0
     while pos < len(text):
         root = _ROOT_HEAD.match(text, pos)
         if root:
-            argument = _radicand(text, root.end())
-            inner, pos = argument if argument else ("", root.end())
-            out.append(f"sqrt({_content(inner)})")
+            index, inner, pos = _root_argument(text, root)
+            head = "root" if index is not None or root.group() == "root" else "sqrt"
+            argument = f"{_content(index)}," if index is not None else ""
+            out.append(f"{head}({argument}{_content(inner)})")
         else:
             command = _COMMAND_WORD.match(text, pos)
             if command:
@@ -192,7 +207,7 @@ def _grouping(text: str) -> str:
         inner = _grouping(group[0])
         end = group[1]
         if root:
-            out += f"sqrt({inner})"
+            out += f"{root.group()}({inner})"
         else:
             strength = _precedence(inner)
             left, right = out[-1:], text[end:end + 1]

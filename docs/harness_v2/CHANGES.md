@@ -621,3 +621,8 @@ Require an explicit nonempty job list and report absent, empty, or incorrectly t
 
 Regressions cover duplicate planned IDs across original/variant jobs, sources, and repetitions; plan order; zero/one/two recorded runs; mixed ambiguous and valid pairs; absent/empty/malformed plans; and CLI JSON/exit codes.
 Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **47 passed, 1 deselected**. Combined with the three skeleton-related test files: **283 passed, 1 deselected**. Only the existing builder test is excluded because it reads forbidden `references.json`. No network/API calls or excluded-file reads.
+
+
+## PR #12 / Fix 1: Preserve root indices
+
+Parse optional root indices separately; Unicode cube/fourth roots share `root(index,radicand)`. Square roots retain `sqrt(...)`. Collision, equivalence, nested-root and idempotence regressions: 375 related tests passed.
