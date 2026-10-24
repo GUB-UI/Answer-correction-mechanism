@@ -646,3 +646,8 @@ Retain square/literal curly brackets and half-open intervals. Commas are separat
 ## PR #12 / Fix 5: Separate lexical boundaries from parentheses
 
 Use U+2063 for command/whitespace token boundaries instead of synthetic parentheses. Retain real parentheses after commands so function argument and power scope remain distinct. Collision, equivalence and idempotence regressions: 393 related tests passed.
+
+
+## PR #12 / Fix 6: Preserve rows, columns, spans and matrix identity
+
+Canonicalize top-level newlines, LaTeX row breaks and math-span boundaries to `;`, columns to `¦`. Retain pmatrix/bmatrix/vmatrix/Vmatrix/matrix/array/cases names and dimensions. Correct old tests that expected merged expressions. Collision, equivalence and idempotence regressions: 398 related tests passed.

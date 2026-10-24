@@ -65,3 +65,21 @@ def test_fix_05_synthetic_boundaries_are_not_parentheses(command):
     check_forms([command + ' x^2', command + '  x^{2}'],
                 [command + '(x)^2', command + 'x^2'])
     check_forms([command + ' x', '(' + command + ') x'], [command + 'x'])
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'x=1\\ y=2', 'x=1\ny=2', 'x=1;y=2'], ['x=1y=2']),
+    (['$12$ $34$', '$12$$34$', r'\(12\)\(34\)', '12;34'], ['12 34', '1234']),
+    (['a&b', 'a¦b'], ['ab', 'a;b']),
+    ([r'\begin{pmatrix}a&b\\c&d\end{pmatrix}', 'pmatrix(a¦b;c¦d)'],
+     [r'\begin{vmatrix}a&b\\c&d\end{vmatrix}', r'\begin{pmatrix}a&b&c&d\end{pmatrix}']),
+])
+def test_fix_06_structural_layout(forms, different):
+    check_forms(forms, different)
+
+
+@pytest.mark.parametrize('environment', ['pmatrix', 'bmatrix', 'vmatrix', 'Vmatrix', 'matrix', 'array', 'cases'])
+def test_fix_06_environment_identity(environment):
+    check_forms([rf'\begin{{{environment}}}a&b\\c&d\end{{{environment}}}',
+                 environment + '(a¦b;c¦d)'],
+                ['a¦b;c¦d', environment + '(a¦b¦c¦d)'])

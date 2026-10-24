@@ -233,8 +233,8 @@ def test_multiline_aligned_latex_matches_plain_text_and_is_idempotent():
 \theta & = 30\circ \qquad \gamma = \sqrt{x+1}
 \end{aligned}
 ```"""
-    plain = "α = (a+b)/c\nβ = (x+y)^2 + π\nθ = 30° γ = sqrt(x+1)"
-    expected = "α=(a+b)/cβ=(x+y)^2+πθ=30°γ=sqrt(x+1)"
+    plain = "α ¦ = (a+b)/c\nβ ¦ = (x+y)^2 + π\nθ ¦ = 30° γ = sqrt(x+1)"
+    expected = "α¦=(a+b)/c;β¦=(x+y)^2+π;θ¦=30°γ=sqrt(x+1)"
     assert skeleton(latex) == skeleton(plain) == expected
     assert cer(latex, plain) == 0
     for text in (latex, plain, expected):
@@ -242,10 +242,10 @@ def test_multiline_aligned_latex_matches_plain_text_and_is_idempotent():
 
 
 @pytest.mark.parametrize("layout", [
-    r"\\", r"\begin{aligned}", r"\end{aligned}",
+    r"\begin{aligned}", r"\end{aligned}",
     r"\begin{gather*}", r"\end{gather*}",
     r"\,", r"\;", r"\:", r"\!", r"\quad", r"\qquad",
-    r"\left", r"\right", r"\displaystyle", "&",
+    r"\left", r"\right", r"\displaystyle",
 ])
 @pytest.mark.parametrize("left,right", [("12", "34"), ("s", "qrt(x+y)"), (r"\unknown", "b")])
 def test_layout_is_removed_without_joining_tokens(layout, left, right):
@@ -327,7 +327,7 @@ def test_math_mode_delimiters_match_undelimited_content(opening, closing, conten
 def test_math_mode_delimiters_preserve_token_boundaries(opening, closing, left, right):
     text = opening + left + closing + opening + right + closing
     normalized = skeleton(text)
-    assert normalized == skeleton(left + " " + right)
+    assert normalized == skeleton(left + ";" + right)
     assert normalized != skeleton(left + right)
     assert skeleton(normalized) == normalized
 

@@ -55,7 +55,7 @@ def test_default_preprocess_is_none():
     (r"x^2", "x²"),
     (r"\sqrt{2}", "√2"),
     (r"2 \times 3", "2×3"),
-    ("```markdown\n答 $x=1$\n```", "答 x=1"),
+    ("```markdown\n答 $x=1$\n```", "答;x=1"),
 ])
 def test_equivalent_notation_matches(a, b):
     assert skeleton(a) == skeleton(b)

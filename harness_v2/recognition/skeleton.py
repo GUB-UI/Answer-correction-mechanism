@@ -47,7 +47,29 @@ _SYMBOLS = {
     "varrho": "ρ", "varsigma": "ς", "varphi": "φ", "circ": "°", "infty": "∞",
 }
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
-_LAYOUT = re.compile(r"\\(?:\\|[,;:! ()\[\]])|\\(?:begin|end)\s*\{[^{}]*\}|&|\$+")
+_LAYOUT = re.compile(r"\\[,;:! ()\[\]]|\$+")
+_ENVIRONMENTS = "pmatrix|bmatrix|vmatrix|Vmatrix|matrix|array|cases"
+_CALL_HEAD = re.compile(r"(?:sqrt|root|" + _ENVIRONMENTS + r")(?=\()")
+_MATH_SPAN = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DOTALL)
+
+
+def _layout(text: str) -> str:
+    # Each math span is a separate content unit. Outer delimiters carry no content.
+    text = _MATH_SPAN.sub(lambda m: ";" + next(g for g in m.groups() if g is not None).strip() + ";", text)
+    text = re.sub(r"\\(begin|end)\s*\{([^{}]*)\}",
+                  lambda m: (m[2] + "(" if m[1] == "begin" else ")")
+                  if m[2] in _ENVIRONMENTS.split("|") else " ", text)
+    text = text.replace(r"\\", ";").replace("&", "¦")
+    out, depth = [], 0
+    for ch in text:
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            depth = max(0, depth - 1)
+        out.append(";" if ch == "\n" and depth == 0 else " " if ch == "\n" else ch)
+    text = re.sub(r"\s*;\s*(?:;\s*)*", ";", "".join(out)).strip("; ")
+    return _LAYOUT.sub(" ", text)
+
 _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
                "text", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
@@ -55,7 +77,7 @@ _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
 _TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _BOUNDARY = "\u2063"  # Canonical token boundary, never a mathematical parenthesis.
 _DROP = { "\u0304", "\u0305"}
-_PRECEDENCE = {",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
+_PRECEDENCE = {";": -1, "¦": -1, ",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4, "_": 4}
 
 
@@ -199,7 +221,7 @@ def _precedence(text: str) -> int:
             continue
         if operand:
             weakest = min(weakest, 2)
-        root = _ROOT_HEAD.match(text, pos)
+        root = _CALL_HEAD.match(text, pos)
         start = root.end() if root else pos
         group = _expression_group(text, start)
         number = _NUMBER.match(text, pos)
@@ -218,7 +240,7 @@ def _grouping(text: str) -> str:
     """
     out, pos = "", 0
     while pos < len(text):
-        root = _ROOT_HEAD.match(text, pos)
+        root = _CALL_HEAD.match(text, pos)
         start = root.end() if root else pos
         group = _expression_group(text, start)
         if not group:
@@ -260,7 +282,7 @@ def skeleton(text: str) -> str:
     text = unicodedata.normalize("NFKC", text)
     # Remove layout before parsing arguments: spacing can occur between a
     # fraction/root command and its operand. Keep separators until _content.
-    text = _LAYOUT.sub(" ", text)
+    text = _layout(text)
     text = _COMMAND_WORD.sub(lambda m: " " if m.group()[1:] in _FORMATTING
                              else _SYMBOLS.get(m.group()[1:], m.group()), text)
     text = _fractions(text)
