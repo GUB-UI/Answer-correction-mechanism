@@ -1,5 +1,11 @@
 # Harness v2 changes
 
+## PR #10 log cleanup / fix 2: ignore logs and transcripts at any depth
+
+- Expanded `.gitignore` and hygiene detection patterns for stderr/stdout/debug logs, agent/codex logs, handshake records, and codex fix/review/rereview transcripts.
+- Cover 16 filenames at root and nested paths, the two removed artifacts, tracked documents, and ordinary document names. Comparing `git ls-files` through `git check-ignore --no-index` before and after confirms no newly ignored tracked files.
+- Validation: all 3 hygiene tests pass with the requested Python/pytest command; the expanded cases failed before adding the patterns.
+
 ## PR #10 log cleanup / fix 1: remove remaining agent artifacts
 
 - Confirmed there were no repository references, then removed `codex_fix_gpt-6.1-sol.md` and `handshake_log_after_fix.txt` with ordinary tracked deletions. History is unchanged.
