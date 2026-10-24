@@ -390,9 +390,20 @@ def _grouping(text: str) -> str:
     return out
 
 
-def _combining_notation(text: str) -> str:
+_SPACING_MARK = {
+    "\u00af": "\u0304",  # macron
+    "\u203e": "\u0305",  # overline
+    "\uffe3": "\u0304",  # fullwidth macron
+    "\u02dc": "\u0303",  # spacing tilde
+}
+
+
+def _combining_notation(text: str, *, decompose: bool = True) -> str:
     # Decompose precomposed accents as well as explicitly combining accents.
-    text = unicodedata.normalize("NFD", text)
+    # A later pass can skip decomposition so compatibility folding cannot
+    # turn a finished letter back into a mark.
+    if decompose:
+        text = unicodedata.normalize("NFD", text)
     # A trailing stroke on an ungrouped numeric radicand is its vinculum.
     text = re.sub(r"(\\sqrt(?![A-Za-z])|[√∛∜])\s*(\d+(?:\.\d+)?)[\u0304\u0305]+(?![^\s\u0304\u0305][\u0304\u0305])",
                   lambda m: m[1] + "{" + m[2] + "}", text)
@@ -455,6 +466,18 @@ def _unicode_notation(text: str) -> str:
             script.extend(chr(int(code, 16)) for code in decomposition[1:])
         else:
             flush_script()
+            if ch in _SPACING_MARK:
+                mark = _SPACING_MARK[ch]
+                if not plain:
+                    plain.append(mark)
+                    continue
+                base = unicodedata.normalize("NFKC", plain.pop())
+                flush_plain()
+                # Emit the decoration before NFKC can compose the mark into a
+                # precomposed letter. That letter would not be idempotent.
+                command = "tilde" if mark == "\u0303" else "overline"
+                out.append("\\" + command + "{" + base + "}")
+                continue
             bold = _mathematical_bold_base(ch)
             if bold:
                 flush_plain()
@@ -475,6 +498,9 @@ def _unicode_notation(text: str) -> str:
 
 def skeleton(text: str) -> str:
     text = _unicode_notation(_combining_notation(_FENCE.sub("", text)))
+    # NFKC of spacing marks introduces combining marks. Attach those before
+    # the result is returned, without decomposing characters already folded.
+    text = _combining_notation(text, decompose=False)
     # Remove layout before parsing arguments: spacing can occur between a
     # fraction/root command and its operand. Keep separators until _content.
     text = _layout(text)

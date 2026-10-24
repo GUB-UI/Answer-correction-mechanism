@@ -164,7 +164,7 @@ def test_fix_10_seeded_notation_fuzz_is_idempotent():
     tokens = ['a', '2', '13', '+', '-', '/', '*', '^', '_', '!', '=', ',', ' ', '\n',
               '(', ')', '[', ']', '{', '}', r'\sqrt', '√', '∛', r'\ln', r'\alpha',
               r'\frac', r'\overline', r'\text', r'\\', '&', '$', r'\(', r'\)',
-              'ⁿ', '₁', '①', '̅']
+              'ⁿ', '₁', '①', '̅', '\u00af', '\u02dc', '\uffe3', '\u203e']
     for _ in range(4000):
         text = ''.join(rng.choices(tokens, k=rng.randrange(1, 16)))
         normalized = skeleton(text)
@@ -263,3 +263,16 @@ def test_rereview_fix_3_explicit_bar_inside_roots(forms, different):
 ])
 def test_rereview_fix_4_unicode_bold_matches_mathbf(glyph, command, plain):
     check_forms([glyph, command, 'mathbf(' + plain + ')'], [plain])
+
+
+@pytest.mark.parametrize('mark,canonical', [
+    ('\u00af', 'overline(x)'),
+    ('\uffe3', 'overline(x)'),
+    ('\u203e', 'overline(x)'),
+    ('\u02dc', 'tilde(x)'),
+])
+def test_rereview_fix_6_compatibility_marks_are_idempotent(mark, canonical):
+    text = 'x' + mark
+    assert skeleton(text) == canonical
+    assert skeleton(canonical) == canonical
+    assert skeleton(skeleton(text)) == canonical

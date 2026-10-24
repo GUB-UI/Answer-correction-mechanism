@@ -740,6 +740,10 @@ A bar that wraps a radicand is removed only when it is an overline, the form pro
 
 Mathematical bold letters, Greek letters, and digits are mapped to `mathbf(...)` before NFKC. They match `\mathbf{...}` and stay distinct from the plain character. Other mathematical styles are unchanged.
 
+## PR #12 / Skeleton re-review fix 6: Fold compatibility spacing marks
+
+Spacing macron, fullwidth macron, overline, and spacing tilde are attached as combining marks before the skeleton is returned. `x` plus U+00AF is `overline(x)` on the first pass and stays that way. The seeded fuzz alphabet includes these characters. The second attachment pass does not decompose characters that are already folded.
+
 ## PR #12 / Challenge re-review fix 5: Nested malformed fields invalidate
 
 A planned `problem_id` that is not text, a repetition that is not a positive integer, a grading value that is not a record, and a grading status that is not text each produce an explicit reason. The report is not comparable and the CLI exits 2. Scores from those records are not used. Output stays 0600 and input permissions are unchanged.
