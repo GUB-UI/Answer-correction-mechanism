@@ -265,3 +265,55 @@ def test_cli_marks_request_id_integrity_in_report_and_exit_code(tmp_path, monkey
         if problem == "duplicate planned":
             assert report["variants"]["F"]["pairs"] == 0
             assert report["variants"]["F"]["item_agreement"] is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_planned_slots_do_not_overwrite(reverse):
+    """Distinct request IDs that share a slot must not collapse into one agreement."""
+    jobs = []
+    runs = []
+    # cfgA disagrees; cfgB agrees. Whichever is written last must not become the result.
+    for cfg, variant_score in (("cfgA", 0), ("cfgB", 1)):
+        for variant, score in (("O", 1), ("F", variant_score)):
+            rid = f"{cfg}-{variant}"
+            jobs.append({"request_id": rid, "case_id": f"P:manual:{variant}",
+                         "problem_id": "P", "repetition": 1})
+            runs.append(_run(rid, "validated", [("R1", score)]))
+    if reverse:
+        jobs.reverse()
+        runs.reverse()
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == [
+        "duplicate planned slot: P:manual:F:1",
+        "duplicate planned slot: P:manual:O:1",
+    ]
+    assert report["variants"]["F"]["scheduled"] == 1
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["items"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+    assert report["variants"]["O"]["incomplete"] == report["variants"]["F"]["incomplete"] == 1
+
+
+def test_duplicate_planned_slot_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch):
+    jobs = [
+        {"request_id": "cfgA-O", "case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": "cfgB-O", "case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": "cfgA-F", "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+        {"request_id": "cfgB-F", "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+    ]
+    runs = [_run(job["request_id"], "validated", [("R1", 1)]) for job in jobs]
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "nested" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert any(reason.startswith("duplicate planned slot:") for reason in report["reasons"])
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (out.parent.stat().st_mode & 0o777) == 0o700
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755

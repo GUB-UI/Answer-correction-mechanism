@@ -5,8 +5,9 @@ source and repetition. Needs no reference scores and reads none. Every
 scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 ``failed`` (grading status failed) or ``incomplete`` (missing, duplicate,
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
-nothing is filled in. Missing/empty plans and duplicate planned IDs, as well
-as duplicate, missing or unexpected run IDs, make the report non-comparable;
+nothing is filled in. Missing/empty plans, duplicate planned IDs, duplicate
+planned slots, and duplicate, missing or unexpected run IDs make the report
+non-comparable;
 any remaining metrics are diagnostic only.
 """
 
@@ -85,19 +86,32 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
         ("unexpected", runs.keys() - planned_ids),
     ):
         reasons.extend(f"{label} request_id: {rid}" for rid in sorted(ids, key=str))
-    cells = {}
+    parsed = []
+    slot_counts = Counter()
     for job in jobs:
         source, _, variant = job["case_id"].rpartition(":")
+        slot = (source, variant, job["repetition"])
+        slot_counts[slot] += 1
+        parsed.append((job, source, variant, slot))
+    duplicate_slots = {slot for slot, count in slot_counts.items() if count > 1}
+    for source, variant, rep in sorted(duplicate_slots, key=lambda slot: (str(slot[0]), str(slot[1]), str(slot[2]))):
+        reasons.append(f"duplicate planned slot: {source}:{variant}:{rep}")
+    cells = {}
+    for job, source, variant, slot in parsed:
         ids = rubric_items.get(job.get("problem_id"))
         if not ids:
             raise ValueError(f"no rubric item ids for problem {job.get('problem_id')!r}")
+        if slot in duplicate_slots:
+            # Two planned jobs share a slot. Keep neither score.
+            cells[slot] = {"outcome": "incomplete", "status": None, "scores": None}
+            continue
         expected = set(ids)
         records = runs.get(job["request_id"], [])
         if job["request_id"] in duplicate_planned_ids or len(records) > 1:
             cell = {"outcome": "incomplete", "status": None, "scores": None}
         else:
             cell = _cell(records[0] if records else None, expected)
-        cells[(source, variant, job["repetition"])] = cell
+        cells[slot] = cell
     totals = defaultdict(_empty)
     by_source = defaultdict(lambda: defaultdict(_empty))
     for (source, variant, rep), cell in sorted(cells.items()):
