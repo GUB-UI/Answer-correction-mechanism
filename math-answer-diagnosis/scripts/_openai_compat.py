@@ -161,6 +161,9 @@ def make_handler(state: ServerState) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0].rstrip("/")
             if path in {"/health", "/v1/health"}:
                 payload: dict[str, Any] = {"ok": state.ready, "model": state.backend.model_name}
+                fingerprint = getattr(state.backend, "backend_fingerprint", None)
+                if state.ready and fingerprint:
+                    payload["backend_fingerprint"] = fingerprint()
                 if state.load_error:
                     payload["error"] = state.load_error.splitlines()[-1]
                 self._send_json(payload, 200)
