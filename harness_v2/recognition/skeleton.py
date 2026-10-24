@@ -20,8 +20,8 @@ _ROOT_HEAD = re.compile(r"\\sqrt(?![A-Za-z])|[√∛∜]|(?:sqrt|root)(?=\s*\()"
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _BARRED = re.compile(r"(?:[^\s\u0304\u0305][\u0304\u0305]+)+")
 _COMMANDS = [
-    (r"\\(?:leqq|leq|le)(?![A-Za-z])", "<="),
-    (r"\\(?:geqq|geq|ge)(?![A-Za-z])", ">="),
+    (r"\\(?:leqslant|leqq|leq|le)(?![A-Za-z])", "<="),
+    (r"\\(?:geqslant|geqq|geq|ge)(?![A-Za-z])", ">="),
     (r"\\(?:neq|ne)(?![A-Za-z])", "!="),
     (r"\\lt(?![A-Za-z])", "<"),
     (r"\\gt(?![A-Za-z])", ">"),
@@ -29,8 +29,9 @@ _COMMANDS = [
     (r"\\(?:times|cdot)(?![A-Za-z])", "*"),
     (r"\\div(?![A-Za-z])", "÷"),
     (r"\\pm(?![A-Za-z])", "±"),
+    (r"\\mp(?![A-Za-z])", "∓"),
 ]
-_UNICODE = {"≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
+_UNICODE = {"⩽": "<=", "⩾": ">=", "≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
             "×": "*", "·": "*", "÷": "÷"}
 _SYMBOLS = {
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
@@ -42,6 +43,7 @@ _SYMBOLS = {
     "Pi": "Π", "Sigma": "Σ", "Upsilon": "Υ", "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω",
     # Match NFKC's canonical forms for Unicode Greek symbol variants.
     "varepsilon": "ε", "vartheta": "θ", "varkappa": "κ", "varpi": "π",
+    "lbrack": "[", "rbrack": "]",
     "varrho": "ρ", "varsigma": "ς", "varphi": "φ", "circ": "°", "infty": "∞",
 }
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
@@ -114,7 +116,7 @@ _FORMATTING = {"left", "right", "mathrm", "mathit", "displaystyle", "textstyle",
 # cannot be manufactured by concatenating formerly separate operands.
 _TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + r")(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _BOUNDARY = "\u2063"  # Canonical token boundary, never a mathematical parenthesis.
-_PRECEDENCE = {";": -1, "¦": -1, ",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
+_PRECEDENCE = {";": -1, "¦": -1, ",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1, "∓": 1,
                "*": 2, "/": 2, "÷": 2, "^": 4, "_": 4}
 
 
@@ -223,13 +225,19 @@ def _content(text: str) -> str:
         if root:
             index, inner, pos = _root_argument(text, root)
             head = "root" if index is not None or root.group() == "root" else "sqrt"
-            argument = f"{_content(index)}," if index is not None else ""
+            index_content = _content(index) if index is not None else ""
+            if _precedence(index_content) == -1:
+                index_content = f"({index_content})"
+            argument = f"{index_content}," if index is not None else ""
             vinculum = _DECORATION_HEAD.match(inner.strip())
             if vinculum and vinculum.group().lstrip("\\") in ("overline", "bar"):
                 group = _group(inner.strip(), vinculum.end(), delimiters="{(")
                 if group and group[1] == len(inner.strip()):
                     inner = group[0]
-            out.append(f"{head}({argument}{_content(inner)})")
+            radicand = _content(inner)
+            if index is not None and _precedence(radicand) == -1:
+                radicand = f"({radicand})"
+            out.append(f"{head}({argument}{radicand})")
         else:
             decoration = _DECORATION_HEAD.match(text, pos)
             if decoration:
@@ -256,14 +264,14 @@ def _content(text: str) -> str:
                 pos += 2
                 continue
             if not ch.isspace():
-                if pos and text[pos - 1].isspace() and (ch.isalnum() or ch == "."):
+                if pos and text[pos - 1].isspace():
                     # Preserve lexical boundaries without inventing mathematical groups.
                     token = _TOKEN.match(text, pos)
                     prefix = "".join(out)
                     if (_TOKEN.findall(prefix + text[pos:])
                             != _TOKEN.findall(prefix) + _TOKEN.findall(text[pos:])):
                         out.append(_BOUNDARY)
-                    out.append(token.group())
+                    out.append({"{": "(", "}": ")"}.get(token.group(), token.group()))
                     pos = token.end()
                     continue
                 out.append({"{": "(", "}": ")"}.get(ch, ch))
@@ -271,7 +279,7 @@ def _content(text: str) -> str:
     return "".join(out)
 
 
-def _precedence(text: str) -> int:
+def _precedence(text: str, *, script: str | None = None) -> int:
     """Weakest top-level operation; adjacency is implicit multiplication."""
     weakest, operand, pos = 6, False, 0
     while pos < len(text):
@@ -280,8 +288,11 @@ def _precedence(text: str) -> int:
             continue
         ch = text[pos:pos + 2] if text[pos:pos + 2] in _PRECEDENCE else text[pos]
         if ch in _PRECEDENCE:
-            unary = ch in "+-±" and not operand
-            weakest = min(weakest, 3 if unary else _PRECEDENCE[ch])
+            unary = ch in "+-±∓" and not operand
+            priority = _PRECEDENCE[ch]
+            if script in ("^", "_") and ch in ("^", "_") and ch != script:
+                priority = 2  # Mixed scripts must retain their nested scope.
+            weakest = min(weakest, 3 if unary else priority)
             operand = operand if ch == "!" else False
             pos += len(ch)
             continue
@@ -295,6 +306,22 @@ def _precedence(text: str) -> int:
         pos = group[1] if group else command.end() if command else number.end() if number else pos + 1
         operand = True
     return weakest
+
+
+def _function_tail(text: str) -> bool:
+    """A letter identifier, optionally indexed, powered or primed."""
+    if text[-1:].isalpha() or text.endswith(("′", "'")):
+        return True
+    script = re.search(r"[_^]\d+$", text)
+    if script:
+        return _function_tail(text[:script.start()])
+    if text.endswith(")"):
+        depth = 0
+        for pos in range(len(text) - 1, -1, -1):
+            depth += {"(": -1, ")": 1}.get(text[pos], 0)
+            if depth == 0:
+                return pos > 0 and text[pos - 1] in "^_" and _function_tail(text[:pos - 1])
+    return False
 
 
 def _grouping(text: str) -> str:
@@ -313,7 +340,7 @@ def _grouping(text: str) -> str:
             out += text[pos]
             pos += 1
             continue
-        inner = _grouping(group[0])
+        inner = group[0] if root and root.group() == "text" else _grouping(group[0])
         end = group[1]
         if root:
             out += f"{root.group()}({inner})"
@@ -324,18 +351,32 @@ def _grouping(text: str) -> str:
             left = out[-2:] if out[-2:] in _PRECEDENCE else out[-1:]
             right = text[end:end + 2] if text[end:end + 2] in _PRECEDENCE else text[end:end + 1]
             lp = _PRECEDENCE.get(left, 3) if left else -1
-            if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/÷^_"):
+            if left in ("+", "-", "±", "∓") and (len(out) == 1 or out[-2] in "(=<>!+-±∓*/÷^_"):
                 lp = 3  # unary sign
             rp = _PRECEDENCE.get(right, 3) if right else -1
-            left_ok = strength > lp or (left in ("^", "_") and strength >= 3)
+            signed_power = (inner[:1] in ("+", "-", "±", "∓")
+                            and _precedence(inner.lstrip("+-±∓"), script=left) >= 4)
+            left_ok = strength > lp or (left in ("^", "_") and (_precedence(inner, script=left) >= 4 or signed_power))
             right_ok = strength > rp if right in ("^", "_") else strength >= rp
-            signed_factor = (left and left not in _PRECEDENCE and inner[:1] in ("+", "-", "±"))
+            signed_factor = (left and left not in _PRECEDENCE and inner[:1] in ("+", "-", "±", "∓"))
             tail = text[end:]
             joins_tokens = (_TOKEN.findall(out + inner + tail)
                             != _TOKEN.findall(out) + _TOKEN.findall(inner) + _TOKEN.findall(tail))
             command_argument = re.search(r"\\[A-Za-z]+" + _BOUNDARY + r"$", out)
+            # A grouped numeric script followed by a number needs a lexical
+            # boundary, just like whitespace after an ungrouped script.
+            if (left in ("^", "_") and _NUMBER.fullmatch(inner)
+                    and _NUMBER.match(tail) and left_ok and right_ok):
+                out += inner + _BOUNDARY
+                pos = end
+                continue
+            if inner.endswith("!") and tail.startswith("=") and left_ok and right_ok:
+                out += inner + _BOUNDARY
+                pos = end
+                continue
+            function_argument = _function_tail(out)
             out += (inner if inner and left_ok and right_ok and not signed_factor and not joins_tokens
-                    and not command_argument
+                    and not command_argument and not function_argument
                     else f"({inner})")
         pos = end
     return out
@@ -378,6 +419,12 @@ def _unicode_notation(text: str) -> str:
         decomposition = unicodedata.decomposition(ch).split()
         tag = decomposition[0] if decomposition else ""
         operator = {"<super>": "^", "<sub>": "_"}.get(tag, "")
+        if tag == "<fraction>":
+            flush_script()
+            flush_plain()
+            numerator, _, denominator = "".join(chr(int(code, 16)) for code in decomposition[1:]).partition("⁄")
+            out.append(f"(({numerator})/({denominator}))" if denominator else ch)
+            continue
         if operator:
             flush_plain()
             if operator != kind:
@@ -406,6 +453,7 @@ def skeleton(text: str) -> str:
     text = _layout(text)
     text = _COMMAND_WORD.sub(lambda m: " " if m.group()[1:] in _FORMATTING
                              else _SYMBOLS.get(m.group()[1:], m.group()), text)
+    text = re.sub(r"\^(?:\s*\{\s*°\s*\}|\s*\(\s*°\s*\)|\s*°)", "°", text)
     text = _fractions(text)
     for pattern, repl in _COMMANDS:
         text = re.sub(pattern, repl, text)

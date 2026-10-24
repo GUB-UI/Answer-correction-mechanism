@@ -179,3 +179,57 @@ def test_fix_10_seeded_notation_fuzz_is_idempotent():
 ])
 def test_fix_11_implicit_multiplication_and_division(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'30^\circ', r'30^{\circ}', '30°', '30^°'], ['30']),
+    (['x^{2}3', 'x^2 3', 'x^(2)3'], ['x^23']),
+    (['½', r'\frac12', '1/2'], ['12']),
+    (['⅔x', r'\frac23 x', '(2/3)x'], ['2/3x']),
+    ([r'a\mp b', 'a∓b'], ['a±b']),
+    ([r'x\leqslant y', 'x≤y'], ['x<y']),
+    ([r'x\geqslant y', 'x≥y'], ['x>y']),
+    ([r'\lbrack x\rbrack', '[x]'], ['x', '(x)']),
+    (['f(x)', 'f( x )'], ['fx']),
+])
+def test_fix_12_equivalent_notations(forms, different):
+    check_forms(forms, different)
+
+
+@pytest.mark.parametrize('glyph,fraction', [
+    ('¼', r'\frac14'), ('¾', r'\frac34'), ('⅐', r'\frac17'), ('⅑', r'\frac19'),
+    ('⅒', r'\frac{1}{10}'), ('⅓', r'\frac13'), ('⅕', r'\frac15'), ('⅖', r'\frac25'),
+    ('⅗', r'\frac35'), ('⅘', r'\frac45'), ('⅙', r'\frac16'), ('⅚', r'\frac56'),
+    ('⅛', r'\frac18'), ('⅜', r'\frac38'), ('⅝', r'\frac58'), ('⅞', r'\frac78'), ('↉', r'\frac03'),
+])
+def test_fix_12_vulgar_fractions(glyph, fraction):
+    check_forms([glyph, fraction], ['1'])
+
+
+@pytest.mark.parametrize('identifier', ['f', 'g', 'sin', 'log', 'φ'])
+def test_fix_12_function_application_keeps_parentheses(identifier):
+    check_forms([identifier + '(x)', identifier + '( x )'], [identifier + 'x'])
+
+
+@pytest.mark.parametrize('operator', ['^', '_'])
+def test_fix_12_script_product_scope(operator):
+    check_forms(['x' + operator + '{ab}', 'x' + operator + '(ab)'], ['x' + operator + 'a b'])
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'x^{a_b}', 'x^(a_b)'], ['x^a_b']),
+    ([r'x_{a^b}', 'x_(a^b)'], ['x_a^b']),
+    ([r'\text{(a)}', 'text((a))'], [r'\text{a}']),
+    (['f_1(x)', r'f_{1}( x )'], ['f_1x']),
+    ([r'f_{n+1}(x)', 'f_(n+1)(x)'], [r'f_{n+1}x']),
+    (['f′(x)', 'f′( x )'], ['f′x']),
+    (['x⩽y', r'x\leqslant y'], ['x<y']),
+    (['x⩾y', r'x\geqslant y'], ['x>y']),
+    ([r'\sqrt[1,2]{3}', 'root((1,2),3)'], [r'\sqrt[1]{2,3}']),
+])
+def test_fix_12_grouping_and_alias_interactions(forms, different):
+    check_forms(forms, different)
+
+
+def test_fix_12_factorial_equality_keeps_lexical_boundary():
+    check_forms(['n! = 6', r'n!\,=6', r'n!\quad =6', '(n!)=6'], ['n!=6', 'n≠6'])
