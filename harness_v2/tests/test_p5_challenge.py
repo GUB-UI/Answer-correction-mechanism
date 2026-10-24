@@ -411,3 +411,37 @@ def test_missing_provenance_cli_exits_2_without_changing_inputs(tmp_path, monkey
     assert (out.parent.stat().st_mode & 0o777) == 0o700
     assert (results_path.stat().st_mode & 0o777) == 0o644
     assert (tmp_path.stat().st_mode & 0o777) == 0o755
+
+
+@pytest.mark.parametrize("bad_id", [None, "", "  ", 1])
+def test_non_string_request_ids_do_not_match(bad_id):
+    jobs = [
+        {"request_id": bad_id, "case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": bad_id, "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+    ]
+    runs = [_run(bad_id, "validated", [("R1", 1)]), _run(bad_id, "validated", [("R1", 1)])]
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"].count(f"invalid request_id: {bad_id!r}") == 4
+    assert report["variants"].get("F", {}).get("item_agreement") is None
+    assert report["variants"].get("F", {}).get("pairs", 0) == 0
+
+
+def test_invalid_request_id_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    jobs[1]["request_id"] = None
+    runs = _bind(jobs[:1], [_run(jobs[0]["request_id"], "validated", [("R1", 1)])])
+    runs.append(_run(None, "validated", [("R1", 1)]))
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "out" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert "invalid request_id: None" in report["reasons"]
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755

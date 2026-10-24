@@ -711,3 +711,7 @@ Distinct planned request IDs that share a source, variant, and repetition no lon
 ## PR #12 / Challenge fix 2: Check run provenance against the plan
 
 Each run's `outputs.experiment_case` must match the planned case ID, repetition, and problem ID and carry an experiment identity. Missing provenance is a reason. Compared runs must share one experiment identity. Mismatched runs contribute no scores. The report is not comparable and the CLI exits 2. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge fix 3: Reject empty and None request IDs
+
+Only non-empty strings are request IDs. None, blank strings, and other hashable non-strings do not match each other and make the report non-comparable with `invalid request_id`. The CLI exits 2. Output stays 0600 and input permissions are unchanged.

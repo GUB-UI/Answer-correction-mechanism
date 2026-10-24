@@ -7,8 +7,8 @@ scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
 nothing is filled in. Missing/empty plans, duplicate planned IDs, duplicate
 planned slots, duplicate, missing or unexpected run IDs, and run provenance
-that is missing, mismatched, or from more than one experiment make the report
-non-comparable;
+that is missing, mismatched, or from more than one experiment, and request
+IDs that are not non-empty strings, make the report non-comparable;
 any remaining metrics are diagnostic only.
 """
 
@@ -56,6 +56,17 @@ def _empty() -> dict:
             "newly_flagged_relative_to_O": 0, "unflagged_relative_to_O": 0}
 
 
+def _usable_request_id(rid):
+    """Return a non-empty string id, or None when the id is unusable but hashable.
+
+    Unhashable ids raise TypeError so callers can keep that failure separate.
+    """
+    hash(rid)
+    if isinstance(rid, str) and rid.strip():
+        return rid
+    return None
+
+
 def _provenance_issue(job: dict, run: dict):
     """Return ``(reason, experiment_identity)`` for one planned run."""
     rid = job.get("request_id")
@@ -89,12 +100,23 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
     if not isinstance(jobs, list) or not jobs:
         reasons.append("expected_runs must be an explicit nonempty job plan")
         jobs = []
+    usable_jobs = []
+    for job in jobs:
+        if _usable_request_id(job["request_id"]) is None:
+            reasons.append(f"invalid request_id: {job['request_id']!r}")
+            continue
+        usable_jobs.append(job)
+    jobs = usable_jobs
     planned_counts = Counter(job["request_id"] for job in jobs)
     duplicate_planned_ids = {rid for rid, count in planned_counts.items() if count > 1}
     planned_ids = set(planned_counts)
     runs = defaultdict(list)
     for run in results.get("runs", []):
-        runs[run.get("request_id")].append(run)
+        rid = run.get("request_id")
+        if _usable_request_id(rid) is None:
+            reasons.append(f"invalid request_id: {rid!r}")
+            continue
+        runs[rid].append(run)
     for label, ids in (
         ("duplicate planned", duplicate_planned_ids),
         ("duplicate", {rid for rid, records in runs.items() if len(records) > 1}),
