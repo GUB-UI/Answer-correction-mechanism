@@ -1011,3 +1011,11 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - 修正していない。Sol r5 minor 4 から 10 を `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` に記録した。
 - 入れ子の壊れた採点項目、巨大整数の得点、指数 `(2)` の非冪等、太字が直前のコマンドにくっつくこと、太字と互換マクロン、追加の互換アクセント、太字の並びの正規形はいずれも未修正。
+
+## PR #12 / Sol r6: 数学I・A の範囲外として記録（未修正）
+
+- `harness_v2/recognition/skeleton.py` は変更していない。骨格が測るのは高校数学I・Aの記法に限る。平方根、分数、指数、絶対値、不等式、±、集合（補集合の上線を含む）、nPr、nCr、階乗、三角比、度、π、角・三角形・平行・垂直。
+- 立方根、四乗根、指数付き根号、数学用 Unicode の装飾スタイル、作為的な端のケースは範囲外。範囲外の骨格レビューは `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` に記録し、修正しない。
+- Sol r6 major: `√[x]y̅` と `√[x]y` はどちらも `sqrt([x])y`。`∛[x]y̅` と `∛[x]y` は `root(3,[x])y`、`∜` も同様に `root(4,[x])y`。
+- Sol r6 minor: `√(x̅)` と `sqrt(x̅)` は `sqrt(overline(x))`。`√x̅` と `\sqrt{x̅}` は `sqrt(x)`。
+- Sol r5 の骨格 minor 6–10（指数付き根号、太字スタイル、互換アクセント）も同じ範囲外へ再分類した。challenge の minor 4 と 5 は未修正のまま。

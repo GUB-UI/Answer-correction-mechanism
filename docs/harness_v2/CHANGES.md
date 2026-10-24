@@ -767,3 +767,9 @@ Not fixed. Sol r5 minors 4 through 10 are recorded in `docs/harness_v2/DEFERRED_
 ## PR #12 / Challenge re-review fix 5: Nested malformed fields invalidate
 
 A planned `problem_id` that is not text, a repetition that is not a positive integer, a grading value that is not a record, and a grading status that is not text each produce an explicit reason. The report is not comparable and the CLI exits 2. Scores from those records are not used. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Sol r6: Math I/A scope, skeleton findings recorded and not fixed
+
+`harness_v2/recognition/skeleton.py` is unchanged. The skeleton measures Japanese high-school Math I/A notation: square roots, fractions, exponents, absolute values, inequalities, plus-minus, set notation including complement written with an overline, nPr and nCr, factorial, trigonometric functions, degrees, pi, and angle, triangle, parallel, and perpendicular symbols.
+
+Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contrived edge cases are out of scope. Skeleton review findings outside that list are recorded in `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` and not fixed. Sol r6 major: `√[x]y̅` and `√[x]y` both become `sqrt([x])y`; `∛[x]y̅` and `∛[x]y` both become `root(3,[x])y`; `∜` likewise becomes `root(4,[x])y`. Sol r6 minor: `√(x̅)` and `sqrt(x̅)` become `sqrt(overline(x))`, while `√x̅` and `\sqrt{x̅}` become `sqrt(x)`. Sol r5 skeleton minors 6–10 are reclassified under the same scope. Challenge minors 4 and 5 stay open.
