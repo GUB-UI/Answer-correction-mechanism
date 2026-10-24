@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-import threading
-from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import httpx
+from openai import OpenAI
 from streamlit.testing.v1 import AppTest
 
 from src.config import load_config
@@ -16,54 +15,43 @@ from src import ui_common
 
 @pytest.fixture
 def intake_app(tmp_path, monkeypatch):
-    """An actual OpenAI-compatible local HTTP endpoint, with deterministic extraction."""
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *args):
-            pass
+    """Exercise the real SDK and tagging path with an in-memory HTTP transport."""
+    def respond(request):
+        payload = json.loads(request.read())
+        data = json.loads(payload["messages"][1]["content"])
+        docs = data["documents"]
+        citations = {}
+        for role, text in [("problem", "2x < 8 を解け。"),
+                           ("student_answer", "x < 3"), ("model_answer", "x < 4")]:
+            sid = next(doc["source_id"] for doc in docs if text in doc["text"])
+            citations[role] = {"text": text, "source_ids": [sid]}
+        group = {"title": "一次不等式", **citations, "existing_problem_id": None,
+                 "confidence": 0.98, "review_reasons": []}
+        content = json.dumps({"groups": [group]}, ensure_ascii=False)
+        return httpx.Response(200, json={
+            "id": "local-completion", "object": "chat.completion",
+            "created": 0, "model": "local-test",
+            "choices": [{"index": 0, "finish_reason": "stop",
+                         "message": {"role": "assistant", "content": content}}],
+        })
 
-        def do_POST(self):
-            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            data = json.loads(request["messages"][1]["content"])
-            docs = data["documents"]
-            citations = {}
-            for role, text in [("problem", "2x < 8 を解け。"),
-                               ("student_answer", "x < 3"), ("model_answer", "x < 4")]:
-                sid = next(doc["source_id"] for doc in docs if text in doc["text"])
-                citations[role] = {"text": text, "source_ids": [sid]}
-            group = {"title": "一次不等式", **citations, "existing_problem_id": None,
-                     "confidence": 0.98, "review_reasons": []}
-            content = json.dumps({"groups": [group]}, ensure_ascii=False)
-            body = json.dumps({"id": "local-completion", "object": "chat.completion",
-                               "created": 0, "model": "local-test",
-                               "choices": [{"index": 0, "finish_reason": "stop",
-                                            "message": {"role": "assistant", "content": content}}]}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+    def offline_client(**kwargs):
+        return OpenAI(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(respond)))
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    monkeypatch.setattr("src.adapters.lmstudio_client.OpenAI", offline_client)
     config = load_config(tmp_path)
-    config = replace(config, lmstudio=replace(config.lmstudio,
-                      base_url=f"http://127.0.0.1:{server.server_port}/v1"))
     storage = Storage(config)
     monkeypatch.setattr(ui_common, "get_config", lambda: config)
     monkeypatch.setattr(ui_common, "get_storage", lambda: storage)
     app_path = Path(__file__).resolve().parents[1] / "pages" / "0_set_register.py"
     yield AppTest.from_file(str(app_path), default_timeout=15), storage
-    server.shutdown()
-    server.server_close()
-    thread.join()
 
 
 def button(app, label):
     return next(item for item in app.button if item.label == label)
 
 
-def test_auto_input_goes_through_local_http_to_shared_tag_and_saved_answer(intake_app):
+def test_auto_input_goes_through_sdk_to_shared_tag_and_saved_answer(intake_app):
     app, storage = intake_app
     app.run()
     assert not app.exception

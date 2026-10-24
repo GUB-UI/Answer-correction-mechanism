@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import uuid
 from pathlib import Path
@@ -18,6 +17,7 @@ from src.models import (
     ProblemRecord,
     TeacherGradeRecord,
 )
+from src.private_io import ensure_private_directory, private_open, write_private
 from src.sources import suffix_for_upload
 
 T = TypeVar("T", bound=BaseModel)
@@ -38,12 +38,15 @@ class Storage:
         self._ensure_directories()
 
     def _ensure_directories(self) -> None:
-        self.config.images_dir.mkdir(parents=True, exist_ok=True)
-        self.config.records_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.config.images_dir)
+        ensure_private_directory(self.config.records_dir)
         for filename in RECORD_FILES.values():
             path = self.config.records_dir / filename
-            if not path.exists():
-                path.touch()
+            try:
+                with private_open(path, "x", encoding="utf-8"):
+                    pass
+            except FileExistsError:
+                pass
 
     def _record_path(self, record_type: str) -> Path:
         filename = RECORD_FILES[record_type]
@@ -56,7 +59,7 @@ class Storage:
         ext = extension if extension.startswith(".") else f".{extension}"
         image_id = self.generate_id("img")
         path = self.config.images_dir / f"{image_id}{ext}"
-        path.write_bytes(image_bytes)
+        write_private(path, image_bytes)
         return self.config.to_stored_path(path)
 
     def save_answer_image(
@@ -67,12 +70,12 @@ class Storage:
     ) -> str:
         ext = extension if extension.startswith(".") else f".{extension}"
         path = self.config.images_dir / f"{answer_id}{ext}"
-        path.write_bytes(image_bytes)
+        write_private(path, image_bytes)
         return self.config.to_stored_path(path)
 
     @staticmethod
     def _append_jsonl(path: Path, payload: dict) -> None:
-        with path.open("a", encoding="utf-8") as f:
+        with private_open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
     @staticmethod
@@ -91,13 +94,7 @@ class Storage:
     @staticmethod
     def _write_jsonl(path: Path, rows: list[dict]) -> None:
         # Colab のセッション切断や Drive 同期中に途中までの書き込みが残らないよう置換で書く。
-        tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.tmp")
-        with tmp_path.open("w", encoding="utf-8") as f:
-            for row in rows:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        write_private(path, "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
 
     def _load_models(self, record_type: str, model_cls: type[T]) -> list[T]:
         rows = self._read_jsonl(self._record_path(record_type))

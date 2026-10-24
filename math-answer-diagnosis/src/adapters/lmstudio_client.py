@@ -19,6 +19,7 @@ class LMStudioClient:
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
+        self.fingerprint_unavailable_reason: str | None = None
         self._client = OpenAI(
             base_url=config.lmstudio.base_url,
             api_key=config.lmstudio.api_key,
@@ -35,17 +36,26 @@ class LMStudioClient:
         from http.client import HTTPException
         from urllib.request import Request, urlopen
 
+        self.fingerprint_unavailable_reason = None
         url = str(self._client.base_url).rstrip("/") + "/health"
         request = Request(url, headers={"Authorization": f"Bearer {self.config.lmstudio.api_key}"})
         try:
             with urlopen(request, timeout=2) as response:
                 payload = json.load(response)
-        except (OSError, ValueError, HTTPException):
+        except TimeoutError:
+            self.fingerprint_unavailable_reason = "backend_health_timeout"
+            return None
+        except (OSError, ValueError, HTTPException) as exc:
+            self.fingerprint_unavailable_reason = f"backend_health_unavailable:{type(exc).__name__}"
             return None
         if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("error"):
+            self.fingerprint_unavailable_reason = "backend_health_invalid_response"
             return None
         fingerprint = payload.get("backend_fingerprint")
-        return fingerprint if valid_backend_fingerprint(fingerprint) else None
+        if not valid_backend_fingerprint(fingerprint):
+            self.fingerprint_unavailable_reason = "backend_fingerprint_unavailable"
+            return None
+        return fingerprint
 
     @staticmethod
     def prepare_chat_request(

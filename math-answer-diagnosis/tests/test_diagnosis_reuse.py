@@ -1,3 +1,4 @@
+import copy
 import json
 import hashlib
 from dataclasses import replace
@@ -39,15 +40,17 @@ def case(tmp_path, monkeypatch):
     client = MagicMock()
     client.prepare_chat_request.side_effect = LMStudioClient.prepare_chat_request
     client.backend_fingerprint.return_value = {
-        "model_id": "loaded-weights-A", "settings": {"max_new_tokens_cap": 512},
+        "model_id": "loaded-weights-A", "settings": {"max_new_tokens_cap": 512, "model_revision": "revision-A"},
+        "server_source_sha256": "a" * 64,
+        "library_versions": dict.fromkeys(("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"), "test-version"),
     }
     client.chat_completion.return_value = json.dumps({
         "score": None, "max_score": 5, "question_scores": [],
     })
 
-    def run(config=config, options=options, **kwargs):
+    def run(config=config, options=options, answers=None, **kwargs):
         adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client, transport="lmstudio")
-        return run_batch(storage, config, [answer], options, services=manager,
+        return run_batch(storage, config, answers or [answer], options, services=kwargs.pop("services", manager),
                          diagnosis_adapter=adapter, **kwargs).items[0]
 
     return storage, config, options, client, run
@@ -59,7 +62,8 @@ def test_exact_grading_configuration_is_stored_and_reused(case):
     # Reload from disk, rather than comparing an in-memory result only.
     saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
     metadata = saved.grading_metadata
-    assert metadata["model_id"] == config.diagnosis.model_name
+    assert metadata["model_id"] == "loaded-weights-A"
+    assert metadata["model_alias"] == config.diagnosis.model_name
     assert metadata["provider"] == "lmstudio"
     assert len(metadata["prompt_version"]) == len(metadata["rubric_identity"]) == 64
     settings = metadata["generation_settings"]["request"]
@@ -121,7 +125,7 @@ def test_grading_configuration_change_requires_regrading(case, monkeypatch, chan
 
 @pytest.mark.parametrize("missing", [
     "all", "null", "empty", "provider", "model_id", "prompt_version", "rubric_identity",
-    "generation_settings", "request_settings", "backend",
+    "generation_settings", "request_settings", "backend", "model_alias",
 ])
 def test_legacy_or_incomplete_metadata_is_never_reused(case, missing):
     storage, config, options, client, run = case
@@ -157,7 +161,7 @@ def test_skip_disabled_regrades_matching_configuration(case):
 
 def test_unknown_adapter_configuration_is_never_reused(case, monkeypatch):
     storage, config, options, client, run = case
-    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context: None)
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context, **kwargs: None)
     first = run()
     again = run()
     assert storage.get_diagnosis_result(first.diagnosis_id).grading_metadata is None
@@ -229,12 +233,14 @@ def test_managed_startup_precedes_metadata_snapshot(case, monkeypatch):
 
     def start(service):
         client.backend_fingerprint.return_value = {
-            "model_id": "started-weights", "settings": {"max_new_tokens_cap": 512},
+            "model_id": "started-weights", "settings": {"max_new_tokens_cap": 512, "model_revision": "revision-A"},
+            "server_source_sha256": "a" * 64,
+            "library_versions": dict.fromkeys(("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"), "test-version"),
         }
 
     monkeypatch.setattr("src.runtime.services.get_service_manager",
                         lambda config: SimpleNamespace(ensure=start))
-    first = run(config=config)
+    first = run(config=config, services=SimpleNamespace(events=[], ensure=start))
     saved = storage.get_diagnosis_result(first.diagnosis_id)
     assert saved.grading_metadata["generation_settings"]["backend"]["model_id"] == "started-weights"
     assert run(config=config).diagnosis_id == first.diagnosis_id
@@ -293,7 +299,7 @@ def test_equal_incomplete_metadata_on_both_sides_never_reuses(case, monkeypatch,
     stored.grading_metadata = metadata
     # Reproduce equal partial metadata in memory, independently of JSON loading.
     monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [stored])
-    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context: metadata)
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context, **kwargs: metadata)
     again = run()
     assert again.diagnosis_id and again.diagnosis_id != first.diagnosis_id
     assert client.chat_completion.call_count == 2
@@ -348,3 +354,218 @@ def test_unknown_final_request_disables_reuse(case, builder):
     assert first.diagnosis_id and again.diagnosis_id != first.diagnosis_id
     assert client.chat_completion.call_count == 2
     assert all(d.grading_metadata is None for d in storage.list_diagnosis_results())
+
+
+def test_review_routing_change_requires_regrading(case, monkeypatch):
+    storage, config, options, client, run = case
+    client.chat_completion.return_value = json.dumps({
+        "score": 1, "max_score": 5,
+        "question_scores": [{"question": "(1)", "score": 1, "max_score": 5,
+                             "reason": "基準を満たすので満点とする"}],
+    })
+    monkeypatch.delenv("REVIEW_FLAGS_ROUTE", raising=False)
+    first = run()
+    assert first.status == "validated"
+    monkeypatch.setenv("REVIEW_FLAGS_ROUTE", "true")
+    again = run()
+    assert again.diagnosis_id != first.diagnosis_id
+    assert again.status == "review_required"
+    assert client.chat_completion.call_count == 2
+    assert run().diagnosis_id == again.diagnosis_id
+
+
+@pytest.mark.parametrize("post_processing", [None, {}, {"review_flags_route": 1}])
+def test_equal_missing_or_invalid_post_processing_never_reuses(case, monkeypatch, post_processing):
+    storage, config, options, client, run = case
+    first = run()
+    saved = storage.get_diagnosis_result(first.diagnosis_id)
+    saved.grading_metadata["post_processing"] = post_processing
+    monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [saved])
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata",
+                        lambda self, context, **kwargs: saved.grading_metadata)
+    assert run().diagnosis_id != first.diagnosis_id
+    assert client.chat_completion.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["revision", "weights_digest", "source", "library"])
+def test_backend_provenance_change_requires_regrading(case, change):
+    storage, config, options, client, run = case
+    first = run()
+    fingerprint = client.backend_fingerprint.return_value
+    if change == "revision":
+        fingerprint["settings"]["model_revision"] = "revision-B"
+    elif change == "weights_digest":
+        fingerprint["settings"]["weights_sha256"] = "b" * 64
+    elif change == "source":
+        fingerprint["server_source_sha256"] = "b" * 64
+    else:
+        fingerprint["library_versions"]["torch"] = "changed-version"
+    assert run().diagnosis_id != first.diagnosis_id
+    assert client.chat_completion.call_count == 2
+
+
+def test_metadata_failure_is_isolated_to_one_answer(case, monkeypatch):
+    storage, config, options, client, run = case
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+    original = LMStudioDiagnosisAdapter.grading_metadata
+
+    def metadata(self, context, **kwargs):
+        if context.answer_id == "a":
+            raise RuntimeError("metadata unavailable")
+        return original(self, context, **kwargs)
+
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", metadata)
+    item = run(answers=[first, second])
+    assert item.status == "failed"
+    assert "metadata unavailable" in " ".join(item.errors)
+    assert [d.answer_id for d in storage.list_diagnosis_results()] == ["b"]
+
+
+def test_startup_failure_is_recorded_for_each_item(case, monkeypatch):
+    storage, config, options, client, run = case
+    config = replace(config, services=replace(config.services, mode="managed"))
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+
+    def fail(service):
+        raise RuntimeError("startup failed")
+
+    manager = SimpleNamespace(events=[], ensure=fail)
+    adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client)
+    report = run_batch(storage, config, [first, second], options, services=manager,
+                       diagnosis_adapter=adapter)
+    assert all(item.status == "failed" and "startup failed" in " ".join(item.errors)
+               for item in report.items)
+    assert not storage.list_diagnosis_results()
+
+
+def test_batch_shares_startup_and_backend_snapshot(case, monkeypatch):
+    storage, config, options, client, run = case
+    config = replace(config, services=replace(config.services, mode="managed"))
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+    manager = SimpleNamespace(events=[], ensure=MagicMock())
+    monkeypatch.setattr("src.runtime.services.get_service_manager", lambda config: manager)
+    adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client)
+    for skip in (False, True):
+        client.backend_fingerprint.reset_mock()
+        manager.ensure.reset_mock()
+        report = run_batch(storage, config, [first, second], replace(options, skip_existing_diagnosis=skip),
+                           services=manager, diagnosis_adapter=adapter)
+        assert all(item.diagnosis_id for item in report.items)
+        assert manager.ensure.call_count == 1
+        # Startup stays once per batch. Identity is read before every answer and
+        # again after each generation, including when every answer is reused.
+        assert client.backend_fingerprint.call_count == (4 if not skip else 2)
+    assert client.chat_completion.call_count == 2
+
+
+@pytest.mark.parametrize("kind", ["model_id", "settings", "unavailable"])
+def test_backend_change_between_cached_answers_is_not_reused(case, kind):
+    """A fingerprint cached for one reused answer must not authorize the next."""
+    storage, config, options, client, run = case
+    config = replace(config, services=replace(config.services, mode="managed"))
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+    manager = SimpleNamespace(events=[], ensure=MagicMock())
+    adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client)
+    answers = [first, second]
+    primed = run_batch(storage, config, answers, options, services=manager, diagnosis_adapter=adapter)
+    saved_ids = {item.answer_id: item.diagnosis_id for item in primed.items}
+    assert client.chat_completion.call_count == 2
+    client.chat_completion.reset_mock()
+    client.backend_fingerprint.reset_mock()
+    manager.ensure.reset_mock()
+    base = copy.deepcopy(client.backend_fingerprint.return_value)
+    state = {"n": 0}
+
+    def current_backend():
+        state["n"] += 1
+        if state["n"] == 1:
+            client.fingerprint_unavailable_reason = None
+            return copy.deepcopy(base)
+        if kind == "unavailable":
+            client.fingerprint_unavailable_reason = "backend_health_timeout"
+            return None
+        client.fingerprint_unavailable_reason = None
+        changed = copy.deepcopy(base)
+        if kind == "model_id":
+            changed["model_id"] = "loaded-weights-B"
+        else:
+            changed["settings"]["model_revision"] = "revision-B"
+        return changed
+
+    client.backend_fingerprint.side_effect = current_backend
+    report = run_batch(storage, config, answers, options, services=manager, diagnosis_adapter=adapter)
+    assert manager.ensure.call_count == 1
+    assert report.items[0].diagnosis_id == saved_ids["a"]
+    assert report.items[1].diagnosis_id != saved_ids["b"]
+    assert client.chat_completion.call_count == 1
+    regenerated = storage.get_diagnosis_result(report.items[1].diagnosis_id)
+    if kind == "unavailable":
+        assert regenerated.grading_metadata is None
+        assert regenerated.reuse_unavailable_reason == "backend_health_timeout"
+        assert report.items[1].status == "review_required"
+    else:
+        assert regenerated.grading_metadata["generation_settings"]["backend"]["model_id"] == (
+            "loaded-weights-B" if kind == "model_id" else "loaded-weights-A"
+        )
+        if kind == "settings":
+            assert regenerated.grading_metadata["generation_settings"]["backend"]["settings"]["model_revision"] == "revision-B"
+    assert report.items[0].status != "failed"
+
+
+def test_unavailable_backend_reason_is_persisted_without_failing_grade(case):
+    storage, config, options, client, run = case
+    client.backend_fingerprint.return_value = None
+    client.fingerprint_unavailable_reason = "backend_health_timeout"
+    first = run()
+    saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
+    assert saved.reuse_unavailable_reason == "backend_health_timeout"
+    assert first.reuse_unavailable_reason == "backend_health_timeout"
+    assert first.status == "review_required"
+
+
+def test_changed_fingerprint_reason_is_persisted(case):
+    storage, config, options, client, run = case
+
+    def switch(**kwargs):
+        client.backend_fingerprint.return_value["settings"]["model_revision"] = "revision-B"
+        return client.chat_completion.return_value
+
+    client.chat_completion.side_effect = switch
+    first = run()
+    saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
+    assert saved.grading_metadata is None
+    assert saved.reuse_unavailable_reason == "grading_configuration_changed_during_generation"
+
+
+def test_metadata_records_loaded_model_and_keeps_request_alias(case):
+    storage, config, options, client, run = case
+    first = run()
+    saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
+    assert saved.grading_metadata["model_id"] == "loaded-weights-A"
+    assert saved.grading_metadata["model_alias"] == config.diagnosis.model_name
+    assert saved.model_name == config.diagnosis.model_name
+
+
+def test_model_identity_mismatch_never_reuses_even_if_metadata_equal(case, monkeypatch):
+    storage, config, options, client, run = case
+    first = run()
+    saved = storage.get_diagnosis_result(first.diagnosis_id)
+    saved.grading_metadata["model_id"] = "different-loaded-model"
+    monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [saved])
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata",
+                        lambda self, context, **kwargs: saved.grading_metadata)
+    again = run()
+    assert again.diagnosis_id != first.diagnosis_id
+    assert storage.get_diagnosis_result(again.diagnosis_id).grading_metadata is None

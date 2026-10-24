@@ -22,6 +22,24 @@ Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider h
 - Added 36 regression cases for notation equivalence, radical scope, and idempotence, including nested roots, fractions, exponents, and full-width notation. Before the fix, 31 of the new cases failed.
 
 Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **902 passed** (localhost mock servers permitted).
+
+## PR #10 log cleanup / fix 3: skip hygiene checks without a Git work tree
+
+- Check `git rev-parse --is-inside-work-tree` before each hygiene check; call `pytest.skip` if Git cannot run or ROOT is outside a work tree.
+- Regression tests remove Git from PATH and redirect ROOT to a temporary directory, covering all three checks. All six cases failed before the guard; all nine hygiene tests now pass.
+- Full-suite validation (executor, outside the agent sandbox, `/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider`): `harness_v2/tests` **593 passed**, `math-answer-diagnosis` **328 passed**. (The agent-sandbox run that reported failures was caused only by its read/network guards and is superseded.)
+
+## PR #10 log cleanup / fix 2: ignore logs and transcripts at any depth
+
+- Expanded `.gitignore` and hygiene detection patterns for stderr/stdout/debug logs, agent/codex logs, handshake records, and codex fix/review/rereview transcripts.
+- Cover 16 filenames at root and nested paths, the two removed artifacts, tracked documents, and ordinary document names. Comparing `git ls-files` through `git check-ignore --no-index` before and after confirms no newly ignored tracked files.
+- Validation: all 3 hygiene tests pass with the requested Python/pytest command; the expanded cases failed before adding the patterns.
+
+## PR #10 log cleanup / fix 1: remove remaining agent artifacts
+
+- Confirmed there were no repository references, then removed `codex_fix_gpt-6.1-sol.md` and `handshake_log_after_fix.txt` with ordinary tracked deletions. History is unchanged.
+- Added a hygiene assertion that neither file appears in `git ls-files`; verified failure before deletion and both hygiene tests passing afterward.
+
 ## PR #10: exclude agent debug logs
 
 - Removed `codex_fix_stderr.log` from the tree going forward; existing commit history is not rewritten.
