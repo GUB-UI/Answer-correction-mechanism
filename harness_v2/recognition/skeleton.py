@@ -199,7 +199,13 @@ def _radicand(text: str, start: int) -> tuple[str, int] | None:
     number = _NUMBER.match(text, start)
     if number:
         return number.group(), number.end()
-    return _group(text, start, delimiters="{([")
+    # Square brackets are content, including after a root index. Curly braces
+    # and parentheses still delimit a radicand and are not part of its value.
+    if start < len(text) and text[start] == "[":
+        group = _group(text, start, delimiters="[")
+        if group:
+            return "[" + group[0] + "]", group[1]
+    return _group(text, start, delimiters="{(")
 
 
 def _root_argument(text: str, root: re.Match) -> tuple[str | None, str, int]:

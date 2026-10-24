@@ -727,3 +727,7 @@ A results object that is not an object, a `runs` value that is not a list, a run
 ## PR #12 / Challenge re-review fix 1: Compare every planned provenance field
 
 Each run's `experiment_case` must match every field on its planned job, including `request_id`, `input_version`, `input_sha256`, and `rubric_sha256`. When the results declare an experiment `identity`, every compared run must carry that identity. A mismatch is non-comparable, the CLI exits 2, and the scores are not used. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Skeleton re-review fix 2: Keep content brackets inside roots
+
+Square brackets that belong to the radicand stay in the skeleton, including after a root index. `√[x]` matches `\sqrt{[x]}` and stays distinct from `√x`. Parentheses and curly braces still delimit a radicand. Existing root, grouping, and idempotence behavior is unchanged.

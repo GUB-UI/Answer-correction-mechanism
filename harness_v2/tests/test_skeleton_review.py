@@ -233,3 +233,13 @@ def test_fix_12_grouping_and_alias_interactions(forms, different):
 
 def test_fix_12_factorial_equality_keeps_lexical_boundary():
     check_forms(['n! = 6', r'n!\,=6', r'n!\quad =6', '(n!)=6'], ['n!=6', 'n≠6'])
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\sqrt{[x]}', '√[x]', 'sqrt([x])'], [r'\sqrt{x}', '√x', 'sqrt(x)']),
+    ([r'\sqrt{[x+1]}', '√[x+1]', 'sqrt([x+1])'], ['sqrt(x+1)']),
+    ([r'\sqrt[3]{[x]}', r'\sqrt[3][x]', '∛[x]', 'root(3,[x])'], ['root(3,x)', '∛x']),
+    ([r'\sqrt[n]{[x+1]}', r'\sqrt[n][x+1]', 'root(n,[x+1])'], ['root(n,x+1)']),
+])
+def test_rereview_fix_2_root_content_brackets(forms, different):
+    check_forms(forms, different)
