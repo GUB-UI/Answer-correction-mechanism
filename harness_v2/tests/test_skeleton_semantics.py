@@ -298,3 +298,60 @@ def test_layout_and_symbols_preserve_fraction_root_and_power_scope(latex, plain)
     normalized = skeleton(latex)
     assert normalized == skeleton(plain)
     assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("opening,closing", [
+    (r"\(", r"\)"), (r"\[", r"\]"), ("$", "$"), ("$$", "$$"),
+])
+@pytest.mark.parametrize("content,expected", [
+    ("x", "x"),
+    (r"\frac{a+b}{c}", "(a+b)/c"),
+    (r"\sqrt{x+1} + y^{a+b}", "sqrt(x+1)+y^(a+b)"),
+    ("a/(b*c)", "a/(b*c)"),
+    ("(12)(34)", "12(34)"),
+])
+def test_math_mode_delimiters_match_undelimited_content(opening, closing, content, expected):
+    for text in (opening + content + closing, opening + "\n " + content + " \n" + closing):
+        normalized = skeleton(text)
+        assert normalized == skeleton(content) == expected
+        assert cer(text, content) == 0
+        assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("opening,closing", [
+    (r"\(", r"\)"), (r"\[", r"\]"), ("$", "$"), ("$$", "$$"),
+])
+@pytest.mark.parametrize("left,right", [
+    ("12", "34"), ("s", "qrt(x+y)"), (r"\unknown", "b"),
+])
+def test_math_mode_delimiters_preserve_token_boundaries(opening, closing, left, right):
+    text = opening + left + closing + opening + right + closing
+    normalized = skeleton(text)
+    assert normalized == skeleton(left + " " + right)
+    assert normalized != skeleton(left + right)
+    assert skeleton(normalized) == normalized
+
+
+@pytest.mark.parametrize("text,expected", [
+    (r"\{x\}", r"\{x\}"),
+    (r"\lbrack x\rbrack", r"\lbrack(x)\rbrack"),
+    (r"\langle x\rangle", r"\langle(x)\rangle"),
+])
+def test_escaped_content_brackets_survive_math_mode_removal(text, expected):
+    for wrapped in (text, r"\(" + text + r"\)", r"\[" + text + r"\]", "$" + text + "$"):
+        normalized = skeleton(wrapped)
+        assert normalized == expected
+        assert normalized != skeleton("x")
+        assert skeleton(normalized) == normalized
+
+
+def test_many_math_mode_pairs_match_plain_ocr_page():
+    fragments = [r"x = \frac{a+b}{c}", r"y = \sqrt{x+1}", "z = (x+y)^2"] * 5
+    pairs = [(r"\(", r"\)"), (r"\[", r"\]"), ("$", "$"), ("$$", "$$")]
+    latex = "\n".join(pairs[i % 4][0] + text + pairs[i % 4][1]
+                      for i, text in enumerate(fragments))
+    plain = "\n".join(fragments)
+    normalized = skeleton(latex)
+    assert normalized == skeleton(plain)
+    assert cer(latex, plain) == 0
+    assert skeleton(normalized) == normalized

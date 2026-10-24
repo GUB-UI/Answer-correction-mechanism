@@ -1,5 +1,13 @@
 # Harness v2 changes
 
+## PR #12 follow-up: remove math-mode delimiters from OCR skeletons
+
+- Remove `\(` / `\)`, `\[` / `\]`, `$`, and `$$` as layout separators, preserving numeric, function, and unknown-command token boundaries. Keep existing fraction, root, power, and expression grouping rules.
+- Preserve literal escaped braces `\{` / `\}` in their original spelling so repeated normalization cannot mistake them for math-mode delimiters.
+- Added 36 regression cases covering delimited/undelimited equivalence, token boundaries, content brackets, a page with 15 delimiter pairs, and idempotence. Before the fix, 26 new cases failed.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **378 passed**, with no network or API calls.
+
 ## PR #12: remove LaTeX layout from OCR skeletons and canonicalize symbols
 
 - Remove line breaks `\\`, arbitrary `\begin` / `\end` environment markers, spacing commands, `\left` / `\right`, `\displaystyle`, and alignment `&` as separators before parsing fraction/root arguments. Preserve numeric and function token boundaries through the existing grouping pass.

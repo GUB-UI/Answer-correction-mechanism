@@ -1,5 +1,13 @@
 # Colab / CUDA 対応の変更一覧
 
+## PR #12 追補: 数式モードの区切りを OCR 骨格から除去
+
+- `\(` / `\)`、`\[` / `\]`、`$`、`$$` をレイアウトの区切りとして除去し、数字・関数名・未知の命令のトークン境界を保持する。分数・根号・指数・括弧の範囲は既存の規則で維持する。
+- 内容としてのエスケープ済み波括弧 `\{` / `\}` はその表記を保持し、再正規化で数式モードの区切りと誤認しないようにした。
+- 区切りあり／なしの同値性、境界、内容の括弧、15組の区切りを含むページ、冪等性の回帰テストを36件追加。修正前は26件が失敗することを確認した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **378 件成功**（ネットワーク・API 呼び出しなし）。
+
 ## PR #12: OCR 骨格から LaTeX レイアウトを除去し、記号表記を統一
 
 - 改行 `\\`、任意の環境の `\begin` / `\end` マーカー、空白命令、`\left` / `\right`、`\displaystyle`、整列用 `&` を区切りとして除去する。分数・根号の引数を読む前に処理し、数字や関数名が連結されないよう既存の括弧処理で境界を保持する。

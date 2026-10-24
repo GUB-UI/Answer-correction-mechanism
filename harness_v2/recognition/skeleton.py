@@ -47,13 +47,13 @@ _SYMBOLS = {
     "varrho": "ρ", "varsigma": "ς", "varphi": "φ", "circ": "°", "infty": "∞",
 }
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
-_LAYOUT = re.compile(r"\\(?:\\|[,;:! ])|\\(?:begin|end)\s*\{[^{}]*\}|&")
+_LAYOUT = re.compile(r"\\(?:\\|[,;:! ()\[\]])|\\(?:begin|end)\s*\{[^{}]*\}|&|\$+")
 _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
                "text", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
 # cannot be manufactured by concatenating formerly separate operands.
 _TOKEN = re.compile(r"\\[A-Za-z]+|sqrt(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
-_DROP = set("$_") | {"\u0304", "\u0305"}
+_DROP = {"_", "\u0304", "\u0305"}
 _PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!": 0, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4}
 
@@ -130,6 +130,12 @@ def _content(text: str) -> str:
                 pos = command.end()
                 continue
             ch = text[pos]
+            if ch == "\\" and text[pos + 1:pos + 2] in ("{", "}"):
+                # Literal braces are content, not groups. Keep their spelling
+                # so a second pass cannot mistake them for math-mode markers.
+                out.append(text[pos:pos + 2])
+                pos += 2
+                continue
             if not ch.isspace() and ch not in _DROP:
                 if pos and text[pos - 1].isspace() and (ch.isalnum() or ch == "."):
                     # A removed layout/whitespace boundary must not join numbers
