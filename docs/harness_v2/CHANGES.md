@@ -1,5 +1,10 @@
 # Harness v2 changes
 
+## PR #10 log cleanup / fix 1: remove remaining agent artifacts
+
+- Confirmed there were no repository references, then removed `codex_fix_gpt-6.1-sol.md` and `handshake_log_after_fix.txt` with ordinary tracked deletions. History is unchanged.
+- Added a hygiene assertion that neither file appears in `git ls-files`; verified failure before deletion and both hygiene tests passing afterward.
+
 ## PR #10: exclude agent debug logs
 
 - Removed `codex_fix_stderr.log` from the tree going forward; existing commit history is not rewritten.

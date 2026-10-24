@@ -13,6 +13,10 @@ def test_no_tracked_agent_or_debug_logs():
     result = subprocess.run(
         ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True, text=True
     )
+    removed_artifacts = {"codex_fix_gpt-6.1-sol.md", "handshake_log_after_fix.txt"}
+    assert removed_artifacts.isdisjoint(result.stdout.split("\0")), (
+        "Removed agent artifacts must not be tracked"
+    )
     logs = [
         name
         for name in result.stdout.split("\0")
