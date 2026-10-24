@@ -295,3 +295,14 @@ def test_rereview_fix_6_compatibility_marks_are_idempotent(mark, canonical):
 ])
 def test_sol_r5_fix_1_explicit_overline_inside_roots(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\sqrt{[0,1)}', '√[0,1)', 'sqrt([0,1))'], [r'\sqrt{[0,1]}', '√[0,1]', 'sqrt([0,1])']),
+    ([r'\sqrt{[0,1]}', '√[0,1]', 'sqrt([0,1])'], ['sqrt([0,1))', 'sqrt(0,1)']),
+    ([r'\sqrt[3]{[0,1)}', r'\sqrt[3][0,1)', '∛[0,1)', 'root(3,[0,1))'],
+     ['root(3,[0,1])', '∛[0,1]', 'root(3,0,1)']),
+    ([r'\sqrt[2]{[0,1)}', '√[0,1)', 'sqrt([0,1))'], ['sqrt([0,1])']),
+])
+def test_sol_r5_fix_2_root_interval_endpoints(forms, different):
+    check_forms(forms, different)

@@ -752,6 +752,10 @@ An index whose canonical form is `2`, including `\sqrt[2]{...}` and `root(2,...)
 
 A stroke removed as the root's own vinculum is only the marker produced from combining marks. An explicit `\overline` stays, so `\sqrt{\overline{z}}` is `sqrt(overline(z))` and does not match `\sqrt{z}`. Unicode root strokes such as `√13̅` and `√A̅B̅` still match the plain root. Tests that treated the explicit overline as the same form were updated.
 
+## PR #12 / Sol r5 fix 2: Keep the closing bracket of an interval inside a root
+
+A square-bracket radicand keeps the delimiter that closed it. `√[0,1)` is `sqrt([0,1))` and does not match `√[0,1]`. The same holds after a root index. The braced LaTeX form uses that same skeleton. Parentheses still delimit a radicand.
+
 ## PR #12 / Challenge re-review fix 5: Nested malformed fields invalidate
 
 A planned `problem_id` that is not text, a repetition that is not a positive integer, a grading value that is not a record, and a grading status that is not text each produce an explicit reason. The report is not comparable and the CLI exits 2. Scores from those records are not used. Output stays 0600 and input permissions are unchanged.

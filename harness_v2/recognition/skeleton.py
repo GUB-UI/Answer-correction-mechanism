@@ -204,7 +204,9 @@ def _radicand(text: str, start: int) -> tuple[str, int] | None:
     if start < len(text) and text[start] == "[":
         group = _group(text, start, delimiters="[")
         if group:
-            return "[" + group[0] + "]", group[1]
+            # Keep the bracket that actually closed the interval. [0,1) and
+            # [0,1] are different endpoints.
+            return "[" + group[0] + text[group[1] - 1], group[1]
     return _group(text, start, delimiters="{(")
 
 
