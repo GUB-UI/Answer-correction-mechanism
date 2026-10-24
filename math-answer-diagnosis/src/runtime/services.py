@@ -84,6 +84,17 @@ def http_health(url: str, timeout: float = 3.0) -> bool:
     return True
 
 
+_SESSION_CONFLICT = (
+    "Service configuration conflicts with an existing session in this run directory; "
+    "use a separate run directory or explicitly stop and restart the application."
+)
+
+
+def canonical_run_dir(path: Path) -> str:
+    """One key for every path that names the same run directory."""
+    return str(Path(path).resolve())
+
+
 def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -143,6 +154,47 @@ class ServiceManager:
     def launch_file(self, name: str) -> Path:
         return self.run_dir / f"{name}.launch.json"
 
+    def owner_file(self) -> Path:
+        return self.run_dir / "services.owner.json"
+
+    def _session_identity(self) -> str:
+        payload = {
+            "mode": self.mode,
+            "exclusive_gpu": self.exclusive_gpu,
+            "specs": {name: asdict(self.specs[name]) for name in sorted(self.specs)},
+        }
+        encoded = json.dumps(payload, sort_keys=True, default=str, ensure_ascii=True)
+        return hashlib.sha256(encoded.encode()).hexdigest()
+
+    def _owner_record(self) -> dict[str, Any] | None:
+        try:
+            value = json.loads(self.owner_file().read_text())
+        except (OSError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def _claim_session(self) -> None:
+        """Record this configuration as the run-directory owner, or refuse.
+
+        Must run under the shared filesystem lock, before any service is stopped.
+        A live owner with a different launch identity blocks the caller. A dead
+        owner can be replaced. Matching identities may share the directory.
+        """
+        identity = self._session_identity()
+        record = self._owner_record()
+        pid = record.get("pid") if record else None
+        same = bool(record) and record.get("identity") == identity
+        alive = isinstance(pid, int) and pid > 0 and _pid_alive(pid)
+        if record and not same and alive:
+            raise ServiceStartError(_SESSION_CONFLICT)
+        if same and alive and pid != os.getpid():
+            return
+        if not same or not alive or pid != os.getpid():
+            write_private(
+                self.owner_file(),
+                json.dumps({"pid": os.getpid(), "identity": identity}),
+            )
+
     def _launch_identity(self, name: str, pid: int) -> dict[str, Any]:
         spec = json.dumps(asdict(self.specs[name]), sort_keys=True, default=str)
         return {"pid": pid, "spec_sha256": hashlib.sha256(spec.encode()).hexdigest()}
@@ -194,6 +246,7 @@ class ServiceManager:
         if name not in self.specs:
             raise KeyError(f"Unknown service: {name}")
         with self._locked():
+            self._claim_session()
             spec = self.specs[name]
             if self.exclusive_gpu and spec.uses_gpu:
                 for other_name, other in self.specs.items():
@@ -253,6 +306,8 @@ class ServiceManager:
 
     def stop(self, name: str) -> bool:
         with self._locked():
+            if self.managed:
+                self._claim_session()
             return self._stop_unlocked(name)
 
     def _stop_unlocked(self, name: str) -> bool:
@@ -282,6 +337,8 @@ class ServiceManager:
     def stop_all(self) -> list[str]:
         stopped: list[str] = []
         with self._locked():
+            if self.managed:
+                self._claim_session()
             for name in self.specs:
                 if self._stop_unlocked(name):
                     stopped.append(name)
@@ -450,20 +507,20 @@ def build_service_manager(config: AppConfig) -> ServiceManager:
     )
 
 
-_MANAGERS: dict[tuple[str, str], tuple[AppConfig, ServiceManager]] = {}
+_MANAGERS: dict[str, tuple[AppConfig, ServiceManager]] = {}
 _MANAGERS_LOCK = threading.RLock()
 
 
 def get_service_manager(config: AppConfig) -> ServiceManager:
-    key = (str(config.project_root), str(config.run_dir))
+    key = canonical_run_dir(config.run_dir)
     with _MANAGERS_LOCK:
         entry = _MANAGERS.get(key)
         if entry is None or entry[0] != config:
             if entry is not None and (entry[1].managed or config.services.mode == "managed"):
-                raise ServiceStartError(
-                    "Service configuration conflicts with an existing session in this run directory; "
-                    "use a separate run directory or explicitly stop and restart the application."
-                )
+                raise ServiceStartError(_SESSION_CONFLICT)
             manager = build_service_manager(config)
+            if manager.managed is True:
+                with manager._locked():
+                    manager._claim_session()
             _MANAGERS[key] = (config, manager)
         return _MANAGERS[key][1]
