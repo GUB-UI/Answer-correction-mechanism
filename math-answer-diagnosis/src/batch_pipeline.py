@@ -54,6 +54,7 @@ class BatchItem:
     max_score: float | None = None
     status: Literal["validated", "review_required", "failed"] = "failed"
     errors: list[str] = field(default_factory=list)
+    reuse_unavailable_reason: str | None = None
 
 
 @dataclass
@@ -275,6 +276,7 @@ def run_batch(
             if startup_error is not None:
                 raise startup_error
             metadata = metadata_for(context)
+            before_reason = getattr(adapter, "reuse_unavailable_reason", None)
             if opts.skip_existing_diagnosis and complete_grading_metadata(metadata):
                 done = [
                     d for d in storage.get_diagnosis_results_for_answer(context.answer_id)
@@ -302,6 +304,17 @@ def run_batch(
             diagnosis.grading_metadata = (
                 metadata if complete_grading_metadata(metadata) and metadata == after else None
             )
+            if diagnosis.grading_metadata is None:
+                if not complete_grading_metadata(metadata):
+                    reason = before_reason
+                elif not complete_grading_metadata(after):
+                    reason = getattr(adapter, "reuse_unavailable_reason", None)
+                else:
+                    reason = "grading_configuration_changed_during_generation"
+                diagnosis.reuse_unavailable_reason = (
+                    reason if isinstance(reason, str) and reason else "grading_metadata_incomplete"
+                )
+            item.reuse_unavailable_reason = diagnosis.reuse_unavailable_reason
             storage.save_diagnosis_result(diagnosis)
             item.diagnosis_id = diagnosis.diagnosis_id
             item.score, item.max_score = diagnosis.score, diagnosis.max_score

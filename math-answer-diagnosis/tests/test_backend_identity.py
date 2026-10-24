@@ -163,3 +163,10 @@ def test_server_source_and_library_changes_invalidate_fingerprint(monkeypatch):
     monkeypatch.setattr(Path, "read_bytes", lambda path: original_read(path) + b"\n# source change" if path.name == "_openai_compat.py" else original_read(path))
     third = _loaded_backend(monkeypatch).backend_fingerprint()
     assert second != third
+
+
+def test_health_timeout_has_explicit_reason(tmp_path, monkeypatch):
+    client = LMStudioClient(load_config(tmp_path))
+    monkeypatch.setattr("urllib.request.urlopen", MagicMock(side_effect=TimeoutError()))
+    assert client.backend_fingerprint() is None
+    assert client.fingerprint_unavailable_reason == "backend_health_timeout"

@@ -38,6 +38,7 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
         self.config = config or load_config()
         self.lmstudio_client = lmstudio_client or LMStudioClient(self.config)
         self.transport = transport
+        self.reuse_unavailable_reason: str | None = None
 
     def _messages(self, context: DiagnosisRunContext) -> list[dict]:
         prompt_type = context.prompt_type or DEFAULT_DIAGNOSIS_PROMPT_TYPE
@@ -54,15 +55,23 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
     def backend_fingerprint(self) -> dict | None:
         fingerprint_builder = getattr(self.lmstudio_client, "backend_fingerprint", None)
         backend = fingerprint_builder() if fingerprint_builder else None
-        return backend if valid_backend_fingerprint(backend) else None
+        if not valid_backend_fingerprint(backend):
+            reason = getattr(self.lmstudio_client, "fingerprint_unavailable_reason", None)
+            self.reuse_unavailable_reason = reason if isinstance(reason, str) and reason else "backend_fingerprint_unavailable"
+            return None
+        self.reuse_unavailable_reason = None
+        return backend
 
     def grading_metadata(self, context: DiagnosisRunContext, *, backend=_UNSET) -> dict | None:
         if backend is _UNSET:
             backend = self.backend_fingerprint()
         if not valid_backend_fingerprint(backend):
+            self.reuse_unavailable_reason = self.reuse_unavailable_reason or "backend_fingerprint_unavailable"
             return None
+        self.reuse_unavailable_reason = None
         request_builder = getattr(self.lmstudio_client, "prepare_chat_request", None)
         if not callable(request_builder):
+            self.reuse_unavailable_reason = "final_request_unavailable"
             return None
         request = request_builder(
             messages=self._messages(context),
@@ -70,6 +79,7 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
             **self.generation_settings,
         )
         if not isinstance(request, dict) or not isinstance(request.get("messages"), list):
+            self.reuse_unavailable_reason = "final_request_unavailable"
             return None
         settings = {"request": self.generation_settings, "backend": backend}
         return build_grading_metadata(

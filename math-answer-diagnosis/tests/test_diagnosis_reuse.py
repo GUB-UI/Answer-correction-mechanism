@@ -462,3 +462,28 @@ def test_batch_shares_startup_and_backend_snapshot(case, monkeypatch):
         # Before batch + after each generation; all reused needs just one snapshot.
         assert client.backend_fingerprint.call_count == (3 if not skip else 1)
     assert client.chat_completion.call_count == 2
+
+
+def test_unavailable_backend_reason_is_persisted_without_failing_grade(case):
+    storage, config, options, client, run = case
+    client.backend_fingerprint.return_value = None
+    client.fingerprint_unavailable_reason = "backend_health_timeout"
+    first = run()
+    saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
+    assert saved.reuse_unavailable_reason == "backend_health_timeout"
+    assert first.reuse_unavailable_reason == "backend_health_timeout"
+    assert first.status == "review_required"
+
+
+def test_changed_fingerprint_reason_is_persisted(case):
+    storage, config, options, client, run = case
+
+    def switch(**kwargs):
+        client.backend_fingerprint.return_value["settings"]["model_revision"] = "revision-B"
+        return client.chat_completion.return_value
+
+    client.chat_completion.side_effect = switch
+    first = run()
+    saved = Storage(config).get_diagnosis_result(first.diagnosis_id)
+    assert saved.grading_metadata is None
+    assert saved.reuse_unavailable_reason == "grading_configuration_changed_during_generation"
