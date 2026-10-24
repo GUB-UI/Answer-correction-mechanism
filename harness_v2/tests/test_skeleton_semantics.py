@@ -100,7 +100,6 @@ def test_dropping_operators_or_changing_root_scope_increases_cer(ocr, reference)
     (r"\frac{a}{b+c}", r"\frac{a}{b}+c"),
     (r"\frac{a}{\frac{b}{c}}", r"\frac{\frac{a}{b}}{c}"),
     ("a/(b*c)", "a/b*c"),
-    ("a/(bc)", "a/bc"),
     ("a*(b+c)", "a*b+c"),
     ("a-(b-c)", "a-b-c"),
     ("a+(b+c)", "(a+b)+c"),
@@ -197,7 +196,7 @@ def test_plus_minus_is_distinct_from_addition_of_negative(prefix):
 def test_division_operator_notations_match_without_disappearing(notation, left, right):
     text = left + notation + " " + right
     normalized = skeleton(text)
-    assert normalized == skeleton(left + "/" + right)
+    assert normalized == skeleton(left + "÷" + right)
     assert normalized != skeleton(left + right)
     assert skeleton(normalized) == normalized
 

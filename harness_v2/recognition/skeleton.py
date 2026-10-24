@@ -27,11 +27,11 @@ _COMMANDS = [
     (r"\\gt(?![A-Za-z])", ">"),
     (r"\\minus(?![A-Za-z])", "-"),
     (r"\\(?:times|cdot)(?![A-Za-z])", "*"),
-    (r"\\div(?![A-Za-z])", "/"),
+    (r"\\div(?![A-Za-z])", "÷"),
     (r"\\pm(?![A-Za-z])", "±"),
 ]
 _UNICODE = {"≤": "<=", "≦": "<=", "≥": ">=", "≧": ">=", "≠": "!=", "−": "-",
-            "×": "*", "·": "*", "÷": "/"}
+            "×": "*", "·": "*", "÷": "÷"}
 _SYMBOLS = {
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
     "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
@@ -115,7 +115,7 @@ _FORMATTING = {"left", "right", "mathrm", "mathit", "displaystyle", "textstyle",
 _TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + r")(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _BOUNDARY = "\u2063"  # Canonical token boundary, never a mathematical parenthesis.
 _PRECEDENCE = {";": -1, "¦": -1, ",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
-               "*": 2, "/": 2, "^": 4, "_": 4}
+               "*": 2, "/": 2, "÷": 2, "^": 4, "_": 4}
 
 
 def _group(text: str, start: int, *, delimiters: str = "{") -> tuple[str, int] | None:
@@ -286,7 +286,7 @@ def _precedence(text: str) -> int:
             pos += len(ch)
             continue
         if operand:
-            weakest = min(weakest, 2)
+            weakest = min(weakest, 3)
         root = _CALL_HEAD.match(text, pos)
         start = root.end() if root else pos
         group = _expression_group(text, start)
@@ -323,10 +323,10 @@ def _grouping(text: str) -> str:
             strength = _precedence(inner)
             left = out[-2:] if out[-2:] in _PRECEDENCE else out[-1:]
             right = text[end:end + 2] if text[end:end + 2] in _PRECEDENCE else text[end:end + 1]
-            lp = _PRECEDENCE.get(left, 2) if left else -1
-            if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/^_"):
+            lp = _PRECEDENCE.get(left, 3) if left else -1
+            if left in ("+", "-", "±") and (len(out) == 1 or out[-2] in "(=<>!+-±*/÷^_"):
                 lp = 3  # unary sign
-            rp = _PRECEDENCE.get(right, 2) if right else -1
+            rp = _PRECEDENCE.get(right, 3) if right else -1
             left_ok = strength > lp or (left in ("^", "_") and strength >= 3)
             right_ok = strength > rp if right in ("^", "_") else strength >= rp
             signed_factor = (left and left not in _PRECEDENCE and inner[:1] in ("+", "-", "±"))

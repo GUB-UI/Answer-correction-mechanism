@@ -45,7 +45,7 @@ def test_default_preprocess_is_none():
 
 
 @pytest.mark.parametrize("a,b", [
-    (r"$\frac{1}{2}a$", "1/2a"),
+    (r"$\frac{1}{2}a$", "(1/2)a"),
     (r"\dfrac{a+1}{2}", "(a+1)/2"),
     (r"\frac{\frac{1}{2}}{3}", "(1/2)/3"),
     (r"$x \leq 1$", "x≤1"),

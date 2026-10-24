@@ -671,3 +671,8 @@ Strip balanced array column specs, environment positions, row spacing, hspace/vs
 ## PR #12 / Fix 10: Make command radicands and incomplete input idempotent
 
 Read whole command arguments and validate nested bracket pairing. Boundary-marked incomplete commands remain opaque; orphan combining marks become explicit tokens; collapse separators after layout removal. Add command-root collision/equivalence/idempotence regressions and a deterministic 4,000-input fuzz test. 445 related tests passed; an additional 20,000 generated inputs were idempotent.
+
+
+## PR #12 / Fix 11: Distinguish ÷ and bind implicit multiplication tighter
+
+Keep `\div`/`÷` as a distinct operator and give implicit multiplication higher precedence than explicit multiplication/division under the Japanese school convention. Retain whole-fraction grouping before adjacent factors; correct old division and fraction expectations. Collision, equivalence and idempotence regressions: 448 related tests passed.

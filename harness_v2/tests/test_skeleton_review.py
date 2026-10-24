@@ -169,3 +169,13 @@ def test_fix_10_seeded_notation_fuzz_is_idempotent():
         text = ''.join(rng.choices(tokens, k=rng.randrange(1, 16)))
         normalized = skeleton(text)
         assert skeleton(normalized) == normalized, repr(text)
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'6\div 2(1+2)', '6÷2(1+2)'], [r'\frac{6}{2}(1+2)', '6/2(1+2)']),
+    (['a/(bc)', r'\frac{a}{bc}', 'a/bc'], ['(a/b)c', 'a/b*c']),
+    (['a/(b*c)', r'\frac{a}{b*c}'], ['a/b*c', 'a/bc']),
+    (['(ab)/c', r'\frac{ab}{c}', 'ab/c'], ['a(b/c)']),
+])
+def test_fix_11_implicit_multiplication_and_division(forms, different):
+    check_forms(forms, different)
