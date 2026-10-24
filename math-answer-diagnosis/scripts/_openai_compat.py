@@ -165,8 +165,9 @@ def make_handler(state: ServerState) -> type[BaseHTTPRequestHandler]:
                     try:
                         fingerprint = getattr(state.backend, "backend_fingerprint", None)
                         value = fingerprint() if callable(fingerprint) else None
-                        # Validate serialization inside the guard, before sending headers.
-                        json.dumps(value, allow_nan=False)
+                        # Use the same UTF-8 encoding as _send_json. ASCII escaping
+                        # accepts lone surrogates that the response body cannot encode.
+                        json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
                         payload["backend_fingerprint"] = value
                         if value is None:
                             payload["backend_fingerprint_error"] = "unavailable"
