@@ -22,8 +22,21 @@ def valid_backend_fingerprint(value: Any) -> bool:
         return False
     model = value.get("model_id")
     settings = value.get("settings")
-    return (isinstance(model, str) and bool(model.strip())
-            and isinstance(settings, dict) and bool(settings))
+    if not (isinstance(model, str) and model.strip() and isinstance(settings, dict) and settings):
+        return False
+    revision = settings.get("model_revision")
+    weights = settings.get("weights_sha256")
+    if not ((isinstance(revision, str) and revision.strip())
+            or (isinstance(weights, str) and re.fullmatch(r"[0-9a-f]{64}", weights))):
+        return False
+    source = value.get("server_source_sha256")
+    versions = value.get("library_versions")
+    return (
+        isinstance(source, str) and re.fullmatch(r"[0-9a-f]{64}", source) is not None
+        and isinstance(versions, dict)
+        and all(isinstance(versions.get(name), str) and versions[name].strip()
+                for name in ("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"))
+    )
 
 
 def complete_grading_metadata(value: Any) -> bool:
@@ -31,10 +44,14 @@ def complete_grading_metadata(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     if any(not isinstance(value.get(key), str) or not value[key].strip()
-           for key in ("provider", "model_id")):
+           for key in ("provider", "model_id", "model_alias")):
         return False
     if any(not isinstance(value.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None
            for key in ("prompt_version", "rubric_identity")):
+        return False
+    post_processing = value.get("post_processing")
+    if (not isinstance(post_processing, dict)
+            or type(post_processing.get("review_flags_route")) is not bool):
         return False
     settings = value.get("generation_settings")
     if not isinstance(settings, dict):
@@ -44,6 +61,8 @@ def complete_grading_metadata(value: Any) -> bool:
         return type(version) is int and version > 0
     request = settings.get("request")
     if not isinstance(request, dict) or not valid_backend_fingerprint(settings.get("backend")):
+        return False
+    if value["model_id"] != settings["backend"]["model_id"]:
         return False
     temperature = request.get("temperature")
     max_tokens = request.get("max_tokens")
@@ -68,8 +87,11 @@ def build_grading_metadata(
 
     problem = context.problem
     return {
+        "post_processing": {"review_flags_route": review_routing_enabled()},
         "provider": provider,
-        "model_id": context.model_name,
+        "model_id": (context.model_name if provider == "mock"
+                     else generation_settings.get("backend", {}).get("model_id")),
+        "model_alias": context.model_name,
         "prompt_version": digest(messages),
         "rubric_identity": digest({
             "problem_id": problem.problem_id,

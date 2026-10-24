@@ -36,6 +36,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from src.config import AppConfig
+from src.private_io import ensure_private_directory, private_open, write_private
 
 GLM_OCR = "glm_ocr"
 XIAOMI_OCR = "xiaomi_ocr"
@@ -157,12 +158,12 @@ class ServiceManager:
 
     @contextmanager
     def _locked(self):
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.run_dir)
         with self._thread_lock:
             if fcntl is None:
                 yield
                 return
-            with (self.run_dir / "services.lock").open("w") as lock_file:
+            with private_open(self.run_dir / "services.lock", "a") as lock_file:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 try:
                     yield
@@ -214,10 +215,10 @@ class ServiceManager:
         existing = self.read_pid(name)
         if existing is not None:
             self._stop_unlocked(name)
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(self.run_dir)
         log_path = self.log_file(name)
         env = {**os.environ, **spec.env}
-        with log_path.open("ab") as log:
+        with private_open(log_path, "ab") as log:
             log.write(f"\n===== start {name}: {shlex.join(spec.command)} =====\n".encode())
             log.flush()
             process = subprocess.Popen(
@@ -229,8 +230,8 @@ class ServiceManager:
                 env=env,
                 start_new_session=True,
             )
-        self.pid_file(name).write_text(str(process.pid))
-        self.launch_file(name).write_text(json.dumps(self._launch_identity(name, process.pid)))
+        write_private(self.pid_file(name), str(process.pid))
+        write_private(self.launch_file(name), json.dumps(self._launch_identity(name, process.pid)))
         self._record("start", name, pid=process.pid)
         deadline = time.monotonic() + spec.startup_timeout_sec
         while time.monotonic() < deadline:
@@ -458,8 +459,11 @@ def get_service_manager(config: AppConfig) -> ServiceManager:
     with _MANAGERS_LOCK:
         entry = _MANAGERS.get(key)
         if entry is None or entry[0] != config:
-            if entry is not None and entry[1].managed:
-                entry[1].stop_all()
+            if entry is not None and (entry[1].managed or config.services.mode == "managed"):
+                raise ServiceStartError(
+                    "Service configuration conflicts with an existing session in this run directory; "
+                    "use a separate run directory or explicitly stop and restart the application."
+                )
             manager = build_service_manager(config)
             _MANAGERS[key] = (config, manager)
         return _MANAGERS[key][1]

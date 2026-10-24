@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import socket
 from pathlib import Path
 
 from src.adapters.diagnosis_helpers import normalize_question_scores
@@ -30,18 +29,15 @@ def test_colab_env_replaces_mac_dotenv_values(tmp_path: Path) -> None:
     assert "DIAGNOSIS_PROVIDER=omlx" not in text
 
 
-def test_busy_glm_port_moves_to_the_next_free_port() -> None:
+def test_busy_glm_port_moves_to_the_next_free_port(monkeypatch) -> None:
     clear_assigned_ports()
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(("127.0.0.1", 0))
-    sock.listen(1)
-    busy = sock.getsockname()[1]
+    busy = 18080
+    monkeypatch.setattr("src.runtime.ports.port_in_use", lambda host, port: port == busy)
     try:
         chosen = assign_listen_port("glm_ocr", busy)
-        assert chosen != busy
+        assert chosen == busy + 1
         assert assign_listen_port("glm_ocr", busy) == chosen
     finally:
-        sock.close()
         clear_assigned_ports()
 
 
