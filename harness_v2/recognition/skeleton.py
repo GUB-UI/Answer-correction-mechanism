@@ -223,6 +223,21 @@ def _root_argument(text: str, root: re.Match) -> tuple[str | None, str, int]:
     return index, inner, end
 
 
+def _root_call_parts(text: str) -> tuple[str, str] | None:
+    """Split ``index, radicand`` at a top-level comma."""
+    depth = 0
+    for pos, ch in enumerate(text):
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            if depth == 0:
+                return None
+            depth -= 1
+        elif ch == "," and depth == 0:
+            return text[:pos], text[pos + 1:]
+    return None
+
+
 def _content(text: str) -> str:
     """Strip formatting, retaining root scope and expression grouping."""
     out, pos = [], 0
@@ -230,10 +245,18 @@ def _content(text: str) -> str:
         root = _ROOT_HEAD.match(text, pos)
         if root:
             index, inner, pos = _root_argument(text, root)
-            head = "root" if index is not None or root.group() == "root" else "sqrt"
+            if index is None and root.group() == "root":
+                parts = _root_call_parts(inner)
+                if parts:
+                    index, inner = parts
             index_content = _content(index) if index is not None else ""
-            if _precedence(index_content) == -1:
+            # An explicit index of two is the ordinary square root.
+            square = index_content == "2"
+            if square:
+                index = None
+            elif index is not None and _precedence(index_content) == -1:
                 index_content = f"({index_content})"
+            head = "sqrt" if square or (index is None and root.group() != "root") else "root"
             argument = f"{index_content}," if index is not None else ""
             # An overline that wraps the whole radicand is the root's own
             # vinculum. An explicit bar is a mathematical decoration and stays.

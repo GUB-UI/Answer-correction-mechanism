@@ -265,6 +265,15 @@ def test_rereview_fix_4_unicode_bold_matches_mathbf(glyph, command, plain):
     check_forms([glyph, command, 'mathbf(' + plain + ')'], [plain])
 
 
+@pytest.mark.parametrize('forms,different', [
+    ([r'\sqrt[2]{x}', r'\sqrt{x}', '√x', 'root(2,x)', 'sqrt(x)'], [r'\sqrt[3]{x}', 'root(3,x)']),
+    ([r'\sqrt[2]{x+1}', 'sqrt(x+1)', 'root(2,x+1)'], ['root(2,x)+1', r'\sqrt[4]{x+1}']),
+    ([r'\sqrt[2]{[x]}', '√[x]', 'root(2,[x])', 'sqrt([x])'], ['sqrt(x)', 'root(3,[x])']),
+])
+def test_rereview_fix_7_explicit_square_root_index(forms, different):
+    check_forms(forms, different)
+
+
 @pytest.mark.parametrize('mark,canonical', [
     ('\u00af', 'overline(x)'),
     ('\uffe3', 'overline(x)'),
