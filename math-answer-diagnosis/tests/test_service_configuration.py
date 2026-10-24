@@ -18,7 +18,7 @@ def no_network(monkeypatch):
 
 
 @pytest.mark.parametrize("change", ["model_id", "max_new_tokens", "quantization", "command", "port", "alias"])
-def test_cached_manager_is_rebuilt_and_owned_services_stopped(tmp_path, monkeypatch, change):
+def test_cached_manager_refuses_conflicting_managed_configuration(tmp_path, monkeypatch, change):
     config = load_config(tmp_path)
     config = replace(config, services=replace(config.services, mode="managed"))
     monkeypatch.setattr(services, "_MANAGERS", {})
@@ -36,9 +36,11 @@ def test_cached_manager_is_rebuilt_and_owned_services_stopped(tmp_path, monkeypa
         changed = replace(config, services=replace(
             config.services, llm=replace(config.services.llm, **{change: value}),
         ))
-    assert services.get_service_manager(changed) is new
-    old.stop_all.assert_called_once_with()
-    assert build.call_args.args[0] == changed
+    with pytest.raises(services.ServiceStartError, match="configuration"):
+        services.get_service_manager(changed)
+    old.stop_all.assert_not_called()
+    assert services.get_service_manager(config) is old
+    assert build.call_count == 1
 
 
 @pytest.mark.parametrize("launch", ["matching", "old_config", "missing", "wrong_pid", "invalid"])
@@ -75,3 +77,21 @@ def test_start_records_the_launched_spec_and_pid(tmp_path, monkeypatch):
     manager._start_unlocked("llm")
     assert manager.pid_file("llm").read_text() == "12345"
     assert manager._launch_matches("llm", process.pid)
+
+
+def test_conflicting_session_cannot_stop_original_manager(tmp_path, monkeypatch):
+    config = load_config(tmp_path)
+    config = replace(config, services=replace(config.services, mode="managed"))
+    changed = replace(config, services=replace(config.services,
+                      llm=replace(config.services.llm, model_id="different-weights")))
+    monkeypatch.setattr(services, "_MANAGERS", {})
+    manager = MagicMock(managed=True)
+    build = MagicMock(return_value=manager)
+    monkeypatch.setattr(services, "build_service_manager", build)
+    assert services.get_service_manager(config) is manager
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="configuration"):
+            services.get_service_manager(changed)
+        assert services.get_service_manager(config) is manager
+    manager.stop_all.assert_not_called()
+    assert build.call_count == 1

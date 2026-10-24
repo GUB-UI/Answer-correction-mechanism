@@ -458,8 +458,11 @@ def get_service_manager(config: AppConfig) -> ServiceManager:
     with _MANAGERS_LOCK:
         entry = _MANAGERS.get(key)
         if entry is None or entry[0] != config:
-            if entry is not None and entry[1].managed:
-                entry[1].stop_all()
+            if entry is not None and (entry[1].managed or config.services.mode == "managed"):
+                raise ServiceStartError(
+                    "Service configuration conflicts with an existing session in this run directory; "
+                    "use a separate run directory or explicitly stop and restart the application."
+                )
             manager = build_service_manager(config)
             _MANAGERS[key] = (config, manager)
         return _MANAGERS[key][1]
