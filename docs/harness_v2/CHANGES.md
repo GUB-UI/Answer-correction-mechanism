@@ -407,3 +407,37 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | `harness_v2/tests/test_p3_ocr_exemption.py, harness_v2/tests/test_p3_historical_ocr.py` | Cover prompt/call evidence, missing/null/invalid counters, one/both sides, current/history runs, malformed output/grading objects with supplied or saved datasets, and the CLI's private incomparable report. Remove downstream artifacts from the synthetic pre-OCR fixture; retain the real pre-OCR failure regression. Assert records remain unchanged and failed scores remain unscored. | Require affirmative exemption evidence while preserving genuine early failures, reference isolation, status validation and 0600/0700 reports without inference or score substitution. |
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **692 passed in 22.74s** (using `/workspace/venv_clean/bin` on PATH; existing loopback mocks allowed with sandbox escalation). No git writes; math-answer-diagnosis sources unchanged.
+
+## Phase 4 / 01: Prompt version registry and ambiguity-aware candidate prompt (2026-10-23)
+
+Improvement cycle 1, `changed_components = ["prompt"]`. Plan reviewed twice by GPT-6.1 Sol (read-only); the reviewed plan replaced an OCR token detector (overfit risk, multi-component) with this prompt-only change.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/grading/scorer.py` | `PROMPT_VERSIONS` registry; `build_prompt(..., prompt_version)` appends the registered instruction suffix. `v0`, `harness_v2_default` and legacy labels outside the `harness_v2_` namespace render the historical prompt byte for byte; unregistered `harness_v2_*` names raise. New `harness_v2_ambiguity_aware_v1`: source-neutral instruction to credit only written mathematics, never reconstruct content, cite garbled/ambiguous score-affecting passages verbatim and set uncertainty >= 0.5 with a review_reason, and not raise uncertainty for clear work or clear mistakes. | Surface transcription ambiguity through the existing uncertainty -> review_required rule without detector code, problem ids, formulas or scores. Typos in a variant name must not silently run the default prompt. |
+| `harness_v2/core/pipeline.py` | Pass the case `prompt_version` into `build_prompt`. | The configured version now selects the prompt, not only a label. |
+| `harness_v2/run.py` | `load_config` rejects unregistered `harness_v2_*` prompt versions before any provider call. | Fail before spending quota. |
+| `harness_v2/tests/test_p4_prompt_versions.py` | Pin default prompt hash; suffix-only difference; no problem/formula/score tokens in the suffix; legacy labels; typo rejection; uncertainty -> review_required and null -> failed without filling. | Regression contracts for the candidate. |
+
+## Phase 4 / 02: Strict prompt version registry (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/grading/scorer.py`, `harness_v2/run.py` | Only registered versions (`v0`, `harness_v2_default`, `harness_v2_ambiguity_aware_v1`) are accepted; any other name, including prefix typos and surrounding whitespace, raises before a provider call. | Sol diff review round 1 [major]: `harnes_v2_…` or ` harness_v2_…` silently rendered the default prompt under a misleading label. |
+| `harness_v2/tests/test_p4_prompt_versions.py` | Parametrized rejection cases; pipeline test asserting the provider receives the candidate suffix and the record carries the version. | Sol [minor]: protect pipeline dispatch, not just build_prompt. |
+| `harness_v2/tests/test_pipeline.py`, `test_p3_runner.py`, `test_p3_durable_identity.py` | Replace ad-hoc labels (`prompt-v0`, `p1`, `p2`) with registered versions. | Test fixtures must use real prompt versions under the strict registry. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **704 passed in 22.43s**.
+
+## Phase 4 / 03: Committed old-vs-new prompt experiment summary (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `docs/harness_v2/experiments/prompt_ambiguity_aware_v1_summary.md` | Aggregate, privacy-safe comparison of `harness_v2_default` vs `harness_v2_ambiguity_aware_v1` under identical model/config/dataset/OCR inputs: per-case 1-A/2-B/3-A statuses and totals, evidence traceability, unnecessary-flag change, an explicitly defined ambiguous-input detection rate, and limits. | Review request: the candidate must stay non-default until a human reviews the evidence. |
+| `harness_v2/tests/test_p4_experiment_summary.py` | Guards that the summary stays candidate-only and contains no images or local data paths. | Keep the committed artifact privacy-safe. |
+
+## Phase 4 / 04: Restack fixture fix (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/tests/test_private_permissions.py` | Use the registered `harness_v2_default` prompt version in the shared-input runner test. | The PR #10 permission test used an ad-hoc `v1` label, which the PR #11 strict registry rejects after the restack merge. |

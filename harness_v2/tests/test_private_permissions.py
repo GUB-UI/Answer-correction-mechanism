@@ -338,7 +338,7 @@ def test_runner_dataset_metrics_and_comparison_preserve_shared_inputs(tmp_path):
         "references": descriptor(labels)}))
     config = shared / "config.json"
     config.write_text(json.dumps({"name": "permission-test", "provider": "fixture", "model": "fixture",
-        "prompt_version": "v1", "rubric_version": "v1", "generation_settings": {},
+        "prompt_version": "harness_v2_default", "rubric_version": "v1", "generation_settings": {},
         "fixture_completion": json.dumps({"items": [{"item_id": "work", "score": 1, "max_points": 2,
             "math_reason": "Work shown", "evidence_spans": [{"text": "student work"}]}],
             "total_score": 1})}))

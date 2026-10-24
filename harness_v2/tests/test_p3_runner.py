@@ -13,7 +13,7 @@ from harness_v2.tests.test_pipeline import _valid
 
 def config_at(tmp_path, **changes):
     config = {'name': 'baseline', 'provider': 'fixture', 'model': 'fixture',
-              'generation_settings': {'temperature': 0, 'seed': 7}, 'prompt_version': 'p1',
+              'generation_settings': {'temperature': 0, 'seed': 7}, 'prompt_version': 'harness_v2_default',
               'rubric_version': 'r1', 'fixture_completion': _valid(), **changes}
     path = tmp_path / 'config.json'; path.write_text(json.dumps(config))
     return path

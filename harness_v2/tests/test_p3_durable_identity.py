@@ -111,7 +111,7 @@ def test_matching_rows_recover_missing_metadata_without_inference(tmp_path):
 def test_rewritten_metadata_cannot_hide_changed_config(tmp_path):
     config, manifest, out = config_at(tmp_path), make_dataset(tmp_path), tmp_path / 'runs'
     runner.run_experiment(config, manifest, repeats=1, out=out, commit='rev-a')
-    config_at(tmp_path, prompt_version='p2')
+    config_at(tmp_path, prompt_version='harness_v2_ambiguity_aware_v1')
     stored = json.loads((out / 'experiment.json').read_text())
     stored['config'] = runner.load_config(config)
     stored['identity'] = runner.identity({'config': stored['config'], 'dataset': load_dataset(manifest).manifest, 'commit': 'rev-a'})

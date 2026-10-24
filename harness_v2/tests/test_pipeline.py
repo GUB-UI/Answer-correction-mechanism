@@ -18,7 +18,7 @@ def _case(input_id: str, raw: str) -> dict:
         "problem_text": "solve",
         "answer_text": "x+1",
         "rubric_version": "rubric-v0",
-        "prompt_version": "prompt-v0",
+        "prompt_version": "v0",
         "reference_score": 99,
         "prior_ai_score": 1,
         "rubric": [{"item_id": "R1", "max_points": 4, "description": "work", "acceptable_expression": "1+x"}],
