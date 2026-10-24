@@ -81,12 +81,16 @@ def ocr_provenance(
             key: os.environ.get(key, "")
             for key in ("XIAOMI_OCR_MIN_EDGE", "XIAOMI_OCR_MAX_EDGE", "XIAOMI_OCR_PROMPT")
         }
-    if config.services.mode == "managed" and engine in {"glmocr_sdk", "xiaomi_ocr"}:
+    verified_engine = engine in {"glmocr_sdk", "xiaomi_ocr"}
+    if config.services.mode == "managed" and verified_engine:
         service = config.services.glm_ocr if engine == "glmocr_sdk" else config.services.xiaomi_ocr
         settings["server_model_id"] = service.model_id
         settings["server_command_sha256"] = hashlib.sha256(service.command.encode()).hexdigest()
     settings["service_mode"] = config.services.mode
-    if config.services.mode == "external" and engine in {"glmocr_sdk", "xiaomi_ocr"}:
+    # Both modes trust the process that actually answered /health. A managed
+    # server started by hand can be a different model than the one configured.
+    backend = None
+    if config.services.mode in {"external", "managed"} and verified_engine:
         backend = external_backend_fingerprint(config, engine)
         if backend is None:
             return None
@@ -97,10 +101,16 @@ def ocr_provenance(
         settings["formula_command_sha256"] = hashlib.sha256(
             config.services.unimernet.command.encode()
         ).hexdigest()
+    if config.services.mode == "managed" and backend is not None:
+        model_id = backend["model"]
+        model_revision = backend["revision"]
+    else:
+        model_id = config.ocr.model_name if engine != "mock" else "mock"
+        model_revision = config.ocr.revision
     return OCRProvenance(
         engine=engine,
-        model_id=config.ocr.model_name if engine != "mock" else "mock",
-        model_revision=config.ocr.revision,
+        model_id=model_id,
+        model_revision=model_revision,
         settings=settings,
         image_sha256=hashes,
     )
