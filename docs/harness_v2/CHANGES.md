@@ -1,5 +1,11 @@
 # Harness v2 changes
 
+## PR #10 log cleanup / fix 3: skip hygiene checks without a Git work tree
+
+- Check `git rev-parse --is-inside-work-tree` before each hygiene check; call `pytest.skip` if Git cannot run or ROOT is outside a work tree.
+- Regression tests remove Git from PATH and redirect ROOT to a temporary directory, covering all three checks. All six cases failed before the guard; all nine hygiene tests now pass.
+- Full-suite validation with `/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider`, a temporary guard against prohibited reads/network operations, and only the dataset-builder test deselected: **643 passed, 266 failed, 11 errors, 1 deselected**. These are execution restrictions, not a passing full suite. Blocked reads affect `test_contracts.py` (1), `test_p3_commit_identity.py` (14), `test_p3_comparison.py` (32), `test_p3_dataset.py` (5), `test_p3_durable_identity.py` (39), `test_p3_failed_settings.py` (36), `test_p3_historical_ocr.py` (32), `test_p3_metrics.py` (14), `test_p3_ocr_exemption.py` (77), and `test_p3_runner.py` (13). Socket restrictions affect math-answer-diagnosis's `test_colab_runtime.py` (1), `test_runtime.py` (2), and `test_intake_ui.py` (11 errors).
+
 ## PR #10 log cleanup / fix 2: ignore logs and transcripts at any depth
 
 - Expanded `.gitignore` and hygiene detection patterns for stderr/stdout/debug logs, agent/codex logs, handshake records, and codex fix/review/rereview transcripts.

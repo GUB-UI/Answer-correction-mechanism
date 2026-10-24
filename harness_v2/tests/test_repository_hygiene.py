@@ -4,6 +4,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG_PATTERNS = (
@@ -13,7 +15,20 @@ LOG_PATTERNS = (
 )
 
 
+def require_git_work_tree():
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=ROOT, capture_output=True, text=True,
+        )
+    except OSError:
+        pytest.skip("Git is unavailable for repository hygiene checks")
+    if result.returncode != 0 or result.stdout.strip() != "true":
+        pytest.skip("Repository hygiene checks require a Git work tree")
+
+
 def test_no_tracked_agent_or_debug_logs():
+    require_git_work_tree()
     result = subprocess.run(
         ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True, text=True
     )
@@ -30,6 +45,7 @@ def test_no_tracked_agent_or_debug_logs():
 
 
 def test_agent_and_debug_logs_are_ignored_at_any_depth():
+    require_git_work_tree()
     paths = [
         prefix + name
         for prefix in ("", "nested/logs/")
@@ -58,6 +74,7 @@ def test_agent_and_debug_logs_are_ignored_at_any_depth():
 
 
 def test_legitimate_documents_are_not_ignored():
+    require_git_work_tree()
     tracked = subprocess.run(
         ["git", "ls-files", "-z", "--", "*.md", "*.txt", "*.log"],
         cwd=ROOT, check=True, capture_output=True, text=True,
@@ -74,3 +91,25 @@ def test_legitimate_documents_are_not_ignored():
     )
     assert result.returncode == 1, result.stderr
     assert not result.stdout, f"Legitimate documents must not be ignored: {result.stdout}"
+
+
+@pytest.mark.parametrize("check", [
+    test_no_tracked_agent_or_debug_logs,
+    test_agent_and_debug_logs_are_ignored_at_any_depth,
+    test_legitimate_documents_are_not_ignored,
+])
+def test_hygiene_checks_skip_without_git(check, monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    with pytest.raises(pytest.skip.Exception, match="Git"):
+        check()
+
+
+@pytest.mark.parametrize("check", [
+    test_no_tracked_agent_or_debug_logs,
+    test_agent_and_debug_logs_are_ignored_at_any_depth,
+    test_legitimate_documents_are_not_ignored,
+])
+def test_hygiene_checks_skip_outside_work_tree(check, monkeypatch, tmp_path):
+    monkeypatch.setitem(globals(), "ROOT", tmp_path)
+    with pytest.raises(pytest.skip.Exception, match="Git"):
+        check()
