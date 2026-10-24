@@ -735,3 +735,7 @@ Square brackets that belong to the radicand stay in the skeleton, including afte
 ## PR #12 / Skeleton re-review fix 3: Keep an explicit bar inside a root
 
 A bar that wraps a radicand is removed only when it is an overline, the form produced by the root's own vinculum. An explicit `\bar` stays a decoration, so `\sqrt{\bar{z}}` is `sqrt(bar(z))` and does not match `\sqrt{z}`. A vinculum overline around that bar is still removed.
+
+## PR #12 / Skeleton re-review fix 4: Keep Unicode mathematical bold
+
+Mathematical bold letters, Greek letters, and digits are mapped to `mathbf(...)` before NFKC. They match `\mathbf{...}` and stay distinct from the plain character. Other mathematical styles are unchanged.

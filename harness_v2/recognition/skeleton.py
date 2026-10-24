@@ -410,8 +410,22 @@ def _combining_notation(text: str) -> str:
                   lambda m: f"mark[{ord(m[0]):04x}]", text)
 
 
+def _mathematical_bold_base(ch: str) -> str | None:
+    """Base letter of a mathematical bold character, before NFKC folds it."""
+    name = unicodedata.name(ch, "")
+    if not name.startswith("MATHEMATICAL BOLD "):
+        return None
+    if name.startswith(("MATHEMATICAL BOLD ITALIC ", "MATHEMATICAL BOLD SCRIPT ",
+                        "MATHEMATICAL BOLD FRAKTUR ")):
+        return None
+    base = unicodedata.normalize("NFKC", ch)
+    if len(base) == 1 and base.isalnum():
+        return base
+    return None
+
+
 def _unicode_notation(text: str) -> str:
-    """Protect scripts and enclosed numbers before compatibility folding."""
+    """Protect scripts, bold letters, and enclosed numbers before compatibility folding."""
     out, plain, script, kind = [], [], [], ""
 
     def flush_script():
@@ -441,6 +455,11 @@ def _unicode_notation(text: str) -> str:
             script.extend(chr(int(code, 16)) for code in decomposition[1:])
         else:
             flush_script()
+            bold = _mathematical_bold_base(ch)
+            if bold:
+                flush_plain()
+                out.append(f"mathbf({bold})")
+                continue
             name = unicodedata.name(ch, "")
             enclosed = (unicodedata.numeric(ch, None) is not None
                         and any(label in name for label in ("CIRCLED", "PARENTHESIZED", "FULL STOP", "DINGBAT")))

@@ -253,3 +253,13 @@ def test_rereview_fix_2_root_content_brackets(forms, different):
 ])
 def test_rereview_fix_3_explicit_bar_inside_roots(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('glyph,command,plain', [
+    ('\U0001D42F', r'\mathbf{v}', 'v'),
+    ('\U0001D415', r'\mathbf{V}', 'V'),
+    ('\U0001D6C2', r'\mathbf{\alpha}', 'α'),
+    ('\U0001D7CF', r'\mathbf{1}', '1'),
+])
+def test_rereview_fix_4_unicode_bold_matches_mathbf(glyph, command, plain):
+    check_forms([glyph, command, 'mathbf(' + plain + ')'], [plain])
