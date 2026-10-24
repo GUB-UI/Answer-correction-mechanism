@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
 from openai import OpenAI
 
+from src.adapters.diagnosis_helpers import valid_backend_fingerprint
 from src.config import AppConfig
 
 # Qwen 3.5/3.8 の思考モードを REST API から確実に切るためのプレフィル。
@@ -24,8 +26,29 @@ class LMStudioClient:
             timeout=float(os.environ.get("LLM_REQUEST_TIMEOUT_SEC", "600")),
         )
 
-    def chat_completion(
-        self,
+    def backend_fingerprint(self) -> dict[str, Any] | None:
+        """Require loaded identity and effective settings from the actual endpoint.
+
+        An OpenAI model listing or response model alias cannot verify the weights
+        or server-side generation overrides. Unsupported servers disable reuse.
+        """
+        from http.client import HTTPException
+        from urllib.request import Request, urlopen
+
+        url = str(self._client.base_url).rstrip("/") + "/health"
+        request = Request(url, headers={"Authorization": f"Bearer {self.config.lmstudio.api_key}"})
+        try:
+            with urlopen(request, timeout=2) as response:
+                payload = json.load(response)
+        except (OSError, ValueError, HTTPException):
+            return None
+        if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("error"):
+            return None
+        fingerprint = payload.get("backend_fingerprint")
+        return fingerprint if valid_backend_fingerprint(fingerprint) else None
+
+    @staticmethod
+    def prepare_chat_request(
         *,
         messages: list[dict[str, Any]],
         model: str | None = None,
@@ -33,8 +56,9 @@ class LMStudioClient:
         temperature: float = 0.2,
         max_tokens: int = 1024,
         disable_thinking: bool = True,
-    ) -> str:
-        payload_messages = list(messages)
+    ) -> dict[str, Any]:
+        """Build the final JSON messages once for both hashing and transmission."""
+        payload_messages = json.loads(json.dumps(messages, ensure_ascii=False))
         if disable_thinking:
             last = payload_messages[-1] if payload_messages else None
             if last is None or last.get("role") != "assistant":
@@ -54,6 +78,22 @@ class LMStudioClient:
             kwargs["model"] = model
         if response_format_json:
             kwargs["response_format"] = {"type": "json_object"}
+        return kwargs
+
+    def chat_completion(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        model: str | None = None,
+        response_format_json: bool = False,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+        disable_thinking: bool = True,
+    ) -> str:
+        kwargs = self.prepare_chat_request(
+            messages=messages, model=model, response_format_json=response_format_json,
+            temperature=temperature, max_tokens=max_tokens, disable_thinking=disable_thinking,
+        )
 
         try:
             response = self._client.chat.completions.create(**kwargs)

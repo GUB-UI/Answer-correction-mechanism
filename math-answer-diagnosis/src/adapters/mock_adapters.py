@@ -48,7 +48,7 @@ class MockDiagnosisAdapter(DiagnosisAdapter):
             context.prompt_type, DIAGNOSIS_PROMPTS[DEFAULT_DIAGNOSIS_PROMPT_TYPE],
         )
         return build_grading_metadata(
-            context, provider="mock", generation_settings={},
+            context, provider="mock", generation_settings={"implementation_version": 1},
             messages=[{"role": "system", "content": prompt},
                       {"role": "user", "content": context.used_text}],
         )
