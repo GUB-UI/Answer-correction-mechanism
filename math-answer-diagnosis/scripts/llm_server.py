@@ -16,6 +16,9 @@ GGUF（llama.cpp）や vLLM を使いたい場合は、このスクリプトの�
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
+import json
 import os
 import sys
 from pathlib import Path
@@ -35,6 +38,36 @@ from src.runtime.quant_dtype import (  # noqa: E402
     checkpoint_compute_dtype,
     resolve_load_dtype,
 )
+
+
+def local_weights_digest(directory: Path) -> str:
+    """Hash checkpoint, tokenizer and config contents once at server startup."""
+    files = sorted(path for path in directory.rglob("*") if path.is_file())
+    if not any(path.suffix in {".safetensors", ".bin", ".pt", ".pth", ".gguf"} for path in files):
+        raise ValueError("local checkpoint has no weight files")
+    manifest = []
+    for path in files:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        manifest.append((path.relative_to(directory).as_posix(), digest.hexdigest()))
+    return hashlib.sha256(json.dumps(manifest).encode()).hexdigest()
+
+
+def server_provenance() -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[1]
+    sources = [Path(__file__), root / "scripts/_openai_compat.py", root / "src/runtime/quant_dtype.py"]
+    source_hash = hashlib.sha256()
+    for source in sources:
+        source_hash.update(source.read_bytes())
+    versions = {}
+    for name in ("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = "not-installed"
+    return {"server_source_sha256": source_hash.hexdigest(), "library_versions": versions}
 
 
 def build_prompt(tokenizer: Any, messages: list[dict[str, Any]], enable_thinking: bool) -> str:
@@ -79,17 +112,29 @@ class TransformersChatBackend:
         self.max_new_tokens_cap = max_new_tokens_cap
         self.model = None
         self.tokenizer = None
+        self._local_checkpoint = Path(model_id).is_dir()
+        self._weights_sha256 = None
+        self._server_provenance = None
+        try:
+            self._server_provenance = server_provenance()
+            if self._local_checkpoint:
+                self._weights_sha256 = local_weights_digest(Path(model_id))
+        except (OSError, ValueError):
+            # Grading can remain available without reusable provenance.
+            self._server_provenance = None
 
     def backend_fingerprint(self) -> dict[str, Any] | None:
-        if self.model is None or self.tokenizer is None:
+        if self.model is None or self.tokenizer is None or self._server_provenance is None:
             return None
         quantization = getattr(self.model.config, "quantization_config", None)
         if quantization is not None and hasattr(quantization, "to_dict"):
             quantization = quantization.to_dict()
         return {
+            **self._server_provenance,
             "model_id": self.model_id,
             "settings": {
-                "model_revision": getattr(self.model.config, "_commit_hash", None),
+                "model_revision": None if self._local_checkpoint else getattr(self.model.config, "_commit_hash", None),
+                "weights_sha256": self._weights_sha256,
                 "generation_config": self.model.generation_config.to_dict(),
                 "max_new_tokens_cap": self.max_new_tokens_cap,
                 "quantization_config": quantization,
@@ -165,6 +210,12 @@ class TransformersChatBackend:
         # 言語モデル部分だけを読み込み VRAM を節約する。
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id, **kwargs)
         self.model.eval()
+        if self._local_checkpoint and self._weights_sha256 is not None:
+            try:
+                if local_weights_digest(Path(self.model_id)) != self._weights_sha256:
+                    self._server_provenance = None
+            except (OSError, ValueError):
+                self._server_provenance = None
         if device.startswith("cuda"):
             used = torch.cuda.memory_allocated() / 1024**3
             total = torch.cuda.get_device_properties(0).total_memory / 1024**3

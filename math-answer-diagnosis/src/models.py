@@ -124,6 +124,7 @@ class DiagnosisResult(BaseModel):
     model_name: str
     prompt_type: str
     grading_metadata: dict[str, Any] | None = None
+    reuse_unavailable_reason: str | None = None
     score: float | None
     max_score: float
     error_categories: list[str]

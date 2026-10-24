@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import json
+import io
 import sys
-import threading
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -74,62 +73,36 @@ def test_openai_handler_reports_loading_then_serves() -> None:
             return "ok", {"prompt_tokens": 1, "completion_tokens": 1}
 
     state = ServerState(Backend())
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        assert http_health(f"http://127.0.0.1:{port}/health") is False
-        state.ready = True
-        assert http_health(f"http://127.0.0.1:{port}/v1/health") is True
-        import urllib.request
-
-        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/v1/chat/completions", data=body, method="POST"
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            payload = json.loads(response.read())
-        assert payload["choices"][0]["message"]["content"] == "ok"
-    finally:
-        server.shutdown()
-
-
-def _free_port() -> int:
-    import socket
-
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-_SERVE = (
-    "import sys\n"
-    "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
-    "class H(BaseHTTPRequestHandler):\n"
-    "    def log_message(self, *args): return None\n"
-    "    def do_GET(self):\n"
-    "        body = b'{\"ok\": true}'\n"
-    "        self.send_response(200)\n"
-    "        self.send_header('Content-Length', str(len(body)))\n"
-    "        self.end_headers()\n"
-    "        self.wfile.write(body)\n"
-    "ThreadingHTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()\n"
-)
-
-
-def _serve_command(port: int) -> list[str]:
-    return [sys.executable, "-c", _SERVE, str(port)]
+    handler = object.__new__(make_handler(state))
+    payloads = []
+    handler._send_json = lambda payload, status=200: payloads.append((payload, status))
+    handler.path = "/health"
+    handler.do_GET()
+    assert payloads[-1][0]["ok"] is False
+    state.ready = True
+    handler.path = "/v1/health"
+    handler.do_GET()
+    assert payloads[-1][0]["ok"] is True
+    body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+    handler.path = "/v1/chat/completions"
+    handler.headers = {"Content-Length": str(len(body))}
+    handler.rfile = io.BytesIO(body)
+    handler.do_POST()
+    payload, status = payloads[-1]
+    assert status == 200
+    assert payload["choices"][0]["message"]["content"] == "ok"
 
 
 def test_service_manager_starts_stops_and_is_exclusive(tmp_path: Path) -> None:
-    glm_port, llm_port = _free_port(), _free_port()
+    glm_port, llm_port = 18080, 18081
+    command = [sys.executable, "-c", "import time; time.sleep(60)"]
     specs = {
-        "glm_ocr": ServiceSpec("glm_ocr", _serve_command(glm_port), glm_port, startup_timeout_sec=10),
-        "llm": ServiceSpec("llm", _serve_command(llm_port), llm_port, startup_timeout_sec=10),
+        "glm_ocr": ServiceSpec("glm_ocr", command, glm_port, startup_timeout_sec=10),
+        "llm": ServiceSpec("llm", command, llm_port, startup_timeout_sec=10),
     }
     manager = ServiceManager(
-        specs, tmp_path / "run", mode="managed", exclusive_gpu=True, poll_interval_sec=0.05
+        specs, tmp_path / "run", mode="managed", exclusive_gpu=True, poll_interval_sec=0.05,
+        health_check=lambda url: manager.read_pid("llm" if ":18081/" in url else "glm_ocr") is not None,
     )
     manager.ensure("glm_ocr")
     assert manager.is_healthy("glm_ocr")
@@ -153,7 +126,8 @@ def test_service_manager_reports_crash(tmp_path: Path) -> None:
         port=1,
         startup_timeout_sec=3,
     )
-    manager = ServiceManager({"llm": spec}, tmp_path / "run", mode="managed", poll_interval_sec=0.05)
+    manager = ServiceManager({"llm": spec}, tmp_path / "run", mode="managed", poll_interval_sec=0.05,
+                             health_check=lambda url: False)
     with pytest.raises(ServiceStartError, match="終了"):
         manager.ensure("llm")
 

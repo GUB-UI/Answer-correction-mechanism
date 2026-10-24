@@ -161,9 +161,18 @@ def make_handler(state: ServerState) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0].rstrip("/")
             if path in {"/health", "/v1/health"}:
                 payload: dict[str, Any] = {"ok": state.ready, "model": state.backend.model_name}
-                fingerprint = getattr(state.backend, "backend_fingerprint", None)
-                if state.ready and fingerprint:
-                    payload["backend_fingerprint"] = fingerprint()
+                if state.ready:
+                    try:
+                        fingerprint = getattr(state.backend, "backend_fingerprint", None)
+                        value = fingerprint() if callable(fingerprint) else None
+                        # Validate serialization inside the guard, before sending headers.
+                        json.dumps(value, allow_nan=False)
+                        payload["backend_fingerprint"] = value
+                        if value is None:
+                            payload["backend_fingerprint_error"] = "unavailable"
+                    except Exception as exc:
+                        payload["backend_fingerprint"] = None
+                        payload["backend_fingerprint_error"] = type(exc).__name__
                 if state.load_error:
                     payload["error"] = state.load_error.splitlines()[-1]
                 self._send_json(payload, 200)
