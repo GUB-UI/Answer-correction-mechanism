@@ -6,7 +6,7 @@ HTTP サーバーとして起動し、``exclusive_gpu`` が有効なら1つず�
 ``del model`` するより確実）。
 
 Mac（oMLX / mlx-vlm を手動起動する構成）では ``mode=external`` とし、
-ここでは何も起動・停止しない。
+ここでは起動しない。停止はどのモードでも所有権を確認してから行う。
 
 PID ファイルと排他ロックを run_dir に置くので、Streamlit とノートブック/CLI の
 どちらから操作しても同じ状態を共有できる。
@@ -327,8 +327,7 @@ class ServiceManager:
 
     def stop(self, name: str) -> bool:
         with self._locked():
-            if self.managed:
-                self._claim_session()
+            self._claim_session()
             return self._stop_unlocked(name)
 
     def _stop_unlocked(self, name: str) -> bool:
@@ -358,8 +357,7 @@ class ServiceManager:
     def stop_all(self) -> list[str]:
         stopped: list[str] = []
         with self._locked():
-            if self.managed:
-                self._claim_session()
+            self._claim_session()
             for name in self.specs:
                 if self._stop_unlocked(name):
                     stopped.append(name)

@@ -170,6 +170,30 @@ def test_same_identity_managers_share_a_run_directory(tmp_path, monkeypatch):
         _release(process)
 
 
+def test_external_stop_checks_ownership_before_stopping(tmp_path, monkeypatch):
+    spec = services.ServiceSpec("llm", ["server", "--model", "A"], 8000)
+    run = tmp_path / "run"
+    managed = services.ServiceManager({"llm": spec}, run, mode="managed")
+    external = services.ServiceManager({"llm": spec}, run, mode="external")
+    process = _sleep_process()
+    try:
+        write_private(managed.pid_file("llm"), str(process.pid))
+        write_private(managed.launch_file("llm"), json.dumps(managed._launch_identity("llm", process.pid)))
+        monkeypatch.setattr(managed, "is_healthy", lambda name: True)
+        managed.ensure("llm")
+        reached = MagicMock()
+        monkeypatch.setattr(external, "_stop_unlocked", reached)
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            external.stop("llm")
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            external.stop_all()
+        reached.assert_not_called()
+        assert process.poll() is None
+        assert json.loads(managed.owner_file().read_text())["identity"] == managed._session_identity()
+    finally:
+        _release(process)
+
+
 def test_shared_holders_block_takeover_after_the_first_exits(tmp_path, monkeypatch):
     spec_a = services.ServiceSpec("llm", ["server", "--model", "A"], 8000)
     spec_c = services.ServiceSpec("llm", ["server", "--model", "C"], 8000)
