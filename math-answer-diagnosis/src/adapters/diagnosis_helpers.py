@@ -36,6 +36,10 @@ def complete_grading_metadata(value: Any) -> bool:
     if any(not isinstance(value.get(key), str) or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None
            for key in ("prompt_version", "rubric_identity")):
         return False
+    post_processing = value.get("post_processing")
+    if (not isinstance(post_processing, dict)
+            or type(post_processing.get("review_flags_route")) is not bool):
+        return False
     settings = value.get("generation_settings")
     if not isinstance(settings, dict):
         return False
@@ -68,6 +72,7 @@ def build_grading_metadata(
 
     problem = context.problem
     return {
+        "post_processing": {"review_flags_route": review_routing_enabled()},
         "provider": provider,
         "model_id": context.model_name,
         "prompt_version": digest(messages),

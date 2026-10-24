@@ -348,3 +348,34 @@ def test_unknown_final_request_disables_reuse(case, builder):
     assert first.diagnosis_id and again.diagnosis_id != first.diagnosis_id
     assert client.chat_completion.call_count == 2
     assert all(d.grading_metadata is None for d in storage.list_diagnosis_results())
+
+
+def test_review_routing_change_requires_regrading(case, monkeypatch):
+    storage, config, options, client, run = case
+    client.chat_completion.return_value = json.dumps({
+        "score": 1, "max_score": 5,
+        "question_scores": [{"question": "(1)", "score": 1, "max_score": 5,
+                             "reason": "基準を満たすので満点とする"}],
+    })
+    monkeypatch.delenv("REVIEW_FLAGS_ROUTE", raising=False)
+    first = run()
+    assert first.status == "validated"
+    monkeypatch.setenv("REVIEW_FLAGS_ROUTE", "true")
+    again = run()
+    assert again.diagnosis_id != first.diagnosis_id
+    assert again.status == "review_required"
+    assert client.chat_completion.call_count == 2
+    assert run().diagnosis_id == again.diagnosis_id
+
+
+@pytest.mark.parametrize("post_processing", [None, {}, {"review_flags_route": 1}])
+def test_equal_missing_or_invalid_post_processing_never_reuses(case, monkeypatch, post_processing):
+    storage, config, options, client, run = case
+    first = run()
+    saved = storage.get_diagnosis_result(first.diagnosis_id)
+    saved.grading_metadata["post_processing"] = post_processing
+    monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [saved])
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata",
+                        lambda self, context: saved.grading_metadata)
+    assert run().diagnosis_id != first.diagnosis_id
+    assert client.chat_completion.call_count == 2
