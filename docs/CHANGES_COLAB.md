@@ -260,3 +260,8 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 
 - health タイムアウト・未検証 backend・最終リクエスト不明・生成前後の設定変更について、`reuse_unavailable_reason` を診断レコードとバッチ結果に保存。
 - 再利用不可だけでは採点状態を失敗にせず、メタデータを欠く結果は引き続き再採点する。タイムアウトと fingerprint 変更を回帰テスト。
+
+## レビュー修正 #5: fingerprint 障害と health 生存性
+
+- fingerprint の取得・JSON 化を保護し、例外時も health は `ok` を維持しつつ fingerprint を null と理由付きで返す。再利用は不可。
+- 取得例外・JSON 化不能・循環参照を回帰テスト。既存 HTTP ハンドラ試験もソケットを使わない直接呼び出しに変更。

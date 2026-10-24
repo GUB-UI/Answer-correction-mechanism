@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import io
 import sys
 import threading
 from http.server import ThreadingHTTPServer
@@ -74,25 +75,24 @@ def test_openai_handler_reports_loading_then_serves() -> None:
             return "ok", {"prompt_tokens": 1, "completion_tokens": 1}
 
     state = ServerState(Backend())
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        assert http_health(f"http://127.0.0.1:{port}/health") is False
-        state.ready = True
-        assert http_health(f"http://127.0.0.1:{port}/v1/health") is True
-        import urllib.request
-
-        body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
-        request = urllib.request.Request(
-            f"http://127.0.0.1:{port}/v1/chat/completions", data=body, method="POST"
-        )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            payload = json.loads(response.read())
-        assert payload["choices"][0]["message"]["content"] == "ok"
-    finally:
-        server.shutdown()
+    handler = object.__new__(make_handler(state))
+    payloads = []
+    handler._send_json = lambda payload, status=200: payloads.append((payload, status))
+    handler.path = "/health"
+    handler.do_GET()
+    assert payloads[-1][0]["ok"] is False
+    state.ready = True
+    handler.path = "/v1/health"
+    handler.do_GET()
+    assert payloads[-1][0]["ok"] is True
+    body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
+    handler.path = "/v1/chat/completions"
+    handler.headers = {"Content-Length": str(len(body))}
+    handler.rfile = io.BytesIO(body)
+    handler.do_POST()
+    payload, status = payloads[-1]
+    assert status == 200
+    assert payload["choices"][0]["message"]["content"] == "ok"
 
 
 def _free_port() -> int:

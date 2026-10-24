@@ -170,3 +170,33 @@ def test_health_timeout_has_explicit_reason(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", MagicMock(side_effect=TimeoutError()))
     assert client.backend_fingerprint() is None
     assert client.fingerprint_unavailable_reason == "backend_health_timeout"
+
+
+@pytest.mark.parametrize("failure", ["raise", "unserializable", "circular"])
+def test_health_stays_live_when_fingerprint_is_unavailable(monkeypatch, failure):
+    backend = _loaded_backend(monkeypatch)
+    from _openai_compat import ServerState, make_handler
+    if failure == "raise":
+        backend.backend_fingerprint = MagicMock(side_effect=RuntimeError("fingerprint failed"))
+    elif failure == "unserializable":
+        backend.backend_fingerprint = lambda: {"bad": object()}
+    else:
+        circular = {}
+        circular["self"] = circular
+        backend.backend_fingerprint = lambda: circular
+    state = ServerState(backend)
+    state.ready = True
+    handler = object.__new__(make_handler(state))
+    handler.path = "/v1/health"
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = io.BytesIO()
+    handler.do_GET()
+    payload = json.loads(handler.wfile.getvalue())
+    assert handler.send_response.call_args.args == (200,)
+    assert payload["ok"] is True
+    assert payload["backend_fingerprint"] is None
+    assert payload["backend_fingerprint_error"]
+    from src.adapters.diagnosis_helpers import valid_backend_fingerprint
+    assert not valid_backend_fingerprint(payload["backend_fingerprint"])
