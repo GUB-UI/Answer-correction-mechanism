@@ -104,3 +104,23 @@ def test_fix_07_unicode_scripts_and_enclosed_numbers(forms, different):
 ])
 def test_fix_07_non_digit_script_characters(glyph, operator, base):
     check_forms(['x' + glyph, 'x' + operator + '(' + base + ')'], ['x' + base])
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\overline{AB}', 'A̅B̅', 'ĀB̄', 'overline(AB)'], ['AB']),
+    ([r'\overline{z}', 'z̅', 'overline(z)'], ['z']),
+    ([r'\bar{z}', 'bar(z)'], ['z', 'overline(z)']),
+    ([r'\mathbf{v}', 'mathbf(v)'], ['v']),
+    ([r'\text{or}', 'text(or)'], ['or']),
+    ([r'\vec{v}', 'v⃗', 'vec(v)'], ['v', r'\mathbf{v}']),
+    ([r'\hat{x}', 'x̂', 'hat(x)'], ['x']),
+    ([r'\dot{x}', 'ẋ', 'dot(x)'], ['x']),
+    ([r'\tilde{x}', 'x̃', 'tilde(x)'], ['x']),
+    ([r'\sqrt{\overline{AB}}', '√A̅B̅', 'sqrt(AB)'], ['overline(sqrt(AB))']),
+])
+def test_fix_08_meaningful_decorations(forms, different):
+    check_forms(forms, different)
+
+
+def test_fix_08_text_content_keeps_word_boundaries():
+    check_forms([r'\text{a b}', 'text(a␠b)'], [r'\text{ab}', 'ab'])

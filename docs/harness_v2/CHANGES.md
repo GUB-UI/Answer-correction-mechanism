@@ -656,3 +656,8 @@ Canonicalize top-level newlines, LaTeX row breaks and math-span boundaries to `;
 ## PR #12 / Fix 7: Protect Unicode scripts and enclosed numbers
 
 Map complete Unicode `<super>`/`<sub>` runs to `^`/`_` before NFKC, including letters, Greek characters and operators. Preserve enclosed numerals as distinct characters rather than folding them into baseline digits. Collision, equivalence and idempotence regressions: 414 related tests passed.
+
+
+## PR #12 / Fix 8: Retain meaningful decorations and text
+
+Preserve overline, bar, vec, hat, dot, tilde, mathbf and text as distinct calls; normalize combining accents consistently. Text word boundaries use `␠`. Only root vincula are removed. Collision, equivalence and idempotence regressions: 425 related tests passed.

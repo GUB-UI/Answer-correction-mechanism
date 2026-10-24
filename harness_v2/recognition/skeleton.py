@@ -47,7 +47,9 @@ _SYMBOLS = {
 _COMMAND_WORD = re.compile(r"\\[A-Za-z]+")
 _LAYOUT = re.compile(r"\\[,;:! ()\[\]]|\$+")
 _ENVIRONMENTS = "pmatrix|bmatrix|vmatrix|Vmatrix|matrix|array|cases"
-_CALL_HEAD = re.compile(r"(?:sqrt|root|" + _ENVIRONMENTS + r")(?=\()")
+_DECORATIONS = "overline|bar|vec|hat|dot|tilde|mathbf|text"
+_DECORATION_HEAD = re.compile(r"\\(?:" + _DECORATIONS + r")(?![A-Za-z])|(?:" + _DECORATIONS + r")(?=\()")
+_CALL_HEAD = re.compile(r"(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + r")(?=\()")
 _MATH_SPAN = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DOTALL)
 
 
@@ -68,13 +70,11 @@ def _layout(text: str) -> str:
     text = re.sub(r"\s*;\s*(?:;\s*)*", ";", "".join(out)).strip("; ")
     return _LAYOUT.sub(" ", text)
 
-_FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
-               "text", "displaystyle", "textstyle", "quad", "qquad"}
+_FORMATTING = {"left", "right", "mathrm", "mathit", "displaystyle", "textstyle", "quad", "qquad"}
 # Token boundaries must survive removing groups: numbers, commands, and roots
 # cannot be manufactured by concatenating formerly separate operands.
-_TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
+_TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + r")(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _BOUNDARY = "\u2063"  # Canonical token boundary, never a mathematical parenthesis.
-_DROP = { "\u0304", "\u0305"}
 _PRECEDENCE = {";": -1, "¦": -1, ",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4, "_": 4}
 
@@ -137,6 +137,11 @@ def _radicand(text: str, start: int) -> tuple[str, int] | None:
     if root:
         _, _, end = _root_argument(text, root)
         return text[start:end], end
+    decoration = _DECORATION_HEAD.match(text, start)
+    if decoration:
+        argument = _group(text, decoration.end(), delimiters="{(")
+        if argument:
+            return text[start:argument[1]], argument[1]
     barred = _BARRED.match(text, start)
     if barred:
         return barred.group(), barred.end()
@@ -170,8 +175,22 @@ def _content(text: str) -> str:
             index, inner, pos = _root_argument(text, root)
             head = "root" if index is not None or root.group() == "root" else "sqrt"
             argument = f"{_content(index)}," if index is not None else ""
+            vinculum = _DECORATION_HEAD.match(inner.strip())
+            if vinculum and vinculum.group().lstrip("\\") in ("overline", "bar"):
+                group = _group(inner.strip(), vinculum.end(), delimiters="{(")
+                if group and group[1] == len(inner.strip()):
+                    inner = group[0]
             out.append(f"{head}({argument}{_content(inner)})")
         else:
+            decoration = _DECORATION_HEAD.match(text, pos)
+            if decoration:
+                group = _group(text, decoration.end(), delimiters="{(")
+                if group:
+                    name = decoration.group().lstrip("\\")
+                    inner = ("␠".join(group[0].split()) if name == "text" else _content(group[0]))
+                    out.append(f"{name}({inner})")
+                    pos = group[1]
+                    continue
             command = _COMMAND_WORD.match(text, pos)
             if command:
                 # A dedicated boundary keeps command names separate from operands.
@@ -187,7 +206,7 @@ def _content(text: str) -> str:
                 out.append(text[pos:pos + 2])
                 pos += 2
                 continue
-            if not ch.isspace() and ch not in _DROP:
+            if not ch.isspace():
                 if pos and text[pos - 1].isspace() and (ch.isalnum() or ch == "."):
                     # Preserve lexical boundaries without inventing mathematical groups.
                     token = _TOKEN.match(text, pos)
@@ -273,6 +292,24 @@ def _grouping(text: str) -> str:
     return out
 
 
+def _combining_notation(text: str) -> str:
+    # Decompose precomposed accents as well as explicitly combining accents.
+    text = unicodedata.normalize("NFD", text)
+    # A trailing stroke on an ungrouped numeric radicand is its vinculum.
+    text = re.sub(r"(\\sqrt(?![A-Za-z])|[√∛∜])\s*(\d+(?:\.\d+)?)[\u0304\u0305]+(?![^\s\u0304\u0305][\u0304\u0305])",
+                  lambda m: m[1] + "{" + m[2] + "}", text)
+    text = _BARRED.sub(lambda m: r"\overline{" + re.sub("[\u0304\u0305]", "", m.group()) + "}", text)
+    marks = {"\u20d7": "vec", "\u0302": "hat", "\u0307": "dot", "\u0303": "tilde"}
+
+    def decorate(match):
+        inner = match[1]
+        for mark in match[2]:
+            inner = "\\" + marks[mark] + "{" + inner + "}"
+        return inner
+
+    return re.sub(r"([^\s])([\u20d7\u0302\u0307\u0303]+)", decorate, text)
+
+
 def _unicode_notation(text: str) -> str:
     """Protect scripts and enclosed numbers before compatibility folding."""
     out, plain, script, kind = [], [], [], ""
@@ -312,7 +349,7 @@ def _unicode_notation(text: str) -> str:
 
 
 def skeleton(text: str) -> str:
-    text = _unicode_notation(_FENCE.sub("", text))
+    text = _unicode_notation(_combining_notation(_FENCE.sub("", text)))
     # Remove layout before parsing arguments: spacing can occur between a
     # fraction/root command and its operand. Keep separators until _content.
     text = _layout(text)
