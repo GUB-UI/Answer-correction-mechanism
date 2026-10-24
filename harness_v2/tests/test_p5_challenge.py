@@ -438,6 +438,57 @@ def test_declared_identity_cli_exits_2_without_changing_inputs(tmp_path, monkeyp
     assert (tmp_path.stat().st_mode & 0o777) == 0o755
 
 
+def test_nested_malformed_fields_invalidate_without_crashing():
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    jobs[0]["problem_id"] = []
+    jobs[1]["repetition"] = None
+    kept = _jobs(variants=("O", "F"), reps=(2,))
+    runs = _bind(kept, [_run(job["request_id"], "validated", [("R1", 1)]) for job in kept])
+    report = challenge_report({"expected_runs": [*jobs, *kept], "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "malformed planned job: P:manualO1" in report["reasons"]
+    assert "malformed planned job: P:manualF1" in report["reasons"]
+    assert report["variants"]["F"]["item_agreement"] == 1
+
+    paired = _jobs(variants=("O", "F"), reps=(1,))
+    bad_grade = _bind(paired, [_run(job["request_id"], "validated", [("R1", 1)]) for job in paired])
+    bad_grade[0]["outputs"]["grading"] = ["bad"]
+    report = challenge_report({"expected_runs": paired, "runs": bad_grade}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "malformed grading: P:manualO1" in report["reasons"]
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+    bad_status = _bind(paired, [_run(job["request_id"], "validated", [("R1", 1)]) for job in paired])
+    bad_status[1]["outputs"]["grading"] = {"status": {}, "items": [{"item_id": "R1", "score": 1}]}
+    report = challenge_report({"expected_runs": paired, "runs": bad_status}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "malformed grading: P:manualF1" in report["reasons"]
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+
+def test_nested_malformed_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch):
+    jobs = _jobs(variants=("O", "F"), reps=(1,))
+    jobs[0]["problem_id"] = []
+    runs = _bind(jobs[1:], [_run(jobs[1]["request_id"], "validated", [("R1", 1)])])
+    runs[0]["outputs"]["grading"] = ["bad"]
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "out" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps({"expected_runs": jobs, "runs": runs}))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert "malformed planned job: P:manualO1" in report["reasons"]
+    assert "malformed grading: P:manualF1" in report["reasons"]
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755
+
+
 def test_matching_provenance_remains_comparable():
     jobs, runs = _pair()
     report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)

@@ -35,8 +35,13 @@ _NOTE = "flag_rate = flagged / scored runs; pairs need ok variant and ok O of th
 def _cell(run: dict | None, expected_items: set) -> dict:
     if run is None:
         return {"outcome": "missing", "status": None, "scores": None}
-    grading = (run.get("outputs") or {}).get("grading") or {}
+    outputs = run.get("outputs") if isinstance(run, dict) else None
+    grading = outputs.get("grading") if isinstance(outputs, dict) else None
+    if not isinstance(grading, dict):
+        grading = {}
     status = grading.get("status")
+    if not isinstance(status, str):
+        return {"outcome": "failed" if status is None else "incomplete", "status": None, "scores": None}
     if status not in SCORED:
         return {"outcome": "failed", "status": status, "scores": None}
     items = grading.get("items")
@@ -85,12 +90,26 @@ def _planned_job_issue(job):
         return issue
     case_id = job.get("case_id", _MISSING)
     repetition = job.get("repetition", _MISSING)
-    if not isinstance(case_id, str) or repetition is _MISSING:
+    problem_id = job.get("problem_id", _MISSING)
+    if (not isinstance(case_id, str) or repetition is _MISSING
+            or not isinstance(problem_id, str) or not problem_id.strip()
+            or isinstance(repetition, bool) or not isinstance(repetition, int) or repetition < 1):
         return f"malformed planned job: {rid}"
-    try:
-        hash(repetition)
-    except TypeError:
-        return f"malformed planned job: {rid}"
+    return None
+
+
+def _grading_issue(run: dict) -> str | None:
+    """Reason a recorded grade cannot be read, or None when it has a usable shape."""
+    outputs = run.get("outputs")
+    if not isinstance(outputs, dict) or "grading" not in outputs:
+        return None
+    grading = outputs.get("grading")
+    rid = run.get("request_id")
+    if not isinstance(grading, dict):
+        return f"malformed grading: {rid}"
+    status = grading.get("status")
+    if status is not None and not isinstance(status, str):
+        return f"malformed grading: {rid}"
     return None
 
 
@@ -204,8 +223,12 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
             cell = _cell(None, expected)
         else:
             issue, identity = _provenance_issue(job, records[0], declared)
+            grading_issue = _grading_issue(records[0])
             if issue:
                 provenance_reasons.append(issue)
+            if grading_issue:
+                provenance_reasons.append(grading_issue)
+            if issue or grading_issue:
                 cell = {"outcome": "incomplete", "status": None, "scores": None}
             else:
                 identities.add(identity)
