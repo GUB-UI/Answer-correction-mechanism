@@ -39,7 +39,9 @@ def case(tmp_path, monkeypatch):
     client = MagicMock()
     client.prepare_chat_request.side_effect = LMStudioClient.prepare_chat_request
     client.backend_fingerprint.return_value = {
-        "model_id": "loaded-weights-A", "settings": {"max_new_tokens_cap": 512},
+        "model_id": "loaded-weights-A", "settings": {"max_new_tokens_cap": 512, "model_revision": "revision-A"},
+        "server_source_sha256": "a" * 64,
+        "library_versions": dict.fromkeys(("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"), "test-version"),
     }
     client.chat_completion.return_value = json.dumps({
         "score": None, "max_score": 5, "question_scores": [],
@@ -229,7 +231,9 @@ def test_managed_startup_precedes_metadata_snapshot(case, monkeypatch):
 
     def start(service):
         client.backend_fingerprint.return_value = {
-            "model_id": "started-weights", "settings": {"max_new_tokens_cap": 512},
+            "model_id": "started-weights", "settings": {"max_new_tokens_cap": 512, "model_revision": "revision-A"},
+            "server_source_sha256": "a" * 64,
+            "library_versions": dict.fromkeys(("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"), "test-version"),
         }
 
     monkeypatch.setattr("src.runtime.services.get_service_manager",
@@ -377,5 +381,22 @@ def test_equal_missing_or_invalid_post_processing_never_reuses(case, monkeypatch
     monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [saved])
     monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata",
                         lambda self, context: saved.grading_metadata)
+    assert run().diagnosis_id != first.diagnosis_id
+    assert client.chat_completion.call_count == 2
+
+
+@pytest.mark.parametrize("change", ["revision", "weights_digest", "source", "library"])
+def test_backend_provenance_change_requires_regrading(case, change):
+    storage, config, options, client, run = case
+    first = run()
+    fingerprint = client.backend_fingerprint.return_value
+    if change == "revision":
+        fingerprint["settings"]["model_revision"] = "revision-B"
+    elif change == "weights_digest":
+        fingerprint["settings"]["weights_sha256"] = "b" * 64
+    elif change == "source":
+        fingerprint["server_source_sha256"] = "b" * 64
+    else:
+        fingerprint["library_versions"]["torch"] = "changed-version"
     assert run().diagnosis_id != first.diagnosis_id
     assert client.chat_completion.call_count == 2

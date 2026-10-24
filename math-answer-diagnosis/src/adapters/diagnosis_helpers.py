@@ -22,8 +22,21 @@ def valid_backend_fingerprint(value: Any) -> bool:
         return False
     model = value.get("model_id")
     settings = value.get("settings")
-    return (isinstance(model, str) and bool(model.strip())
-            and isinstance(settings, dict) and bool(settings))
+    if not (isinstance(model, str) and model.strip() and isinstance(settings, dict) and settings):
+        return False
+    revision = settings.get("model_revision")
+    weights = settings.get("weights_sha256")
+    if not ((isinstance(revision, str) and revision.strip())
+            or (isinstance(weights, str) and re.fullmatch(r"[0-9a-f]{64}", weights))):
+        return False
+    source = value.get("server_source_sha256")
+    versions = value.get("library_versions")
+    return (
+        isinstance(source, str) and re.fullmatch(r"[0-9a-f]{64}", source) is not None
+        and isinstance(versions, dict)
+        and all(isinstance(versions.get(name), str) and versions[name].strip()
+                for name in ("torch", "transformers", "bitsandbytes", "tokenizers", "accelerate"))
+    )
 
 
 def complete_grading_metadata(value: Any) -> bool:
