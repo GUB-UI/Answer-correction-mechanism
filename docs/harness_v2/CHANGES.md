@@ -719,3 +719,7 @@ Only non-empty strings are request IDs. None, blank strings, and other hashable 
 ## PR #12 / Challenge fix 4: A slot without its original or variant is not comparable
 
 A planned source and repetition that has no original (O) job, or no variant job, is non-comparable. The reason is `missing planned original` or `missing planned variant`, not only an unpaired counter. The CLI exits 2. Scores are not filled in. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge fix 5: Malformed input invalidates instead of crashing
+
+A results object that is not an object, a `runs` value that is not a list, a run that is not a record, a planned job missing its request ID, case ID, or repetition, and an unhashable request ID each produce an explicit reason. The report is not comparable and the CLI exits 2. Those values are not pairing keys, so they cannot overwrite another slot. Scores are not filled in. Output stays 0600 and input permissions are unchanged.

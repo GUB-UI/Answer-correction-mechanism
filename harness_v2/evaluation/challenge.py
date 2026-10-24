@@ -7,9 +7,10 @@ scheduled job is classified as ``ok``, ``missing`` (no run recorded),
 unexpected or non-finite item scores). Only ``ok`` pairs are compared;
 nothing is filled in. Missing/empty plans, duplicate planned IDs, duplicate
 planned slots, duplicate, missing or unexpected run IDs, and run provenance
-that is missing, mismatched, or from more than one experiment, and request
-IDs that are not non-empty strings, and a planned repetition that lacks its
-original or a variant, make the report non-comparable;
+that is missing, mismatched, or from more than one experiment, request
+IDs that are not non-empty strings, unhashable IDs, a planned repetition
+that lacks its original or a variant, and malformed results, job plans, or
+run records make the report non-comparable;
 any remaining metrics are diagnostic only.
 """
 
@@ -25,6 +26,9 @@ from harness_v2.storage.permissions import private_write_text
 
 FLAGGED = "review_required"
 SCORED = {"validated", FLAGGED}
+_MISSING = object()
+_KIND = "label-free robustness characterization (development data, not generalization)"
+_NOTE = "flag_rate = flagged / scored runs; pairs need ok variant and ok O of the same repetition"
 
 
 def _cell(run: dict | None, expected_items: set) -> dict:
@@ -57,15 +61,43 @@ def _empty() -> dict:
             "newly_flagged_relative_to_O": 0, "unflagged_relative_to_O": 0}
 
 
-def _usable_request_id(rid):
-    """Return a non-empty string id, or None when the id is unusable but hashable.
+def _classify_request_id(rid):
+    """Return ``(id, None)`` for a non-empty string, else ``(None, reason)``.
 
-    Unhashable ids raise TypeError so callers can keep that failure separate.
+    Unhashable values are an explicit reason and are never used as pairing keys.
     """
-    hash(rid)
+    try:
+        hash(rid)
+    except TypeError:
+        return None, f"unhashable request_id: {rid!r}"
     if isinstance(rid, str) and rid.strip():
-        return rid
+        return rid, None
+    return None, f"invalid request_id: {rid!r}"
+
+
+def _planned_job_issue(job):
+    """Reason a planned job cannot be paired, or None when the job is usable."""
+    if not isinstance(job, dict) or "request_id" not in job:
+        return "malformed planned job: missing request_id"
+    rid, issue = _classify_request_id(job["request_id"])
+    if issue:
+        return issue
+    case_id = job.get("case_id", _MISSING)
+    repetition = job.get("repetition", _MISSING)
+    if not isinstance(case_id, str) or repetition is _MISSING:
+        return f"malformed planned job: {rid}"
+    try:
+        hash(repetition)
+    except TypeError:
+        return f"malformed planned job: {rid}"
     return None
+
+
+def _assemble(reasons, totals, by_source) -> dict:
+    return {"kind": _KIND, "comparable": not reasons, "reasons": reasons, "note": _NOTE,
+            "variants": {v: _finish(s) for v, s in sorted(totals.items())},
+            "by_source": {src: {v: _finish(s) for v, s in sorted(vs.items())}
+                          for src, vs in sorted(by_source.items())}}
 
 
 def _provenance_issue(job: dict, run: dict):
@@ -96,6 +128,8 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
     """
     if not isinstance(rubric_items, dict):
         raise ValueError("rubric_items is required")
+    if not isinstance(results, dict):
+        return _assemble(["results must be an object"], {}, {})
     reasons = []
     jobs = results.get("expected_runs")
     if not isinstance(jobs, list) or not jobs:
@@ -103,19 +137,27 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
         jobs = []
     usable_jobs = []
     for job in jobs:
-        if _usable_request_id(job["request_id"]) is None:
-            reasons.append(f"invalid request_id: {job['request_id']!r}")
+        issue = _planned_job_issue(job)
+        if issue:
+            reasons.append(issue)
             continue
         usable_jobs.append(job)
     jobs = usable_jobs
     planned_counts = Counter(job["request_id"] for job in jobs)
     duplicate_planned_ids = {rid for rid, count in planned_counts.items() if count > 1}
     planned_ids = set(planned_counts)
+    recorded = results.get("runs", [])
+    if not isinstance(recorded, list):
+        reasons.append("runs must be a list")
+        recorded = []
     runs = defaultdict(list)
-    for run in results.get("runs", []):
-        rid = run.get("request_id")
-        if _usable_request_id(rid) is None:
-            reasons.append(f"invalid request_id: {rid!r}")
+    for run in recorded:
+        if not isinstance(run, dict):
+            reasons.append("malformed run record")
+            continue
+        rid, issue = _classify_request_id(run.get("request_id"))
+        if issue:
+            reasons.append(issue)
             continue
         runs[rid].append(run)
     for label, ids in (
@@ -199,12 +241,7 @@ def challenge_report(results: dict, *, rubric_items: dict) -> dict:
             stats["runs_all_items_equal"] += all(equal)
             stats["newly_flagged_relative_to_O"] += cell["status"] == FLAGGED and base["status"] != FLAGGED
             stats["unflagged_relative_to_O"] += cell["status"] != FLAGGED and base["status"] == FLAGGED
-    return {"kind": "label-free robustness characterization (development data, not generalization)",
-            "comparable": not reasons, "reasons": reasons,
-            "note": "flag_rate = flagged / scored runs; pairs need ok variant and ok O of the same repetition",
-            "variants": {v: _finish(s) for v, s in sorted(totals.items())},
-            "by_source": {src: {v: _finish(s) for v, s in sorted(vs.items())}
-                          for src, vs in sorted(by_source.items())}}
+    return _assemble(reasons, totals, by_source)
 
 
 def _rubric_items(manifest: Path) -> dict:

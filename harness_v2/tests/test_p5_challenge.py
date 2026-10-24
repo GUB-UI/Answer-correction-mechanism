@@ -476,3 +476,83 @@ def test_missing_original_cli_exits_2_without_changing_inputs(tmp_path, monkeypa
     assert (out.stat().st_mode & 0o777) == 0o600
     assert (results_path.stat().st_mode & 0o777) == 0o644
     assert (tmp_path.stat().st_mode & 0o777) == 0o755
+
+
+def test_malformed_challenge_input_invalidates_instead_of_crashing():
+    valid = _jobs(variants=("O", "F"), reps=(1,))
+    bound = _bind(valid, [_run(job["request_id"], "validated", [("R1", 1)]) for job in valid])
+    report = challenge_report({"expected_runs": valid, "runs": {"kept": bound[0]}}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "runs must be a list" in report["reasons"]
+    assert report["variants"]["F"]["pairs"] == 0
+    assert report["variants"]["F"]["item_agreement"] is None
+
+    jobs = [*valid, {"case_id": "P:manual:O", "problem_id": "P", "repetition": 1}]
+    report = challenge_report({"expected_runs": jobs, "runs": bound}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "malformed planned job: missing request_id" in report["reasons"]
+    assert report["variants"]["O"]["scheduled"] == 1
+
+    bad = ["not-a-key"]
+    jobs = [
+        {"request_id": bad, "case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": bad, "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+    ]
+    runs = [_run(bad, "validated", [("R1", 1)]), _run(bad, "validated", [("R1", 0)])]
+    report = challenge_report({"expected_runs": jobs, "runs": runs}, rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"].count(f"unhashable request_id: {bad!r}") == 4
+    assert report["variants"].get("F", {}).get("pairs", 0) == 0
+    assert report["variants"].get("F", {}).get("item_agreement") is None
+
+    report = challenge_report(["not-an-object"], rubric_items=R)
+    assert report["comparable"] is False
+    assert report["reasons"] == ["results must be an object"]
+    assert report["variants"] == {}
+
+    report = challenge_report({"expected_runs": valid, "runs": ["not-a-record"]}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "malformed run record" in report["reasons"]
+    assert report["variants"]["F"]["item_agreement"] is None
+
+    jobs = [
+        {"request_id": "o", "case_id": None, "problem_id": "P", "repetition": 1},
+        {"request_id": "f", "problem_id": "P", "repetition": ["unhashable"]},
+    ]
+    report = challenge_report({"expected_runs": jobs, "runs": []}, rubric_items=R)
+    assert report["comparable"] is False
+    assert "malformed planned job: o" in report["reasons"]
+    assert "malformed planned job: f" in report["reasons"]
+    assert report["variants"] == {}
+
+
+@pytest.mark.parametrize("payload,reason", [
+    ({"expected_runs": [
+        {"request_id": "o", "case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": "f", "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+    ], "runs": {"o": {"request_id": "o"}}}, "runs must be a list"),
+    ({"expected_runs": [
+        {"case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": "f", "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+    ], "runs": []}, "malformed planned job: missing request_id"),
+    ({"expected_runs": [
+        {"request_id": ["k"], "case_id": "P:manual:O", "problem_id": "P", "repetition": 1},
+        {"request_id": "f", "case_id": "P:manual:F", "problem_id": "P", "repetition": 1},
+    ], "runs": [{"request_id": {"k": 1}}]}, "unhashable request_id:"),
+])
+def test_malformed_input_cli_exits_2_without_changing_inputs(tmp_path, monkeypatch, payload, reason):
+    results_path = tmp_path / "results.json"
+    out = tmp_path / "out" / "report.json"
+    tmp_path.chmod(0o755)
+    results_path.write_text(json.dumps(payload))
+    results_path.chmod(0o644)
+    monkeypatch.setattr(challenge, "_rubric_items", lambda manifest: R)
+    code = challenge.main(["--results", str(results_path), "--dataset", "unused", "--out", str(out)])
+    report = json.loads(out.read_text())
+    assert code == 2 and report["comparable"] is False
+    assert any(item.startswith(reason) or item == reason for item in report["reasons"])
+    assert report["variants"].get("F", {}).get("item_agreement") is None
+    assert (out.stat().st_mode & 0o777) == 0o600
+    assert (out.parent.stat().st_mode & 0o777) == 0o700
+    assert (results_path.stat().st_mode & 0o777) == 0o644
+    assert (tmp_path.stat().st_mode & 0o777) == 0o755
