@@ -54,7 +54,7 @@ _FORMATTING = {"left", "right", "overline", "bar", "mathrm", "mathbf", "mathit",
 # cannot be manufactured by concatenating formerly separate operands.
 _TOKEN = re.compile(r"!=|<=|>=|\\[A-Za-z]+|(?:sqrt|root)(?=\()|\d+(?:\.\d+)?|.", re.DOTALL)
 _DROP = { "\u0304", "\u0305"}
-_PRECEDENCE = {"=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
+_PRECEDENCE = {",": -1, "=": 0, "<": 0, ">": 0, "!=": 0, "<=": 0, ">=": 0, "!": 5, "+": 1, "-": 1, "±": 1,
                "*": 2, "/": 2, "^": 4, "_": 4}
 
 
@@ -73,6 +73,20 @@ def _group(text: str, start: int, *, delimiters: str = "{") -> tuple[str, int] |
         depth += {opening: 1, closing: -1}.get(text[index], 0)
         if depth == 0:
             return text[start + 1:index], index + 1
+    return None
+
+
+def _expression_group(text: str, start: int) -> tuple[str, int, str, str] | None:
+    """Read content brackets, including nested and half-open intervals."""
+    brackets = re.compile(r"\\[{}]|[()[\]]")
+    first = brackets.match(text, start)
+    if not first or first.group() not in ("(", "[", r"\{"):
+        return None
+    depth = 0
+    for token in brackets.finditer(text, start):
+        depth += 1 if token.group() in ("(", "[", r"\{") else -1
+        if depth == 0:
+            return text[first.end():token.start()], token.end(), first.group(), token.group()
     return None
 
 
@@ -160,7 +174,7 @@ def _content(text: str) -> str:
                     out.append(f"({token.group()})")
                     pos = token.end()
                     continue
-                out.append({"{": "(", "}": ")", "[": "(", "]": ")"}.get(ch, ch))
+                out.append({"{": "(", "}": ")"}.get(ch, ch))
             pos += 1
     return "".join(out)
 
@@ -180,7 +194,7 @@ def _precedence(text: str) -> int:
             weakest = min(weakest, 2)
         root = _ROOT_HEAD.match(text, pos)
         start = root.end() if root else pos
-        group = _group(text, start, delimiters="(") if text[start:start + 1] == "(" else None
+        group = _expression_group(text, start)
         number = _NUMBER.match(text, pos)
         command = _COMMAND_WORD.match(text, pos)
         pos = group[1] if group else command.end() if command else number.end() if number else pos + 1
@@ -199,7 +213,7 @@ def _grouping(text: str) -> str:
     while pos < len(text):
         root = _ROOT_HEAD.match(text, pos)
         start = root.end() if root else pos
-        group = _group(text, start, delimiters="(") if text[start:start + 1] == "(" else None
+        group = _expression_group(text, start)
         if not group:
             out += text[pos]
             pos += 1
@@ -208,6 +222,8 @@ def _grouping(text: str) -> str:
         end = group[1]
         if root:
             out += f"{root.group()}({inner})"
+        elif group[2:] != ("(", ")") or _precedence(inner) == -1:
+            out += group[2] + inner + group[3]
         else:
             strength = _precedence(inner)
             left = out[-2:] if out[-2:] in _PRECEDENCE else out[-1:]

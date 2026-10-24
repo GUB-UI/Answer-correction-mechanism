@@ -636,3 +636,8 @@ Keep `_` with the same grouping rules as `^`; distinguish subscripts from baseli
 ## PR #12 / Fix 3: Separate postfix factorial from relations
 
 Give postfix `!` highest precedence and tokenize `!=`, `<=`, `>=` atomically. Group removal cannot manufacture inequality from factorial followed by equality. Collision, equivalence and idempotence regressions: 383 related tests passed.
+
+
+## PR #12 / Fix 4: Preserve bracket kinds and comma scope
+
+Retain square/literal curly brackets and half-open intervals. Commas are separators that retain their enclosing parentheses; nested coordinates remain distinct from bare lists. Collision, equivalence and idempotence regressions: 389 related tests passed.

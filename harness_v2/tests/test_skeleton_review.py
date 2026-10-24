@@ -46,3 +46,15 @@ def test_fix_02_subscripts(forms, different):
 ])
 def test_fix_03_factorial_and_inequality(forms, different):
     check_forms(forms, different)
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'x\in[0,1]', r'x\in [0,1]'], [r'x\in(0,1)']),
+    (['[a,b)', '[ a , b )'], ['(a,b)', '[a,b]']),
+    (['[x]', '[ x ]'], ['x', '(x)']),
+    (['(1,2)', '( 1 , 2 )'], ['1,2', '[1,2]']),
+    ([r'\{a,b\}', r'\{ a , b \}'], ['(a,b)', '[a,b]', 'a,b']),
+    (['([a,b],c)', '( [a,b] , c )'], ['[a,b],c']),
+])
+def test_fix_04_bracket_kinds_and_separators(forms, different):
+    check_forms(forms, different)
