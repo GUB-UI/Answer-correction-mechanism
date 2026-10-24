@@ -172,7 +172,7 @@ def test_health_timeout_has_explicit_reason(tmp_path, monkeypatch):
     assert client.fingerprint_unavailable_reason == "backend_health_timeout"
 
 
-@pytest.mark.parametrize("failure", ["raise", "unserializable", "circular"])
+@pytest.mark.parametrize("failure", ["raise", "unserializable", "circular", "surrogate"])
 def test_health_stays_live_when_fingerprint_is_unavailable(monkeypatch, failure):
     backend = _loaded_backend(monkeypatch)
     from _openai_compat import ServerState, make_handler
@@ -180,6 +180,8 @@ def test_health_stays_live_when_fingerprint_is_unavailable(monkeypatch, failure)
         backend.backend_fingerprint = MagicMock(side_effect=RuntimeError("fingerprint failed"))
     elif failure == "unserializable":
         backend.backend_fingerprint = lambda: {"bad": object()}
+    elif failure == "surrogate":
+        backend.backend_fingerprint = lambda: {"model_id": "weights\udcff"}
     else:
         circular = {}
         circular["self"] = circular
@@ -198,5 +200,28 @@ def test_health_stays_live_when_fingerprint_is_unavailable(monkeypatch, failure)
     assert payload["ok"] is True
     assert payload["backend_fingerprint"] is None
     assert payload["backend_fingerprint_error"]
+    if failure == "surrogate":
+        assert payload["backend_fingerprint_error"] == "UnicodeEncodeError"
     from src.adapters.diagnosis_helpers import valid_backend_fingerprint
     assert not valid_backend_fingerprint(payload["backend_fingerprint"])
+
+
+def test_health_preserves_non_ascii_fingerprint(monkeypatch):
+    backend = _loaded_backend(monkeypatch)
+    fingerprint = backend.backend_fingerprint()
+    fingerprint["settings"]["chat_template"] = "テンプレート"
+    backend.backend_fingerprint = lambda: fingerprint
+    from _openai_compat import ServerState, make_handler
+    state = ServerState(backend)
+    state.ready = True
+    handler = object.__new__(make_handler(state))
+    handler.path = "/health"
+    handler.send_response = MagicMock()
+    handler.send_header = MagicMock()
+    handler.end_headers = MagicMock()
+    handler.wfile = io.BytesIO()
+    handler.do_GET()
+    payload = json.loads(handler.wfile.getvalue())
+    assert payload["ok"] is True
+    assert payload["backend_fingerprint"]["settings"]["chat_template"] == "テンプレート"
+    assert "backend_fingerprint_error" not in payload
