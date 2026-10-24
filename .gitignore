@@ -1,0 +1,18 @@
+harness_runs/
+ocr_private/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Agent and debug logs
+stderr.log
+stdout.log
+debug.log
+agent*.log
+codex_*.log
+*_stderr.log
+*_stdout.log
+handshake_log*.txt
+codex_fix_*.md
+codex_review_*.md
+codex_rereview_*.md

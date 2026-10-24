@@ -1,5 +1,44 @@
 # Colab / CUDA 対応の変更一覧
 
+## PR #10 ログ整理・修正3: Git のない環境で hygiene テストを skip
+
+- 各 hygiene チェックの前に `git rev-parse --is-inside-work-tree` を確認し、Git を実行できない場合や checkout 外では `pytest.skip` とする。
+- PATH から Git を外すケースと ROOT を一時ディレクトリに変更するケースで、3つのチェックすべての skip を回帰検証。修正前に6件の失敗、修正後に関連9件の成功を確認した。
+- 全スイート検証（エージェントのサンドボックス外で実行、`/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider`）: `harness_v2/tests` **593件成功**、`math-answer-diagnosis` **328件成功**。サンドボックス内での失敗報告は読み取り・通信ガードによるもので、本結果で置き換える。
+
+## PR #10 ログ整理・修正2: 任意の深さのログと実行記録を除外
+
+- `.gitignore` と hygiene テストの検出パターンを拡張し、標準出力・標準エラー・デバッグログ、agent/codex 名のログ、handshake 記録、codex の修正・レビュー実行記録を任意の深さで無視する。
+- ルートと入れ子の16種類の名前、削除済み2ファイル、追跡文書と通常の文書名を回帰確認。`git ls-files` と `git check-ignore --no-index` の変更前後比較で、新たに無視される追跡ファイルがないことを確認した。
+- 検証: 指定 Python・pytest コマンドで関連3件成功。パターン拡張前には新規ケースの失敗を確認した。
+
+## PR #10 ログ整理・修正1: 残存するエージェント成果物を削除
+
+- リポジトリ内に参照がないことを確認し、`codex_fix_gpt-6.1-sol.md` と `handshake_log_after_fix.txt` を通常の削除で追跡対象から外した。履歴は書き換えていない。
+- hygiene テストで両ファイルが `git ls-files` に含まれないことを検証する。削除前に失敗、削除後に関連2件の成功を確認した。
+
+## PR #10: エージェントのデバッグログを追跡対象から除外
+
+- `codex_fix_stderr.log` を今後のツリーから削除した。過去のコミット履歴は書き換えていない。
+- `.gitignore` に `codex_*.log`、`*_stderr.log`、`*_stdout.log` を追加。`git ls-files` による追跡ログの検出と、ルート・サブディレクトリでの無視規則をテストする。
+
+## 修正 1: 既存の実行データベースを権限変更なしで開く
+
+- 一覧取得・分析用に `RunStore(..., readonly=True)` を追加。生成時のスキーマ初期化と権限制限を省略し、書き込みを試みる場合も含め、すべての接続で SQLite の `mode=ro` を使う。書き込み用ストアは出力の非公開権限を維持する。
+- 一覧取得だけを行うランナーのテスト呼び出しを読み取り専用に変更。指標・比較・レポートは保存済み JSON や行を参照し、書き込み用ストアを生成しない。
+- 修正前にロールバックジャーナルと使用中の WAL/SHM で不具合を再現し、生成時に DB と関連ファイルが 0644 から 0600 に変わることを確認。修正後は再オープンしても各ファイルの権限と親ディレクトリの 0755 が変化しないことを検証する。保存済み行の読み取り、書き込み拒否、存在しないパス、スキーマを作成しないことも検証する。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **764 件成功**（ローカルの模擬 HTTP サーバー起動を許可して実行）。
+
+## PR #10: 入力ファイルと共有親ディレクトリの権限を維持
+
+- `private_open()` の読み取りでは chmod や親ディレクトリの作成を行わない。設定・データセット・OCR 本文とメタデータ・成果物・交換結果は通常の読み取りを使い、SQLite の一覧取得も読み取り専用接続に変更した。
+- `private_directory()` は既存ディレクトリの権限を維持する。書き込み側が明示したハーネス管理下の出力ディレクトリだけを 0700 に制限し、既存の共有・ユーザー親ディレクトリには chmod しない。新規出力はファイル 0600、ディレクトリ 0700 とし、管理対象の既存出力は書き込み時に権限を制限する。
+- `private_open`・`private_directory`・chmod の呼び出しを監査し、CLI・CPU OCR・旧版比較スクリプト・成果物・ファイル交換・SQLite 関連ファイルまで確認した。
+- 0755 ディレクトリ内の 0644 入力が変化しないこと、既存の出力親ディレクトリの維持、新規出力の権限、存在しない入力、テキスト・バイナリ読み取り、umask の違いを回帰テストで確認する。OCR 来歴テストも入力の権限維持を検証するよう更新した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **712 件成功**（ローカルの模擬 HTTP サーバー起動を許可して実行）。
+
 Mac の oMLX + mlx-vlm 経路は残し、Google Colab（CUDA）でも同じ Streamlit アプリが動くようにした。
 GPU メモリは、モデルを別プロセスにして **GLM-OCR → UniMERNet → 診断LLM** の順に1つだけ載せることで空ける。
 答案と採点は `APP_DATA_DIR`（Google Drive を想定）に書く。
@@ -183,6 +222,282 @@ A100 ではセットアップ、GPU 判定、トンネル、27B 4bit の読み�
 - `GLMOCR_MIN_EDGE` などを変えたときの読み取り品質
 - `SeerRay-Lab/Xiaomi-OCR-0` を A100 に載せたときの VRAM と、この手書き答案での読み取り精度
 
+
+## 追記: PR #10 再レビューの残件修正（2026-10-23）
+
+部分修正だった指摘 2・4・5・6・9・10・12・13、新規 MAJOR 3件と MINOR 1件を修正。状態名は `validated` / `review_required` / `failed` のまま。欠落した項目点の補完や特定の数式・得点の分岐は追加していない。`math-answer-diagnosis/` は変更していない。
+
+Gemma は `free_tier_project=True` という呼出側の明示的な確認を必須にした。無料枠のプロジェクトという申告を実行記録に残すもので、ネットワークで課金設定を照会・検証したという意味ではない。AI Studio のエンドポイントと `vertexai=False` を固定し、429 では即停止する。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/independent.py` | Scrubs generic/total/reference/AI score assignments, attributed prose, quoted ratios/units, and Japanese scoring annotations. Requires complete scalar values so symbolic expressions survive. Keeps unchanged embedded mathematical JSON verbatim and excludes non-scalar rubric text fields. Finding 2: independent reviewers must not receive earlier scores, while intervals, fractions, geometric point counts and symbolic expressions stay intact. |
+| `harness_v2/storage/secrets.py` | Keeps unchanged embedded JSON text verbatim during public redaction. Finding 13: redaction must not gratuitously reformat mathematical text in prompt/handoff artifacts. |
+| `harness_v2/grading/rubric.py` | Rejects malformed rows, blank/duplicate IDs, boolean/nonfinite/negative allocations and a nonfinite allocation sum. Finding 6: invalid rubric data must fail before allowlisting or inference. |
+| `harness_v2/grading/scorer.py` | Raises on malformed response rows or missing/invalid IDs. Checks every supplied `max_points` and `max_score`, including null, boolean, string and nonfinite values; rubric allocations stay authoritative. Findings 5/6: bad model rows/maxima cannot disappear or validate. Missing item scores are never filled. |
+| `harness_v2/grading/validator.py` | Independently validates direct rubric objects and avoids returning invalid maxima from failed rubric checks. Finding 6: callers bypassing the JSON loader must fail closed too. |
+| `harness_v2/providers/gemma_ai_studio.py` | Requires the literal config flag `free_tier_project=True` before SDK construction, pins `https://generativelanguage.googleapis.com` and `vertexai=False`, records `provider_policy` on successful/error/quota exchanges, and keeps that metadata out of generation config. Replaces opaque client injection with a factory receiving the pinned options. Finding 4: the caller explicitly attests that the key is for a free-tier AI Studio project. This is a local config attestation, not a remotely verified billing claim. No tier-verification call, alternative endpoint, paid fallback or retry on 429. |
+| `harness_v2/providers/codex_app_server.py` | Appends trusted grading instructions/schema after blinding; retains fresh threads. Filters fallback messages and completion notifications by thread and turn. Declines command/file approvals and returns JSON-RPC method-not-found for unsupported requests. Uses nonblocking byte framing/writes and a single absolute request/turn deadline, with bounded interruption and process cleanup on timeout. Findings 9/10 and new MAJOR 1: prevent foreign output contamination, invalid server replies, buffered-line false timeouts, partial-line/write hangs and instruction-free reviews. |
+| `harness_v2/evaluation/review.py` | Defines the trusted review contract and accepts only completed, error-free, schema-valid reviews that pass grading validation and match each primary item score and total. Rejects nonfinite JSON, flags and unsupported response fields. New MAJOR 2: equal totals alone must not approve failed, flagged or item-disagreeing review. |
+| `harness_v2/evaluation/schemas/grading_review.schema.json` | Closed JSON schema for independent items, evidence, reasons, uncertainty and nullable scores/total. New MAJOR 1/2: the prompt and acceptance check share an explicit response contract. |
+| `harness_v2/core/pipeline.py` | Validates raw rubrics before blinding; records exact raw/derived grading artifact paths and SHA256 values; validates evidence against the text actually graded. Persists OCR engine/revision/dtype/elapsed time. Catches reviewer exceptions and saves their separate failed outcome with primary grading routed to `review_required`. Finding 13, new MAJOR 2/3 and new MINOR: preserve auditable inputs and completed grading even when review fails; retain CPU provenance. |
+| `harness_v2/recognition/ocr.py` | Decodes imported and subprocess OCR from bytes without universal-newline translation. Finding 13: CRLF and other UTF-8 source bytes survive the private copy and grading path exactly. |
+| `harness_v2/providers/grokbot_exchange.py` | Validates publication before redaction, rejects image-bearing content and unsupported fields, enforces finite rubric numbers, and blinds independent payload strings. Both file and GitHub handoffs use the same publication boundary. Finding 12: image keys, image data URIs (including non-base64), image markup/URLs and arbitrary nested payloads must not reach publishable files. |
+| `harness_v2/providers/schemas/grokbot_request.schema.json` | Replaces unrestricted payload objects with declared text fields and a closed rubric-item schema. Finding 12: publication has a text-field allowlist instead of accepting arbitrary image-bearing metadata. |
+| `harness_v2/requirements.txt` | Declares `jsonschema>=4`. Use one standard validator for the independent response contract; no legacy dependency changes. |
+| `harness_v2/tests/test_rereview_independent.py` | Regressions for assignment/prose/Japanese/quoted score blinding, nested-field exclusion, untouched mathematical formatting, point counts and numeric-prefix symbolic math. Finding 2/13 and final-review counterexamples. |
+| `harness_v2/tests/test_rereview_validation.py` | Parameterized regressions for both maximum aliases, malformed rows and invalid loaded/direct rubrics. Findings 5/6; no auto-filled scores. |
+| `harness_v2/tests/test_rereview_gemma_policy.py` | Mock-only regressions for absent/non-boolean attestation, pinned SDK options despite environment overrides, 429 stopping and attestation persistence in SQLite. Finding 4, without network calls. |
+| `harness_v2/tests/test_rereview_codex.py` | Regressions for actual blinded/trusted prompt, scoped output, request refusals, buffered/fragmented UTF-8/partial frames, absolute response/turn deadlines, blocked writes and timeout cleanup. Findings 9/10 and new MAJOR 1, including the final review's blocked-write counterexample. |
+| `harness_v2/tests/test_rereview_pipeline.py` | Regressions for unsuccessful/malformed/flagged/item-disagreeing review, successful agreement, reviewer exceptions, exact CRLF grading, paired raw/derived hashes and persisted CPU metadata. Finding 13, all new MAJOR findings affecting acceptance/storage, and new MINOR. |
+| `harness_v2/tests/test_rereview_grokbot.py` | Regressions reject image/unknown/nested fields in both delivery modes and verify independent publication blinding. Finding 12. |
+| `harness_v2/tests/test_gemma.py` | Adapts SDK mocks to explicit attestation and factory construction, asserts pinned endpoint and preserves quota/retry tests. Finding 4's intentional setup API change remains covered offline. |
+| `harness_v2/tests/test_codex.py` | Adds thread IDs to notification fixtures and expects an explicit decline response. Finding 9: exercise scoped protocol notifications and fail-closed approvals. |
+| `harness_v2/tests/test_grokbot.py` | Uses embedded secret-bearing text within the publication allowlist and expects image-bearing requests to be rejected. Finding 12: update earlier tests to the stricter publication contract while retaining credential redaction checks. |
+| `docs/superpowers/plans/2026-10-23-pr10-rereview.md` | Records the findings, constraints, implementation sequence and final validation. Keep the implementation/review rationale inspectable without git writes. |
+| `commit_plan.json` | Groups every changed file exactly once into feature commits, with documentation last. Pre-existing untracked review/log files are excluded. User requested a reviewable commit plan, without committing or writing git state. |
+| `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md` | Record each changed file, behavior, reason and validation result. Keep both existing change-log conventions complete. |
+
+検証: `/tmp/pt2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **311 passed**。新しい再レビューテスト6ファイルに **136 ケース**。最初の sandbox 実行は既存テストの localhost モックサーバー作成権限だけで失敗したため、外部接続・DNS を拒否する一時的な `PYTHONPATH=/tmp/pr10_offline` ガードを付け、localhost フィクスチャ用の権限で同じコマンドを実行した。外部 API・モデル取得・git 書き込みは実施していない。独立した read-only レビューで見つかった自然文の得点漏れ、数式の数値接頭辞破壊、stdin 書込みの停止も、失敗する回帰テストを先に追加して修正した。`git diff --check` も成功。
+
+## harness v2: free-tier attestation optional (2026-10-23)
+
+- `harness_v2/providers/gemma_ai_studio.py`: `free_tier_project` の明示オプトインを必須から任意に変更（ユーザー確認: AI Studioキーのプロジェクトは課金未設定）。`vertexai=False`、AI Studioエンドポイント固定、429で停止、有料フォールバックなしは維持。指定の有無を `provider_policy` に記録。
+- `harness_v2/tests/test_rereview_gemma_policy.py`: 任意化と429停止の回帰テストに置換。
+- 検証: `pytest -q harness_v2/tests math-answer-diagnosis/tests` → 308 passed。
+
+## harness v2: Gemma リクエストのタイムアウト (2026-10-23)
+
+- `harness_v2/providers/gemma_ai_studio.py`: AI Studio クライアントに `http_options.timeout=180000`（ms）を追加。Phase 2 実走で応答のない呼び出しがバッチを20分以上止めたため。エンドポイント固定・`vertexai=False`・429停止・フォールバックなしは維持。
+- テスト: `test_rereview_gemma_policy.py`、`test_gemma.py` を更新・追加。`pytest -q harness_v2/tests math-answer-diagnosis/tests` → 309 passed。実機で1回呼び出し成功を確認。
+
+## 追記: harness v2 の参照採点・比較・非公開データ保護の3修正（2026-10-23）
+
+状態名は `validated` / `review_required` / `failed` を維持。参照得点は採点後の評価専用とし、参照との不一致だけでは状態や予測得点を変更しない。欠落得点の補完、特定の数式・得点の特例、`math-answer-diagnosis/` の編集、git 書き込みは行っていない。
+
+| 修正 | ファイル | 何を、なぜ |
+| --- | --- | --- |
+| 1 | `harness_v2/core/pipeline.py` | 合計の `reference_score` と項目別の `reference_items` を採点・独立レビュー後に照合。`validated` でも不一致なら既存の FailureCase・提案・実行記録リンクを保存する。`independent=False` でもモデル入力の参照情報除去を必須にし、評価用ラベルによる採点への影響を防ぐ。 |
+| 1 | `harness_v2/evaluation/independent.py` | 埋め込み JSON とラベル付きテキストから `reference_items` を除去。Python/YAML 風・不正形式の代入は残りのテキストを保守的に伏せ、値が漏れないようにする。元の OCR は非公開アーティファクトにそのまま残す。 |
+| 1 | `harness_v2/tests/test_reference_evaluation.py` | 合計・項目別不一致、一致・参照なし、0点、未採点を検証。provider に渡るプロンプトと実際の Codex turn の両方に参照キー・値が無いこと、JSON/Python/YAML 形式でも漏れないことを確認する。 |
+| 2 | `harness_v2/evaluation/comparison.py` | 結果読込・新旧双方の妥当性検証・ベンチマーク集計を共通化。旧形式の必須項目、正規フィールド、得点・根拠・合計と新形式の `validated` を確認し、項目別のレビュー理由・不確実性も保持する。不完全なケースも分母に残し、成功率の水増しを防ぐ。 |
+| 2 | `scripts/compare_old_vs_new.py` | 終了コードだけでなく双方の保存結果を確認し、比較の成否・不完全な理由を記録。不完全・入力0件では CLI を非0終了にする。非公開テキストを含み得る summary も作成・再書込み時に権限を固定する。比較状態と採点状態は別に扱う。 |
+| 2 | `harness_v2/tests/test_comparison_reliability.py` | 終了0でも結果なし・解析失敗・不正得点なら不成功になること、結果ファイル欠落・破損、別形式の別名による検証回避、旧形式必須項目欠落・項目別の要確認フラグ、空入力、集計・CLI 終了・summary 権限を検証する。 |
+| 3 | `harness_v2/storage/permissions.py` | ディレクトリを `0o700`、ファイルを `0o600` に固定する共通処理を追加。既存ファイルも読込・切詰め・書込み前に fd で chmod し、呼出側の umask に依存しない。 |
+| 3 | `harness_v2/storage/artifacts.py` | 全アーティファクトと親ディレクトリの作成・読込を保護。上書きを拒否した既存ファイルも chmod する。`ocr_private/`・`grading_private/`・raw 応答・任意名の非公開アーティファクトを、バイト列と不変性を保って保護する。 |
+| 3 | `harness_v2/storage/sqlite_store.py` | DB を接続前に安全な権限で用意し、既存 DB・journal/WAL/SHM も修正。接続を明示的に閉じ、処理後も権限を確認する。新規 sidecar は DB の権限を継承させる。 |
+| 3 | `harness_v2/recognition/ocr.py`, `harness_v2/recognition/run_ocr_cpu.py` | インポート元の生 OCR、生成 Markdown・統計・出力ディレクトリの権限を固定。アーティファクト保存前の OCR も公開しないため。 |
+| 3 | `harness_v2/__main__.py`, `scripts/legacy_runner.py` | 新旧 CLI の結果と入力コピーを、既存ファイルへの再書込みも含めて保護。生の答案・モデル本文を含むため。 |
+| 3 | `harness_v2/providers/grokbot_exchange.py` | request/result の作成・読込と handoff ファイル・ディレクトリの権限を固定。ファイル連携に残る答案も保護する。 |
+| 3 | `harness_v2/tests/test_private_permissions.py` | `os.umask(0o000)` と `os.stat` で新規・既存アーティファクト、OCR、CLI・旧形式・連携ファイル、DB と稼働中の journal/WAL/SHM を検証。終了時に umask を復元する。CPU 出力はローカルのモデル代替で試し、重みを取得しない。 |
+| 共通 | `docs/harness_v2/CHANGES.md`, `docs/CHANGES_COLAB.md`, `commit_plan.json` | 変更内容・理由・検証結果を記録し、修正1→2→3の3グループに整理。共有する両ドキュメントは最後のグループに置き、git 状態を変更せずレビュー可能にする。 |
+
+検証: `/workspace/venv_h2/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **379 passed（12.27秒）**。既存アプリの localhost モックサーバー用に loopback ソケットの sandbox 権限を付けて実行した。最初の制限付き実行は345件成功、ソケット権限による失敗・エラー14件。外部接続・モデル取得は不要。read-only レビューで見つかった非 JSON の参照情報、空比較、形式の別名による検証回避も回帰テストを追加して修正した。`git diff --check` も成功。
+
+## harness v2 Phase 3 / 01: 根拠照合と明示的な記載なし（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/contracts.py, harness_v2/grading/scorer.py, harness_v2/grading/validator.py` | 0点・真偽値true・理由付きの場合だけ空の根拠を許可。数式区切り・数式先頭の等号・空白を比較時だけ正規化し、生データを保持する。 |
+| `harness_v2/evaluation/review.py, harness_v2/evaluation/schemas/grading_review.schema.json, harness_v2/tests/test_p3_evidence.py` | 独立レビューにも同じ契約を適用。型の偽装・非0点・捏造根拠の拒否とLaTeX差分の回帰テストを追加。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **394 passed in 12.69s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 02: ルート依存関係の不足を修正（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `requirements.txt` | google-genai・jsonschema・sympyを既存の範囲指定形式で追加。ルートからのインストールでもハーネスを動かせるようにする。 |
+| `harness_v2/tests/test_p3_requirements.py` | harness_v2/requirements.txt の全依存と下限がルートに含まれることを検証し、Phase 2のセットアップ失敗を防ぐ。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **395 passed in 12.30s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 03: セットアップ失敗の記録と再実行（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/pipeline.py` | 例外発生時もfailed・failure_reason・例外クラス・成果物リンクを保存。同じrequest_idの再実行は試行番号付きパスを使い、不変成果物を上書きしない。429も停止前に1件だけ記録する。 |
+| `harness_v2/tests/test_p3_setup.py` | キー未設定・準備失敗・返却前例外・孤立成果物・同一ID再試行・429の回帰テストを追加。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **400 passed in 12.58s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 04: 再試行を含む遅延と試行履歴（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/contracts.py, harness_v2/providers/gemma_ai_studio.py` | latency_msを再試行待機も含む合計時間に変更。各試行のlatency_ms・状態・例外クラス・既知のトークン数を保持する。 |
+| `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_latency.py` | 通常・失敗・429の記録に試行数と履歴を保存。偽時計で合計550msと各試行20/30msを検証し、最後の試行だけを記録する問題を防ぐ。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **403 passed in 12.15s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 05: 取り込みOCRの来歴（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/ocr.py` | <file>.meta.json・明示メタデータパス・ケースのocr_metadataを受付。engine・revision・dtype・source・timingを保持し、elapsed_sを正規化する。 |
+| `harness_v2/core/pipeline.py, harness_v2/tests/test_p3_ocr_metadata.py` | 来歴をocr_metadataへ永続化。3通りの取り込み・優先順位・CRLFとハッシュの保持を回帰テストにし、Phase 2のCPU出力を監査可能にする。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **407 passed in 12.34s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 06: 保存済み実行からの参照不一致FailureCase（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/reference.py, harness_v2/core/pipeline.py` | 既存の参照照合を共通化し、RunRecordとSQLite読込結果の両方からFailureCaseを生成。問題ID・入力版を記録し、予測得点と状態は変更しない。 |
+| `harness_v2/tests/test_p3_reference.py` | validatedの保存済み実行・項目不一致・一致・0点・欠落点を検証。既存のGemma/Codex境界テストも実行し、参照の送信と得点補完を防ぐ。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **409 passed in 12.23s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 07: 版付き非公開データセット（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/dataset.py` | dataset_id・versionと入力/基準/参照のSHA256を持つmanifestを追加。参照は別ファイルに分離し、パス逸脱・重複・不正参照を拒否。ファイル0600・ディレクトリ0700を保証する。 |
+| `scripts/build_dev_dataset.py, scripts/dev_dataset_references.json` | 指定ローカル資料から手動C0/C1・手動・Xiaomi CPU fp32の7条件を作成。項目参照は指定された1-A/3-AのみJSONデータで保持し、実際の答案はgit外へ出力する。 |
+| `harness_v2/tests/test_p3_dataset.py, docs/harness_v2/phase3_usage.md` | 一時fixtureでビルダー・ハッシュ改竄・CRLF・分離・権限を検証。実データでも/tmp/p3_dev_datasetへ7条件を構築し、APIは呼ばない。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **415 passed in 12.68s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 08: 繰返し実行CLIと再開（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | config・dataset・repeats・outを受けるCLIを追加。IDを決定的に生成し、完了済みをスキップ、失敗試行を別成果物で再実行。429では状態・実行記録・FailureCaseを保存して即停止する。 |
+| `harness_v2/providers/gemma_ai_studio.py, harness_v2/providers/fixture.py, harness_v2/core/pipeline.py, harness_v2/storage/sqlite_store.py` | モデル指定とseed等の生成設定を実呼出しへ渡し、試行来歴を保存。セットアップ例外もPipeline内で記録する。 |
+| `harness_v2/tests/test_p3_runner.py, docs/harness_v2/phase3_usage.md` | fixtureでID・再開・429・構築例外・待機・CLI・設定伝播・参照分離を検証し、コマンドとJSON例を記載。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **420 passed in 13.13s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 09: BaselineとCandidateの比較条件（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | ケース/繰返しで対応付け、モデル・問題・入力ハッシュ・OCR来歴・基準版・生成設定等が異なる場合や結果欠落を理由付きで拒否。両側の成功率・遅延と差分を返す。 |
+| `harness_v2/evaluation/compare.py, harness_v2/tests/test_p3_comparison.py, docs/harness_v2/phase3_usage.md` | 保存済みディレクトリから比較するCLIを追加。各拒否条件・同条件・CLIをテストし、manifest検証付きの実行例を記載。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **432 passed in 13.28s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 / 10: 評価指標と重大退行の判定（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/metrics.py` | MAE・項目一致・根拠追跡率・誤加点/誤減点・要確認検出/誤警告・成功率・合計/試行別遅延・再試行を含む要求数/既知トークンを集計。欠落点は未採点、適用不能な率はnullとし、分母と不明使用量を表示する。 |
+| `harness_v2/evaluation/comparison.py` | 両側の指標と差分を計算。新しいケース/繰返し/項目の誤採点、または根拠精度の低下はMAEが改善してもregressedとする。期待ケースと実行の来歴、生/採点入力ハッシュをmanifestと照合する。 |
+| `harness_v2/core/pipeline.py, harness_v2/evaluation/independent.py` | 反復中の入力改変をモデル呼出し前に拒否し、失敗時も来歴を保持。最終確認で再現したreference_scores複数形の漏れも修正し、Gemma/Codex境界で参照を除去する。 |
+| `harness_v2/tests/test_p3_metrics.py, harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_runner.py, harness_v2/tests/test_p3_reference.py` | 数値fixtureで全指標・未採点・履歴使用量・誤警告・MAE改善に隠れた新規誤採点・入力改変・両側共通の不正来歴を検証。実際のCodex turnをローカル台本で検査し、外部呼出しは行わない。 |
+| `docs/harness_v2/phase3_usage.md` | 分母・null・履歴・判定規則と07/08/09の再現コマンドを記載する。 |
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **447 passed in 13.54s**。外部接続・DNSを拒否し、既存テストのlocalhostモックのみ許可。外部API呼出し・git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 01: 実装コミットの不変識別（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | experiment/resultsにcommitを保存して実験identityに含める。保存済みcommitが異なる、または存在しない場合は更新・推論前に拒否し、`unknown`も完全一致で照合する。異なる実装の混在や既存記録の付替えを防ぐ。 |
+| `harness_v2/tests/test_p3_runner.py` | 同一commitでの再開、異なるidentity、`unknown`との相互変更、拒否時のチェックポイント保持を検証する。異なる実装でのプロバイダ呼出しを防ぐ。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **452 passed in 13.48s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 02: 中断後の実験記録の復元（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/core/pipeline.py, harness_v2/run.py` | 最初のSQLite保存時にexperiment_caseを含める。完了済み要求のスキップ前に欠落来歴を補修し、過去の試行も含めて不足するFailureCaseを復元。既存ファイルは保持し、中断による報告欠落や完了済み推論の再呼出しを防ぐ。 |
+| `harness_v2/tests/test_p3_runner.py` | 行保存直後・失敗ファイル作成前の中断、旧形式の来歴欠落、完了済み得点の保持、過去の失敗試行、再開の冪等性と0600/0700を検証。SQLiteだけで復元できることを保証する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **455 passed in 14.03s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 03: 実行済みOCR来歴の照合（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/ocr.py` | 自動・明示指定のメタデータファイルを取り込む際、元のバイト列からsidecar_sha256を算出し、答案のsource_sha256も記録。メタデータ結合後に確定し、申告値による上書きを防ぐ。答案が同じでもサイドカーの変更を追跡可能にする。 |
+| `harness_v2/evaluation/comparison.py` | 各実行のengine・revision・dtype・source hashをmanifestと相手側の記録に照合。宣言済みsource/sidecar hashとrevision別名を扱い、来歴欠落・sidecar変更を拒否。経過時間は識別対象から除く。同じmanifestや両側の同一改竄に隠れる条件差を防ぐ。 |
+| `harness_v2/tests/test_p3_comparison.py, harness_v2/tests/test_p3_ocr_metadata.py` | 片側/両側改変、項目欠落、revision別名、サイドカーのみの変更、CRLFの厳密ハッシュ、偽装値と非公開権限を回帰テストにする。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **473 passed in 14.33s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。
+
+## harness v2 Phase 3 レビュー修正 / 04: 合計点だけが異なる場合の誤加点・誤減点（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/metrics.py` | 既知の項目に誤りがなく合計不一致を__total__で記録する場合も、誤加点/誤減点の方向を集計。項目参照がない場合と同じ分岐にまとめ、合計誤りだけ方向の集計から漏れる問題を修正する。 |
+| `harness_v2/tests/test_p3_metrics.py` | 全項目・部分項目の参照が一致する場合の両方向、既知の項目誤りがある場合の二重計上防止、入力得点の不変性を検証。未参照項目への誤り割当てや得点補完を行わず正しく集計する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **479 passed in 14.09s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックを許可し、git書込みなし。
+
+## harness v2 Phase 3 ライブ実行修正 / 05: 根拠照合の正規化を対称にする（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/grading/validator.py` | 数式区切り内の先頭`=`を削除する処理をやめ、区切り記号と空白の除去だけにする。答案側だけ`=`が消え、区切りのない引用（例 `= \sqrt{9}-\sqrt{2}`）が逐語でも照合失敗していた。Phase 3 ライブ実行で、正しく採点された1-A xiaomi_cpu_fp32の3件がこれだけでreview_requiredになっていた。比較用のみで保存テキストは変更しない。 |
+| `harness_v2/tests/test_p3_evidence.py` | 先頭`=`の有無・区切りの有無の引用が一致する回帰テスト。既存の否定ケースは維持。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **482 passed in 14.16s**。
+
+## harness v2 Phase 3 review fix / 06: 実装コミットの自動解決（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | CLI・APIでcommitを省略すると、呼出し元の作業ディレクトリではなくharnessソースのHEADを取得し、追跡対象の変更には`+dirty`を付ける。解決不能・空文字・`unknown`は保存やプロバイダ呼出し前に拒否し、明示指定ならGitなしでも実行可能。既定値や旧`unknown`記録による異なる実装の混在を防ぐ。 |
+| `harness_v2/tests/conftest.py, harness_v2/tests/test_p3_commit_identity.py, harness_v2/tests/test_p3_runner.py` | 解決処理をモックして実リポジトリ状態への依存を排除。クリーン/変更済みHEAD、Git失敗、CLI/API既定値、明示指定、旧記録の拒否と再開拒否時のファイル不変性を検証する。参照分離は維持する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **506 passed in 14.31s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 07: 失敗したモデル呼出しの生成設定も検証（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | 現在の実行と過去の試行の実効生成設定を、failedを含めて宣言値と照合。明示的なセットアップ例外で試行数0・応答記録なしの場合だけ除外し、設定の欠落・不正形式・呼出し有無の不明な記録は拒否する。provider_policyは引き続き生成パラメータから除外。失敗や再試行を含む指標の条件混在を防ぐ。 |
+| `harness_v2/tests/test_p3_failed_settings.py` | JSON解析・HTTP・quota失敗、片側/両側の不一致、設定欠落/不正、再開成功後の失敗履歴、呼出し前の設定失敗、不明な試行数と応答記録の矛盾を検証。比較前後の記録と未採点を保持し、得点補完や参照送信を防ぐ。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **542 passed in 15.33s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 08: 追跡対象のローカル変更を識別（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | 変更済みHEADの識別子に、追跡対象の`git diff HEAD`の生バイト列のSHA256を付加。ステージ済み・未ステージ・バイナリ変更を含め、外部diffとテキスト変換を無効化する。クリーンHEADは従来どおりとし、diff取得不能なら拒否する。異なるローカル変更による再開識別子の衝突を防ぐ。 |
+| `harness_v2/tests/test_p3_commit_identity.py` | Git解決をすべてモックし、クリーン状態・異なる変更・バイナリの生バイト・決定性・diff失敗・別の変更状態での再開拒否を検証。拒否時は保存もプロバイダ呼出しも行わず、実リポジトリ状態に依存しない。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **544 passed in 16.79s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 09: メタデータ保存前に永続行の再開識別子を検証（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | experimentメタデータを書き込む前にSQLiteを読取り専用で開き、全試行のcommit・実験名・利用可能なcase/config/dataset来歴を照合。新規行には完全な実験識別子も保存する。不一致・読取り不能・裏付けのない旧行は拒否。一致する永続識別子があればexperiment.jsonを推論なしで復元し、一致する既存メタデータがあれば旧来歴の修復を維持する。JSONの削除・書換えによる永続結果の付替えを防ぐ。 |
+| `harness_v2/tests/test_p3_durable_identity.py` | メタデータの削除/書換え、未知/異なるcommit、DB・JSON・スキーマ破損、実験/case来歴の不一致、過去の失敗行、安全な復元と私有権限を検証。拒否時の全ファイル不変性とプロバイダ未呼出しを確認し、SQLiteを再開時の正とする。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **571 passed in 15.71s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。
+
+## harness v2 Phase 3 review fix / 10: 指標に寄与する全試行のOCR来歴を検証（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | 最新の論理実行だけでなく、集計対象の過去のattempt_runsにもcase来歴・OCRメタデータ/入力ハッシュ・採点用派生入力ハッシュの照合を適用。sidecarの有無とハッシュを同じcaseの全試行と実験間で照合し、最新の失敗がOCR前でも過去の相違を検出する。OCRや後続応答の証拠がない失敗だけ除外し、再開成功による過去の条件不一致の隠蔽を防ぐ。 |
+| `harness_v2/storage/secrets.py` | _token_runs/_token_attemptsで終わる数値の使用量カウンタを保持し、秘密値の文字列や認証情報の伏字は維持する。不明トークン数も比較レポートと差分に数値で残す。 |
+| `harness_v2/tests/test_p3_historical_ocr.py` | 片側/両側の過去来歴破損、欠落、sidecarの変更/欠落/宣言値、実際の再開時変更、全採点状態、OCR前失敗の除外、履歴間比較、派生入力ハッシュと私有CLIレポートのカウンタを検証。記録不変性と失敗得点の未補完を確認し、参照の送信や追加推論なしで監査可能にする。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **603 passed in 18.12s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。
+
+## harness v2 Phase 3 final check fix / 11: 完全な永続実験識別子を必須にする（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/run.py` | チェックポイント保存・復元の前に、全SQLite試行のexperiment_caseに一致する完全なexperiment_identityを要求。メタデータだけを根拠とした旧来歴の補修を廃止し、experiment.jsonが一致しても来歴・完全な識別子がない行は再開を拒否する。永続識別子が確認できる場合のチェックポイント・失敗ファイル復元は維持。書換え可能なJSONや部分的な要求ハッシュでは元の問題文・OCR条件・実験全体を証明できず、古い得点の付替えを防げないため。 |
+| `harness_v2/tests/test_p3_durable_identity.py, harness_v2/tests/test_p3_runner.py` | 来歴/完全な識別子の欠落、一致/書換え済みメタデータ、問題文・OCRメタデータの変更、過去の失敗試行を検証。拒否時の全ファイル不変性とプロバイダ未呼出し、永続識別子がある中断後の復元・得点保持・冪等性・0600/0700を確認する。推論や得点補完なしで安全な復元を維持する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **615 passed in 18.05s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。
+
+## harness v2 Phase 3 final check fix / 12: OCR前の除外根拠を確認し不正な履歴を比較不能にする（2026-10-23）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/comparison.py` | OCR来歴欠落の除外は、failedかつ整数のattempt_countが明示的に0、attemptsが空リスト、OCR・プロンプト・採点入力・応答の成果物がない場合だけ許可。outputs/gradingの型を索引・設定照合前に確認し、互換性エラーがあれば派生ハッシュや指標処理の前に比較不能レポートを返す。呼出し・プロンプトの証拠や不明な試行数による検証回避と、過去のoutputsがnullの場合のAttributeErrorを防ぐ。 |
+| `harness_v2/tests/test_p3_ocr_exemption.py, harness_v2/tests/test_p3_historical_ocr.py` | 呼出し/プロンプトの証拠、試行数の欠落・null・不正型、片側/両側、最新/過去の実行、明示/保存済みdatasetでの不正outputs/grading、CLIの非公開比較不能レポートを検証。合成したOCR前失敗から後続成果物を除き、実際のOCR前例外の回帰テストも維持。記録不変性・失敗得点の未補完・参照分離・状態検証・0600/0700を保持し、根拠のある早期失敗だけを除外する。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **692 passed in 22.74s**。PATHに`/workspace/venv_clean/bin`を使用。既存localhostモックのためサンドボックス権限を拡張し、git書込みなし。math-answer-diagnosisのソースは変更しない。
 ## PR #9 修正1: OCR 再利用の条件と手動転記の分離
 
 OCR 結果にエンジン、モデル ID・revision、OCR 設定、入力画像ごとの SHA-256（ページ順）を保存し、現在の実行とすべて一致するときだけ再利用する。情報のない旧レコード、画像の変更・欠落、設定の変更では再利用しない。数式置換が失敗した結果を、置換済みとして再利用しない。`OCR_MODEL_REVISION` は managed サーバーの processor・重みの読み込みにも渡す。

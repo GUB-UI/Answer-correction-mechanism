@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GrokbotResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request_id", "status", "outputs", "failure_reason"],
+  "properties": {
+    "request_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["completed", "failed", "review_required"]},
+    "outputs": {"type": "object"},
+    "failure_reason": {"type": "string"},
+    "artifact_paths": {"type": "array", "items": {"type": "string"}}
+  }
+}

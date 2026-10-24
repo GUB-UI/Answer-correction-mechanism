@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GrokbotRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "kind",
+    "experiment_id",
+    "commit",
+    "rubric_version",
+    "prompt_version",
+    "input_ids",
+    "payload",
+    "created_at"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "grade",
+        "evaluate",
+        "improve"
+      ]
+    },
+    "experiment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "rubric_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "problem_text": {
+          "type": "string"
+        },
+        "answer_text": {
+          "type": "string"
+        },
+        "ocr_text": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "diff": {
+          "type": "string"
+        },
+        "failure_text": {
+          "type": "string"
+        },
+        "rubric": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "item_id",
+              "max_points"
+            ],
+            "properties": {
+              "item_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "max_points": {
+                "type": "number",
+                "minimum": 0
+              },
+              "description": {
+                "type": "string"
+              },
+              "acceptable_expression": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "independent_evaluation": {
+      "type": "boolean"
+    }
+  }
+}
