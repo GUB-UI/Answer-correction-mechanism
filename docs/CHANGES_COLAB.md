@@ -320,3 +320,9 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 
 - `/health` の `model` など fingerprint 以外のフィールドにサロゲートが含まれても、応答全体を UTF-8 で送る。符号化できないときは ASCII エスケープに落とす。
 - 既定の served name がモデル ID そのものである backend の回帰テストを追加。fingerprint が作れないときは null のまま、health は 200 を返す。
+
+## PR #9 / Sol r5 修正1: managed OCR はロード済みモデルを記録する
+
+- managed モードの OCR provenance は、設定上のモデル名ではなく `/health` が返すロード済みの model、revision、有効な settings を記録する。設定側の `server_model_id` とコマンドハッシュは残す。
+- model、revision、または空でない settings を確認できないときは provenance を作らず、その結果は再利用しない。ページ処理の途中で backend が変わった場合も provenance を捨てる。
+- 手動起動した別モデルの出力を設定上のモデルとしてキャッシュしない回帰、確認できない health、処理中の変更を追加。
