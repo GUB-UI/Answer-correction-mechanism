@@ -47,9 +47,9 @@ def case(tmp_path, monkeypatch):
         "score": None, "max_score": 5, "question_scores": [],
     })
 
-    def run(config=config, options=options, **kwargs):
+    def run(config=config, options=options, answers=None, **kwargs):
         adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client, transport="lmstudio")
-        return run_batch(storage, config, [answer], options, services=manager,
+        return run_batch(storage, config, answers or [answer], options, services=kwargs.pop("services", manager),
                          diagnosis_adapter=adapter, **kwargs).items[0]
 
     return storage, config, options, client, run
@@ -159,7 +159,7 @@ def test_skip_disabled_regrades_matching_configuration(case):
 
 def test_unknown_adapter_configuration_is_never_reused(case, monkeypatch):
     storage, config, options, client, run = case
-    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context: None)
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context, **kwargs: None)
     first = run()
     again = run()
     assert storage.get_diagnosis_result(first.diagnosis_id).grading_metadata is None
@@ -238,7 +238,7 @@ def test_managed_startup_precedes_metadata_snapshot(case, monkeypatch):
 
     monkeypatch.setattr("src.runtime.services.get_service_manager",
                         lambda config: SimpleNamespace(ensure=start))
-    first = run(config=config)
+    first = run(config=config, services=SimpleNamespace(events=[], ensure=start))
     saved = storage.get_diagnosis_result(first.diagnosis_id)
     assert saved.grading_metadata["generation_settings"]["backend"]["model_id"] == "started-weights"
     assert run(config=config).diagnosis_id == first.diagnosis_id
@@ -297,7 +297,7 @@ def test_equal_incomplete_metadata_on_both_sides_never_reuses(case, monkeypatch,
     stored.grading_metadata = metadata
     # Reproduce equal partial metadata in memory, independently of JSON loading.
     monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [stored])
-    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context: metadata)
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", lambda self, context, **kwargs: metadata)
     again = run()
     assert again.diagnosis_id and again.diagnosis_id != first.diagnosis_id
     assert client.chat_completion.call_count == 2
@@ -380,7 +380,7 @@ def test_equal_missing_or_invalid_post_processing_never_reuses(case, monkeypatch
     saved.grading_metadata["post_processing"] = post_processing
     monkeypatch.setattr(storage, "get_diagnosis_results_for_answer", lambda answer_id: [saved])
     monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata",
-                        lambda self, context: saved.grading_metadata)
+                        lambda self, context, **kwargs: saved.grading_metadata)
     assert run().diagnosis_id != first.diagnosis_id
     assert client.chat_completion.call_count == 2
 
@@ -399,4 +399,66 @@ def test_backend_provenance_change_requires_regrading(case, change):
     else:
         fingerprint["library_versions"]["torch"] = "changed-version"
     assert run().diagnosis_id != first.diagnosis_id
+    assert client.chat_completion.call_count == 2
+
+
+def test_metadata_failure_is_isolated_to_one_answer(case, monkeypatch):
+    storage, config, options, client, run = case
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+    original = LMStudioDiagnosisAdapter.grading_metadata
+
+    def metadata(self, context, **kwargs):
+        if context.answer_id == "a":
+            raise RuntimeError("metadata unavailable")
+        return original(self, context, **kwargs)
+
+    monkeypatch.setattr(LMStudioDiagnosisAdapter, "grading_metadata", metadata)
+    item = run(answers=[first, second])
+    assert item.status == "failed"
+    assert "metadata unavailable" in " ".join(item.errors)
+    assert [d.answer_id for d in storage.list_diagnosis_results()] == ["b"]
+
+
+def test_startup_failure_is_recorded_for_each_item(case, monkeypatch):
+    storage, config, options, client, run = case
+    config = replace(config, services=replace(config.services, mode="managed"))
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+
+    def fail(service):
+        raise RuntimeError("startup failed")
+
+    manager = SimpleNamespace(events=[], ensure=fail)
+    adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client)
+    report = run_batch(storage, config, [first, second], options, services=manager,
+                       diagnosis_adapter=adapter)
+    assert all(item.status == "failed" and "startup failed" in " ".join(item.errors)
+               for item in report.items)
+    assert not storage.list_diagnosis_results()
+
+
+def test_batch_shares_startup_and_backend_snapshot(case, monkeypatch):
+    storage, config, options, client, run = case
+    config = replace(config, services=replace(config.services, mode="managed"))
+    first = storage.list_answers()[0]
+    second = first.model_copy(update={"answer_id": "b"})
+    storage.save_answer(second)
+    typed_text_as_ocr(storage, answer_id="b", typed_text="another answer")
+    manager = SimpleNamespace(events=[], ensure=MagicMock())
+    monkeypatch.setattr("src.runtime.services.get_service_manager", lambda config: manager)
+    adapter = LMStudioDiagnosisAdapter(config, lmstudio_client=client)
+    for skip in (False, True):
+        client.backend_fingerprint.reset_mock()
+        manager.ensure.reset_mock()
+        report = run_batch(storage, config, [first, second], replace(options, skip_existing_diagnosis=skip),
+                           services=manager, diagnosis_adapter=adapter)
+        assert all(item.diagnosis_id for item in report.items)
+        assert manager.ensure.call_count == 1
+        # Before batch + after each generation; all reused needs just one snapshot.
+        assert client.backend_fingerprint.call_count == (3 if not skip else 1)
     assert client.chat_completion.call_count == 2

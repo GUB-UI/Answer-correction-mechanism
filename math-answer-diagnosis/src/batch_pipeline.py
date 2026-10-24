@@ -224,7 +224,7 @@ def run_batch(
     adapter = diagnosis_adapter or create_diagnosis_adapter(opts.diagnosis_provider, config)
     metadata_builder = getattr(adapter, "grading_metadata", None)
     model_name = config.diagnosis.model_name if opts.diagnosis_provider != "mock" else "mock"
-    targets: list[tuple[DiagnosisRunContext, dict[str, Any] | None]] = []
+    targets: list[DiagnosisRunContext] = []
     for answer in answers:
         item = items[answer.answer_id]
         if not item.ocr_id:
@@ -245,50 +245,69 @@ def run_batch(
             model_name=model_name,
             prompt_type=opts.prompt_type,
         )
-        metadata = metadata_builder(context) if metadata_builder else None
-        if opts.skip_existing_diagnosis:
-            done = [
-                d
-                for d in storage.get_diagnosis_results_for_answer(answer.answer_id)
-                if d.ocr_id == item.ocr_id and d.prompt_type == opts.prompt_type
-                and d.problem_id == answer.problem_id and d.model_name == model_name
-                and complete_grading_metadata(metadata)
-                and complete_grading_metadata(d.grading_metadata)
-                and d.grading_metadata == metadata
-            ]
-            if done:
-                latest = sorted(done, key=lambda d: d.created_at)[-1]
-                item.diagnosis_id = latest.diagnosis_id
-                item.score, item.max_score = latest.score, latest.max_score
-                item.status = latest.review_status
-                continue
-        targets.append((context, metadata))
-    if targets:
-        if opts.diagnosis_provider != "mock":
-            manager.ensure(LLM)
-        for index, (context, metadata) in enumerate(targets, start=1):
-            notify("diagnosis", index, len(targets), context.answer_id)
-            item = items[context.answer_id]
-            try:
-                # Startup or another answer may have changed the running backend.
-                metadata = metadata_builder(context) if metadata_builder else None
-                raw = adapter.run(context)
-                after = metadata_builder(context) if metadata_builder else None
-                diagnosis = adapter.to_diagnosis_result(
-                    context,
-                    raw,
-                    diagnosis_id=storage.generate_id("diag"),
-                    created_at=utc_now_iso(),
-                )
-                diagnosis.grading_metadata = (
-                    metadata if complete_grading_metadata(metadata) and metadata == after else None
-                )
-                storage.save_diagnosis_result(diagnosis)
-                item.diagnosis_id = diagnosis.diagnosis_id
-                item.score, item.max_score = diagnosis.score, diagnosis.max_score
-                item.status = diagnosis.review_status
-            except Exception as exc:
-                item.errors.append(f"診断: {exc}")
+        targets.append(context)
+    backend_builder = getattr(adapter, "backend_fingerprint", None)
+    run_prepared = getattr(adapter, "run_prepared", adapter.run)
+    prepared = False
+    startup_error: Exception | None = None
+    backend = None
+
+    def metadata_for(context):
+        if not metadata_builder:
+            return None
+        if backend_builder:
+            return metadata_builder(context, backend=backend)
+        return metadata_builder(context)
+
+    for index, context in enumerate(targets, start=1):
+        notify("diagnosis", index, len(targets), context.answer_id)
+        item = items[context.answer_id]
+        try:
+            if not prepared:
+                prepared = True
+                try:
+                    if opts.diagnosis_provider != "mock":
+                        manager.ensure(LLM)
+                except Exception as exc:
+                    startup_error = exc
+                if startup_error is None and backend_builder:
+                    backend = backend_builder()
+            if startup_error is not None:
+                raise startup_error
+            metadata = metadata_for(context)
+            if opts.skip_existing_diagnosis and complete_grading_metadata(metadata):
+                done = [
+                    d for d in storage.get_diagnosis_results_for_answer(context.answer_id)
+                    if d.ocr_id == item.ocr_id and d.prompt_type == opts.prompt_type
+                    and d.problem_id == context.problem_id and d.model_name == model_name
+                    and complete_grading_metadata(d.grading_metadata)
+                    and d.grading_metadata == metadata
+                ]
+                if done:
+                    latest = max(done, key=lambda d: d.created_at)
+                    item.diagnosis_id = latest.diagnosis_id
+                    item.score, item.max_score = latest.score, latest.max_score
+                    item.status = latest.review_status
+                    continue
+            raw = run_prepared(context)
+            if backend_builder:
+                backend = backend_builder()
+            after = metadata_for(context)
+            diagnosis = adapter.to_diagnosis_result(
+                context,
+                raw,
+                diagnosis_id=storage.generate_id("diag"),
+                created_at=utc_now_iso(),
+            )
+            diagnosis.grading_metadata = (
+                metadata if complete_grading_metadata(metadata) and metadata == after else None
+            )
+            storage.save_diagnosis_result(diagnosis)
+            item.diagnosis_id = diagnosis.diagnosis_id
+            item.score, item.max_score = diagnosis.score, diagnosis.max_score
+            item.status = diagnosis.review_status
+        except Exception as exc:
+            item.errors.append(f"診断: {exc}")
     report.phase_seconds["diagnosis"] = round(time.monotonic() - started, 1)
 
     for item in report.items:

@@ -16,6 +16,8 @@ from src.prompts import DEFAULT_DIAGNOSIS_PROMPT_TYPE, DIAGNOSIS_PROMPTS
 
 
 # いずれも OpenAI 互換 API を叩く。colab_cuda は scripts/llm_server.py（Colab の GPU）。
+_UNSET = object()
+
 DIAGNOSIS_SERVER_PROVIDERS = {"omlx", "lmstudio", "lm_studio", "openai", "colab_cuda"}
 
 
@@ -49,13 +51,14 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
             {"role": "user", "content": user_prompt},
         ]
 
-    def grading_metadata(self, context: DiagnosisRunContext) -> dict | None:
-        if self.config.services.mode == "managed":
-            from src.runtime.services import LLM, get_service_manager
-
-            get_service_manager(self.config).ensure(LLM)
+    def backend_fingerprint(self) -> dict | None:
         fingerprint_builder = getattr(self.lmstudio_client, "backend_fingerprint", None)
         backend = fingerprint_builder() if fingerprint_builder else None
+        return backend if valid_backend_fingerprint(backend) else None
+
+    def grading_metadata(self, context: DiagnosisRunContext, *, backend=_UNSET) -> dict | None:
+        if backend is _UNSET:
+            backend = self.backend_fingerprint()
         if not valid_backend_fingerprint(backend):
             return None
         request_builder = getattr(self.lmstudio_client, "prepare_chat_request", None)
@@ -78,6 +81,10 @@ class LMStudioDiagnosisAdapter(DiagnosisAdapter):
         from src.runtime.services import LLM, get_service_manager
 
         get_service_manager(self.config).ensure(LLM)
+        return self.run_prepared(context)
+
+    def run_prepared(self, context: DiagnosisRunContext) -> dict:
+        """Run after the batch has ensured the service once."""
         raw_text = self.lmstudio_client.chat_completion(
             messages=self._messages(context),
             model=context.model_name or self.config.diagnosis.model_name,
