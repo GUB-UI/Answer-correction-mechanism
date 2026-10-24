@@ -7,7 +7,7 @@ from harness_v2.recognition.skeleton import cer, skeleton
 
 @pytest.mark.parametrize("notation", [
     r"\sqrt{13}", "√13", "√(13)", "√{13}", "√（１３）",
-    r"\sqrt 13", r"\sqrt{\overline{13}}", "√1̅3̅", "√13̅",
+    r"\sqrt 13", "√1̅3̅", "√13̅",
     "√1̄3̄", "sqrt(13)", r"\sqrt\left(13\right)",
 ])
 def test_root_notations_have_explicit_common_form(notation):

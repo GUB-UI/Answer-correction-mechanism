@@ -258,13 +258,8 @@ def _content(text: str) -> str:
                 index_content = f"({index_content})"
             head = "sqrt" if square or (index is None and root.group() != "root") else "root"
             argument = f"{index_content}," if index is not None else ""
-            # An overline that wraps the whole radicand is the root's own
-            # vinculum. An explicit bar is a mathematical decoration and stays.
-            vinculum = _DECORATION_HEAD.match(inner.strip())
-            if vinculum and vinculum.group().lstrip("\\") == "overline":
-                group = _group(inner.strip(), vinculum.end(), delimiters="{(")
-                if group and group[1] == len(inner.strip()):
-                    inner = group[0]
+            # Combining root strokes are removed before this point. An explicit
+            # overline or bar is a decoration and stays inside the radicand.
             radicand = _content(inner)
             if index is not None and _precedence(radicand) == -1:
                 radicand = f"({radicand})"
@@ -430,6 +425,19 @@ def _combining_notation(text: str, *, decompose: bool = True) -> str:
     # A trailing stroke on an ungrouped numeric radicand is its vinculum.
     text = re.sub(r"(\\sqrt(?![A-Za-z])|[√∛∜])\s*(\d+(?:\.\d+)?)[\u0304\u0305]+(?![^\s\u0304\u0305][\u0304\u0305])",
                   lambda m: m[1] + "{" + m[2] + "}", text)
+    # A combining stroke that is the whole radicand is the root's own line.
+    # Remove it before the generic overline conversion, so an explicit
+    # \overline stays a different decoration.
+    def _root_stroke(match: re.Match) -> str:
+        body = match.group(3) if match.group(3) is not None else match.group(4)
+        return match.group(1) + (match.group(2) or "") + "{" + re.sub(r"[\u0304\u0305]", "", body) + "}"
+
+    text = re.sub(
+        r"(\\sqrt(?![A-Za-z])|[√∛∜])(\s*\[[^\[\]]*\])?\s*"
+        r"(?:\{((?:[^\s\u0304\u0305{}][\u0304\u0305]+)+)\}|((?:[^\s\u0304\u0305][\u0304\u0305]+)+))",
+        _root_stroke,
+        text,
+    )
     text = _BARRED.sub(lambda m: r"\overline{" + re.sub("[\u0304\u0305]", "", m.group()) + "}", text)
     marks = {"\u20d7": "vec", "\u0302": "hat", "\u0307": "dot", "\u0303": "tilde"}
 

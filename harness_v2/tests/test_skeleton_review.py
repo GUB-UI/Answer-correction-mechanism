@@ -116,7 +116,7 @@ def test_fix_07_non_digit_script_characters(glyph, operator, base):
     ([r'\hat{x}', 'x̂', 'hat(x)'], ['x']),
     ([r'\dot{x}', 'ẋ', 'dot(x)'], ['x']),
     ([r'\tilde{x}', 'x̃', 'tilde(x)'], ['x']),
-    ([r'\sqrt{\overline{AB}}', '√A̅B̅', 'sqrt(AB)'], ['overline(sqrt(AB))']),
+    (['√A̅B̅', 'sqrt(AB)'], [r'\sqrt{\overline{AB}}', 'sqrt(overline(AB))', 'overline(sqrt(AB))']),
 ])
 def test_fix_08_meaningful_decorations(forms, different):
     check_forms(forms, different)
@@ -247,7 +247,7 @@ def test_rereview_fix_2_root_content_brackets(forms, different):
 
 @pytest.mark.parametrize('forms,different', [
     ([r'\sqrt{\bar{z}}', r'√\bar{z}', 'sqrt(bar(z))'], [r'\sqrt{z}', r'\sqrt{\overline{z}}', 'sqrt(z)']),
-    ([r'\sqrt{\overline{\bar{z}}}', 'sqrt(bar(z))'], [r'\sqrt{\bar{z}\bar{z}}']),
+    ([r'\sqrt{\overline{\bar{z}}}', 'sqrt(overline(bar(z)))'], [r'\sqrt{\bar{z}}', 'sqrt(bar(z))', r'\sqrt{\bar{z}\bar{z}}']),
     ([r'\sqrt{x+\bar{z}}', 'sqrt(x+bar(z))'], ['sqrt(x+z)', 'sqrt(bar(x+z))']),
     ([r'\sqrt{\bar{\bar{z}}}', 'sqrt(bar(bar(z)))'], ['sqrt(z)', 'sqrt(bar(z))']),
 ])
@@ -285,3 +285,13 @@ def test_rereview_fix_6_compatibility_marks_are_idempotent(mark, canonical):
     assert skeleton(text) == canonical
     assert skeleton(canonical) == canonical
     assert skeleton(skeleton(text)) == canonical
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\sqrt{\overline{z}}', 'sqrt(overline(z))'], [r'\sqrt{z}', '√z', 'sqrt(z)']),
+    ([r'\sqrt{\overline{13}}', 'sqrt(overline(13))'], [r'\sqrt{13}', '√13̅', '√1̅3̅', 'sqrt(13)']),
+    (['√A̅B̅', r'\sqrt{AB}', 'sqrt(AB)'], [r'\sqrt{\overline{AB}}', 'sqrt(overline(AB))']),
+    ([r'\sqrt{\overline{\overline{z}}}', 'sqrt(overline(overline(z)))'], ['sqrt(overline(z))', 'sqrt(z)']),
+])
+def test_sol_r5_fix_1_explicit_overline_inside_roots(forms, different):
+    check_forms(forms, different)

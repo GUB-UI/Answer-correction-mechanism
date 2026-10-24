@@ -991,3 +991,8 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - 修正していない。Sol r5 minor 2 を `docs/DEFERRED_REVIEW_ITEMS.md` に記録した。
 - 保存済み採点メタデータが欠けると再採点はされるが、バッチ項目と新しい結果の `reuse_unavailable_reason` は `None` のまま。望む理由名は `existing_grading_metadata_incomplete`。
+
+## PR #12 / Sol r5 修正1: 根号の中の明示的な overline を残す
+
+- 根号全体を包む上線のうち、結合記号から正規化が作った線だけを根号自身の線として外す。入力に書かれた `\overline` は装飾として残し、`\sqrt{\overline{z}}` は `sqrt(overline(z))` になって `\sqrt{z}` とは一致しない。
+- 数字や文字の上の結合線（`√13̅`、`√A̅B̅`）はこれまでどおり根号の線として畳む。衝突を前提にしていたテストを更新した。
