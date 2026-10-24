@@ -11,6 +11,7 @@ from src.adapters.base import DiagnosisRunContext, OCRRunContext
 from src.adapters.diagnosis_adapter import LMStudioDiagnosisAdapter, create_diagnosis_adapter
 from src.adapters.lmstudio_client import LMStudioClient
 from src.adapters.ocr_adapter import GLMOCRSdkAdapter, create_ocr_adapter
+from src.adapters.unimernet_client import UniMERNetClient
 from src.config import load_config
 from src.models import ProblemRecord, utc_now_iso
 from src.storage import Storage
@@ -107,6 +108,11 @@ def test_glmocr_sdk_adapter_missing_sdk(
 def test_glmocr_sdk_adapter_extracts_markdown(
     project_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(
+        "src.adapters.unimernet_client.urlopen",
+        lambda *args, **kwargs: pytest.fail("UniMERNet HTTP must be stubbed"),
+    )
+
     class FakeResult:
         markdown_result = "x = -2, -3"
 
@@ -128,7 +134,11 @@ def test_glmocr_sdk_adapter_extracts_markdown(
         lambda: lambda **kwargs: FakeParser(),
     )
     config = load_config(project_root)
-    adapter = GLMOCRSdkAdapter(config=config)
+    formula_client = MagicMock(spec=UniMERNetClient)
+    formula_client.health.return_value = False
+    adapter = GLMOCRSdkAdapter(
+        config=config, formula_client=formula_client, apply_formula=True
+    )
     image_path = project_root / "sample.png"
     image_path.write_bytes(b"png")
     result = adapter.run(
@@ -141,6 +151,9 @@ def test_glmocr_sdk_adapter_extracts_markdown(
     assert result.raw_text == "x = -2, -3"
     assert result.used_text == result.raw_text
     assert result.raw_output["provider"] == "glmocr_sdk"
+    assert result.raw_output["formula_replacements"] == [
+        {"skipped": "unimernet_unavailable"}
+    ]
 
 
 def test_create_ocr_adapter_rejects_unknown_provider(project_root: Path) -> None:

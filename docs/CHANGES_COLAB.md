@@ -282,3 +282,9 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 - 既存の入力・設定ファイルおよび読み取り先ディレクトリの権限は変更しない。既存レコードも読み取りだけなら変更しない。
 - umask 000 / 022 / 077、作成直後・atomic 置換前の権限、既存入力の権限維持を回帰テスト。
 - 全テストをオフライン実行できるよう UI のローカル HTTP をメモリ内 transport に変更し、接続禁止 fixture を追加。全スイート: 362 passed。
+
+## レビュー修正 #8b: GLM-OCR SDK テストの UniMERNet 通信依存を除去
+
+- `test_glmocr_sdk_adapter_extracts_markdown` に health が常に false の UniMERNet クライアントを注入し、数式補正を明示的に有効にした状態で、元の Markdown と `unimernet_unavailable` の記録を回帰確認する。実 HTTP 呼び出しもテスト内で禁止し、localhost の接続失敗に依存しない。
+- 本番コードと既存の autouse 通信ガードは変更していない。HTTP・DNS 呼び出しも禁止する一時 pytest プラグインで全スイートを点検し、他の実 localhost 接続依存は検出されなかった。
+- 検証: 修正前の依存を HTTP 呼び出し境界で失敗として再現。関連テスト 26 件成功、追加のオフライン点検と `/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider` による全スイートはそれぞれ 362 件成功（除外なし）。ネットワーク・API 通信は実施していない。`docs/harness_v2/CHANGES.md` はこの worktree に存在しない。
