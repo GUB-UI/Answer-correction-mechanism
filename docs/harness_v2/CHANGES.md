@@ -661,3 +661,8 @@ Map complete Unicode `<super>`/`<sub>` runs to `^`/`_` before NFKC, including le
 ## PR #12 / Fix 8: Retain meaningful decorations and text
 
 Preserve overline, bar, vec, hat, dot, tilde, mathbf and text as distinct calls; normalize combining accents consistently. Text word boundaries use `␠`. Only root vincula are removed. Collision, equivalence and idempotence regressions: 425 related tests passed.
+
+
+## PR #12 / Fix 9: Consume pure LaTeX layout arguments
+
+Strip balanced array column specs, environment positions, row spacing, hspace/vspace, tags, numbering controls, hline, sizing prefixes, invisible delimiters and `~`. Preserve structural separators and content brackets. Collision, equivalence and idempotence regressions: 441 related tests passed.

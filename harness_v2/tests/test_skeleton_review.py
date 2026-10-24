@@ -124,3 +124,25 @@ def test_fix_08_meaningful_decorations(forms, different):
 
 def test_fix_08_text_content_keeps_word_boundaries():
     check_forms([r'\text{a b}', 'text(a␠b)'], [r'\text{ab}', 'ab'])
+
+
+@pytest.mark.parametrize('forms,different', [
+    ([r'\begin{array}{cc}a&b\\[4pt]c&d\end{array}', 'array(a¦b;c¦d)'], ['array(a¦b¦c¦d)']),
+    ([r'\begin{aligned}[t]x&=1\\[4pt]y&=2\end{aligned}', 'x¦=1;y¦=2'], ['tx¦=1;y¦=2']),
+    ([r'x=1\newline y=2', 'x=1;y=2'], ['x=1y=2']),
+    ([r'x\hspace{1em}+y\tag{1}\nonumber\hline', 'x+y'], ['x+y1']),
+    ([r'\big(x+y\Big)', r'\bigl(x+y\bigr)', r'\left(x+y\right)', '(x+y)'], ['x-y']),
+    (['x~+~y', 'x+y', r'x\vspace{2pt}+y'], ['xy']),
+    ([r'\begin{array}{*{2}{c}}a&b\end{array}', 'array(a¦b)'], ['array(ab)']),
+])
+def test_fix_09_pure_layout(forms, different):
+    check_forms(forms, different)
+
+
+@pytest.mark.parametrize('size', ['big', 'Big', 'bigg', 'Bigg', 'bigl', 'Bigl', 'biggl', 'Biggl'])
+def test_fix_09_sizing_keeps_content_brackets(size):
+    check_forms(['\\' + size + '[x]', '[x]'], ['x'])
+
+
+def test_fix_09_invisible_sizing_delimiter():
+    check_forms([r'\left. x\right)', 'x)'], ['x'])

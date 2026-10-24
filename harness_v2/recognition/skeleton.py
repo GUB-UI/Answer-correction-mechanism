@@ -53,13 +53,52 @@ _CALL_HEAD = re.compile(r"(?:sqrt|root|" + _ENVIRONMENTS + "|" + _DECORATIONS + 
 _MATH_SPAN = re.compile(r"\$\$(.*?)\$\$|\$(.*?)\$|\\\((.*?)\\\)|\\\[(.*?)\\\]", re.DOTALL)
 
 
+def _layout_arguments(text: str) -> str:
+    """Consume balanced arguments belonging only to presentation commands."""
+    head = re.compile(r"\\(begin|end)\s*\{([^{}]*)\}|\\(?:hspace|vspace|tag|label)\*?(?![A-Za-z])")
+    out, pos = [], 0
+    while match := head.search(text, pos):
+        out.append(text[pos:match.start()])
+        pos = match.end()
+        if match[1]:
+            environment = match[2]
+            opening = match[1] == "begin"
+            if opening:
+                start = pos + len(text[pos:]) - len(text[pos:].lstrip())
+                if text[start:start + 1] == "[":
+                    group = _group(text, start, delimiters="[")
+                    if group:
+                        pos = group[1]
+                if environment == "array":
+                    start = pos + len(text[pos:]) - len(text[pos:].lstrip())
+                    if text[start:start + 1] == "{":
+                        group = _group(text, start)
+                        if group:
+                            pos = group[1]
+            out.append((environment + "(" if opening else ")")
+                       if environment in _ENVIRONMENTS.split("|") else " ")
+        else:
+            start = pos + len(text[pos:]) - len(text[pos:].lstrip())
+            if text[start:start + 1] == "{":
+                group = _group(text, start)
+                if group:
+                    pos = group[1]
+            out.append(" ")
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _layout(text: str) -> str:
+    text = re.sub(r"\\\\(?:\s*\[[^\]]*\])?", ";", text)
+    text = re.sub(r"\\(?:newline|linebreak|cr)(?![A-Za-z])(?:\s*\[[^\]]*\])?", ";", text)
+    text = _layout_arguments(text)
+    text = re.sub(r"\\(?:nonumber|notag|hline)(?![A-Za-z])", " ", text)
+    text = re.sub(r"\\(?:left|right)\s*\.", " ", text)
+    text = re.sub(r"\\(?:big|Big|bigg|Bigg)[lrm]?(?![A-Za-z])", " ", text)
+    text = text.replace("~", " ")
     # Each math span is a separate content unit. Outer delimiters carry no content.
     text = _MATH_SPAN.sub(lambda m: ";" + next(g for g in m.groups() if g is not None).strip() + ";", text)
-    text = re.sub(r"\\(begin|end)\s*\{([^{}]*)\}",
-                  lambda m: (m[2] + "(" if m[1] == "begin" else ")")
-                  if m[2] in _ENVIRONMENTS.split("|") else " ", text)
-    text = text.replace(r"\\", ";").replace("&", "¦")
+    text = text.replace("&", "¦")
     out, depth = [], 0
     for ch in text:
         if ch in "{([":
