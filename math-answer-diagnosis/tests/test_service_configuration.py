@@ -170,6 +170,77 @@ def test_same_identity_managers_share_a_run_directory(tmp_path, monkeypatch):
         _release(process)
 
 
+def test_external_stop_checks_ownership_before_stopping(tmp_path, monkeypatch):
+    spec = services.ServiceSpec("llm", ["server", "--model", "A"], 8000)
+    run = tmp_path / "run"
+    managed = services.ServiceManager({"llm": spec}, run, mode="managed")
+    external = services.ServiceManager({"llm": spec}, run, mode="external")
+    process = _sleep_process()
+    try:
+        write_private(managed.pid_file("llm"), str(process.pid))
+        write_private(managed.launch_file("llm"), json.dumps(managed._launch_identity("llm", process.pid)))
+        monkeypatch.setattr(managed, "is_healthy", lambda name: True)
+        managed.ensure("llm")
+        reached = MagicMock()
+        monkeypatch.setattr(external, "_stop_unlocked", reached)
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            external.stop("llm")
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            external.stop_all()
+        reached.assert_not_called()
+        assert process.poll() is None
+        assert json.loads(managed.owner_file().read_text())["identity"] == managed._session_identity()
+    finally:
+        _release(process)
+
+
+def test_shared_holders_block_takeover_after_the_first_exits(tmp_path, monkeypatch):
+    spec_a = services.ServiceSpec("llm", ["server", "--model", "A"], 8000)
+    spec_c = services.ServiceSpec("llm", ["server", "--model", "C"], 8000)
+    run = tmp_path / "run"
+    manager_a = services.ServiceManager({"llm": spec_a}, run, mode="managed")
+    manager_b = services.ServiceManager({"llm": spec_a}, run, mode="managed")
+    manager_c = services.ServiceManager({"llm": spec_c}, run, mode="managed")
+    current = {"pid": 111}
+    alive = {111, 222}
+    real_alive = services._pid_alive
+
+    def pid_alive(pid):
+        if pid in {111, 222, 333}:
+            return pid in alive
+        return real_alive(pid)
+
+    monkeypatch.setattr(services.os, "getpid", lambda: current["pid"])
+    monkeypatch.setattr(services, "_pid_alive", pid_alive)
+    process = _sleep_process()
+    try:
+        write_private(manager_a.pid_file("llm"), str(process.pid))
+        write_private(manager_a.launch_file("llm"), json.dumps(manager_a._launch_identity("llm", process.pid)))
+        for manager in (manager_a, manager_b, manager_c):
+            monkeypatch.setattr(manager, "is_healthy", lambda name: True)
+        manager_a.ensure("llm")
+        current["pid"] = 222
+        manager_b.ensure("llm")
+        record = json.loads(manager_a.owner_file().read_text())
+        assert record["holders"] == [111, 222]
+        assert record["identity"] == manager_a._session_identity()
+        alive.remove(111)
+        current["pid"] = 333
+        reached = MagicMock()
+        monkeypatch.setattr(manager_c, "_stop_unlocked", reached)
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            manager_c.ensure("llm")
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            manager_c.stop("llm")
+        with pytest.raises(services.ServiceStartError, match="configuration"):
+            manager_c.stop_all()
+        reached.assert_not_called()
+        assert process.poll() is None
+        assert json.loads(manager_a.owner_file().read_text())["holders"] == [111, 222]
+    finally:
+        _release(process)
+
+
 def test_dead_owner_can_be_replaced_without_refusing(tmp_path, monkeypatch):
     spec_a = services.ServiceSpec("llm", ["server", "--model", "A"], 8000)
     spec_b = services.ServiceSpec("llm", ["server", "--model", "B"], 8000)
