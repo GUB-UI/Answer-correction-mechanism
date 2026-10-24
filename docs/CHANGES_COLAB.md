@@ -4,7 +4,7 @@
 
 - 各 hygiene チェックの前に `git rev-parse --is-inside-work-tree` を確認し、Git を実行できない場合や checkout 外では `pytest.skip` とする。
 - PATH から Git を外すケースと ROOT を一時ディレクトリに変更するケースで、3つのチェックすべての skip を回帰検証。修正前に6件の失敗、修正後に関連9件の成功を確認した。
-- 指定 Python・pytest オプションで全スイートを実行し、643件成功、266件失敗、11件エラー、dataset-builder の1件のみ除外。禁止ファイルの読み取りと通信を一時ガードで遮断したため、設計文書確認1件、一時 `references.json` に依存する265件、ソケットを使う14件は実行制約による失敗・エラーとなった。詳細な対象ファイルは英語の変更履歴に記載。
+- 全スイート検証（エージェントのサンドボックス外で実行、`/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider`）: `harness_v2/tests` **593件成功**、`math-answer-diagnosis` **328件成功**。サンドボックス内での失敗報告は読み取り・通信ガードによるもので、本結果で置き換える。
 
 ## PR #10 ログ整理・修正2: 任意の深さのログと実行記録を除外
 
