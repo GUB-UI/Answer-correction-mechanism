@@ -821,3 +821,7 @@ An existing `failure_cases` directory is set to 0700 when a failure file is writ
 ## dataset_v2: transcript targets that share an inode fail
 
 Resolved paths are not enough. Each target file in dev and holdout is also compared by `os.stat()` device and inode. Two different split-and-filename pairs that share one inode fail the conversion. Two answer ids that name one file in the same split still share that sheet.
+
+## dataset_v2: a missing transcript in the other split is not an alias
+
+A dev run no longer fails when a holdout answer has no transcript file. A file that is absent from the split not being converted is skipped, because a missing file cannot alias another target. A missing transcript in the split being converted still fails. Every file that does exist in either split is still checked for a symlink, a shared real path, and a shared inode. The other split's file contents are not read.

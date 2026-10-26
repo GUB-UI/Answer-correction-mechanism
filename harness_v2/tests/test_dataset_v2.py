@@ -446,8 +446,66 @@ def test_other_split_and_duplicate_transcript_targets_fail_before_reading(tmp_pa
 
     missing_other = build_tree(tmp_path / "missing-other")
     (missing_other / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md").unlink()
-    with pytest.raises(DatasetV2Error, match="missing transcript: 9-Z_A_HHHH"):
-        convert(missing_other, "dev", tmp_path / "out-missing-other")
+    manifest = convert(missing_other, "dev", tmp_path / "out-missing-other")
+    assert load_dataset(manifest).cases[0]["case_id"] == "9-Z_C_XXXX"
+
+
+def test_other_split_without_a_transcript_is_skipped_and_unread(tmp_path, monkeypatch):
+    present = build_tree(tmp_path / "present")
+    hold = present / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md"
+    hold.write_text("HOLDOUT_ONLY_q7w9m2\n", encoding="utf-8")
+    reads = []
+    real_read = Path.read_bytes
+
+    def track(self, *args, **kwargs):
+        reads.append(self)
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", track)
+    manifest = convert(present, "dev", tmp_path / "out-present")
+    assert load_dataset(manifest).cases[0]["case_id"] == "9-Z_C_XXXX"
+    assert all("holdout_sealed" not in path.as_posix() for path in reads)
+    assert "HOLDOUT_ONLY_q7w9m2" not in _tree_text(tmp_path / "out-present")
+
+    missing = build_tree(tmp_path / "missing-holdout")
+    (missing / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md").unlink()
+    manifest = convert(missing, "dev", tmp_path / "out-missing-holdout")
+    assert load_dataset(manifest).cases[0]["case_id"] == "9-Z_C_XXXX"
+
+    dangling = build_tree(tmp_path / "dangling")
+    link = dangling / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md"
+    link.unlink()
+    link.symlink_to("no-such-transcript.md")
+    manifest = convert(dangling, "dev", tmp_path / "out-dangling")
+    assert load_dataset(manifest).cases[0]["case_id"] == "9-Z_C_XXXX"
+
+    absent = build_tree(
+        tmp_path / "missing-dev",
+        transcripts={"dev": {}, "holdout": {"9-Z_A_HHHH": "hold sheet\n"}},
+    )
+    with pytest.raises(DatasetV2Error, match="missing transcript: 9-Z_C_XXXX"):
+        convert(absent, "dev", tmp_path / "out-missing-dev")
+
+    dev_missing = build_tree(
+        tmp_path / "dev-missing",
+        transcripts={"dev": {}, "holdout": {"9-Z_A_HHHH": "hold sheet\n"}},
+    )
+    manifest = convert(dev_missing, "holdout", tmp_path / "out-holdout")
+    assert load_dataset(manifest).cases[0]["case_id"] == "9-Z_A_HHHH"
+    assert "hold sheet\n" == Path(
+        load_dataset(manifest).cases[0]["ocr_import_path"]).read_text(encoding="utf-8")
+
+    mixed = build_tree(
+        tmp_path / "mixed",
+        holdout_ids=["9-Z_A_HHHH", "9-Z_A_GGGG"],
+        transcripts={"dev": {"9-Z_C_XXXX": "dev sheet\n"},
+                     "holdout": {"9-Z_A_HHHH": "hold sheet\n"}},
+    )
+    alias = mixed / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md"
+    alias.unlink()
+    os.link(mixed / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_XXXX.md", alias)
+    with pytest.raises(DatasetV2Error, match="transcript targets share an inode: 9-Z_A_HHHH"):
+        convert(mixed, "dev", tmp_path / "out-mixed")
 
 
 def test_hardlinked_transcript_targets_share_an_inode(tmp_path):

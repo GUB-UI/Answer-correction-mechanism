@@ -355,7 +355,7 @@ def _transcripts(root: Path, split: str, ids: list[str], dev_ids: list[str],
     mapping = _transcript_map(root, set(dev_ids), set(holdout_ids))
     # Resolve both splits before any transcript bytes are read.
     located = _resolve_transcript_targets(
-        root, roots, mapping, {"dev": dev_ids, "holdout": holdout_ids},
+        root, roots, mapping, {"dev": dev_ids, "holdout": holdout_ids}, split,
     )
     other = roots["holdout" if split == "dev" else "dev"]
     used = {path for _filename, path in located[split].values()}
@@ -387,8 +387,14 @@ def _transcripts(root: Path, split: str, ids: list[str], dev_ids: list[str],
 
 def _resolve_transcript_targets(root: Path, roots: dict[str, Path | None],
                                 mapping: dict[str, str],
-                                id_lists: dict[str, list[str]]) -> dict[str, dict[str, tuple[str, Path]]]:
-    """Fail closed when any split target leaves its folder or aliases another target."""
+                                id_lists: dict[str, list[str]],
+                                split: str) -> dict[str, dict[str, tuple[str, Path]]]:
+    """Fail closed when any existing target leaves its folder or aliases another target.
+
+    A missing file in the split that is not being converted cannot alias anything,
+    so it is skipped. A missing file in the split being converted still fails.
+    This function resolves and stats targets. It does not read their bytes.
+    """
     seen: dict[Path, tuple[str, str]] = {}
     inodes: dict[tuple[int, int], tuple[str, str]] = {}
     located: dict[str, dict[str, tuple[str, Path]]] = {name: {} for name in SPLITS}
@@ -400,7 +406,10 @@ def _resolve_transcript_targets(root: Path, roots: dict[str, Path | None],
         other = roots["holdout" if name == "dev" else "dev"]
         for answer_id in id_lists[name]:
             filename = f"ans_{mapping.get(answer_id, answer_id)}.md"
-            real = _real_transcript(directory / filename, answer_id, split_root, other)
+            path = directory / filename
+            if name != split and not path.exists():
+                continue
+            real = _real_transcript(path, answer_id, split_root, other)
             label = (name, filename)
             previous = seen.get(real)
             if previous is not None and previous != label:
