@@ -408,6 +408,32 @@ def test_split_transcript_directories_cannot_alias_each_other(tmp_path):
         convert(linked, "dev", tmp_path / "out-linked")
 
 
+def test_other_split_and_duplicate_transcript_targets_fail_before_reading(tmp_path):
+    aliased = build_tree(tmp_path / "other-file")
+    hold = aliased / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md"
+    hold.unlink()
+    hold.symlink_to("../dev/ans_9-Z_C_XXXX.md")
+    with pytest.raises(DatasetV2Error, match="transcript path crosses splits: 9-Z_A_HHHH"):
+        convert(aliased, "dev", tmp_path / "out-other-file")
+
+    duplicate = build_tree(
+        tmp_path / "same-file",
+        dev_ids=["9-Z_C_XXXX", "9-Z_C_YYYY"],
+        transcripts={"dev": {"9-Z_C_XXXX": "one\n", "9-Z_C_YYYY": "two\n"},
+                     "holdout": {"9-Z_A_HHHH": "h\n"}},
+    )
+    second = duplicate / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_YYYY.md"
+    second.unlink()
+    second.symlink_to("ans_9-Z_C_XXXX.md")
+    with pytest.raises(DatasetV2Error, match="transcript paths resolve to the same file: 9-Z_C_YYYY"):
+        convert(duplicate, "dev", tmp_path / "out-same-file")
+
+    missing_other = build_tree(tmp_path / "missing-other")
+    (missing_other / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md").unlink()
+    with pytest.raises(DatasetV2Error, match="missing transcript: 9-Z_A_HHHH"):
+        convert(missing_other, "dev", tmp_path / "out-missing-other")
+
+
 def test_problem_field_points_and_split_membership_fail_loudly(tmp_path):
     mismatch = build_tree(tmp_path / "mismatch", problems={"9-Z": _problem("10-A")})
     with pytest.raises(DatasetV2Error, match="problem field does not match filename: 9-Z"):

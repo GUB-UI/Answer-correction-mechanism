@@ -805,3 +805,7 @@ Dev and holdout transcript directories are compared by real path. A directory sy
 ## dataset_v2: tighten inputs and rubrics directories on write
 
 When a dataset is written, existing `inputs/` and `rubrics/` directories are set to 0700. Reading a dataset leaves directory and file modes unchanged.
+
+## dataset_v2: resolve both splits' transcript files before reading
+
+Before a transcript is read, every target file in dev and in holdout is resolved. A target whose real path leaves its own split directory fails the conversion. Two different targets, in one split or across splits, that resolve to the same file also fail. Two answer ids that name one file in the same split still share that sheet.

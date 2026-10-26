@@ -113,10 +113,10 @@ def convert(dataset_dir: Path, split: str, out: Path, *,
     root = Path(dataset_dir)
     loaded = _load_split(root)
     side = loaded[split]
-    dev_ids = set(loaded["dev"]["ids"])
-    holdout_ids = set(loaded["holdout"]["ids"])
     stems = _problem_stems(root / "sol_draft")
-    transcripts = _transcripts(root, split, side["ids"], dev_ids, holdout_ids)
+    transcripts = _transcripts(
+        root, split, side["ids"], loaded["dev"]["ids"], loaded["holdout"]["ids"],
+    )
     sources: dict[str, dict] = {}
     cases = []
     for answer_id in side["ids"]:
@@ -342,19 +342,31 @@ def _writer_and_image(answer_id: str, problem: str) -> tuple[str, str]:
     return writer, image
 
 
-def _transcripts(root: Path, split: str, ids: list[str], dev_ids: set[str],
-                 holdout_ids: set[str]) -> dict[str, tuple[bytes, str]]:
+def _transcripts(root: Path, split: str, ids: list[str], dev_ids: list[str],
+                 holdout_ids: list[str]) -> dict[str, tuple[bytes, str]]:
     roots = _split_transcript_roots(root)
     directory = root / "ocr_gpu_v1" / SPLITS[split]
-    resolved_root = roots[split]
-    if resolved_root is None:
+    if roots[split] is None:
         raise DatasetV2Error(f"missing transcript directory: {SPLITS[split]}")
-    mapping = _transcript_map(root, dev_ids, holdout_ids)
+    mapping = _transcript_map(root, set(dev_ids), set(holdout_ids))
+    # Resolve both splits before any transcript bytes are read.
+    located = _resolve_transcript_targets(
+        root, roots, mapping, {"dev": dev_ids, "holdout": holdout_ids},
+    )
     other = roots["holdout" if split == "dev" else "dev"]
-    chosen: dict[str, tuple[bytes, str, Path]] = {}
+    used = {path for _filename, path in located[split].values()}
+    for path in directory.glob("ans_*.md"):
+        try:
+            real = path.resolve(strict=True)
+        except OSError as exc:
+            raise DatasetV2Error(f"unexpected transcript: {path.name}") from exc
+        if other is not None and _within(other, real):
+            raise DatasetV2Error(f"transcript path crosses splits: {path.name}")
+        if real not in used:
+            raise DatasetV2Error(f"unexpected transcript: {path.name}")
+    chosen = {}
     for answer_id in ids:
-        filename = f"ans_{mapping.get(answer_id, answer_id)}.md"
-        path = _real_transcript(directory / filename, answer_id, resolved_root, other)
+        filename, path = located[split][answer_id]
         try:
             raw = path.read_bytes()
         except OSError as exc:
@@ -365,18 +377,32 @@ def _transcripts(root: Path, split: str, ids: list[str], dev_ids: set[str],
             raw.decode("utf-8")
         except UnicodeError as exc:
             raise DatasetV2Error(f"transcript is not UTF-8: {answer_id}") from exc
-        chosen[answer_id] = (raw, filename, path)
-    used = {item[2] for item in chosen.values()}
-    for path in directory.glob("ans_*.md"):
-        try:
-            real = path.resolve(strict=True)
-        except OSError as exc:
-            raise DatasetV2Error(f"unexpected transcript: {path.name}") from exc
-        if other is not None and _within(other, real):
-            raise DatasetV2Error(f"transcript path crosses splits: {path.name}")
-        if real not in used:
-            raise DatasetV2Error(f"unexpected transcript: {path.name}")
-    return {answer_id: (raw, filename) for answer_id, (raw, filename, _path) in chosen.items()}
+        chosen[answer_id] = (raw, filename)
+    return chosen
+
+
+def _resolve_transcript_targets(root: Path, roots: dict[str, Path | None],
+                                mapping: dict[str, str],
+                                id_lists: dict[str, list[str]]) -> dict[str, dict[str, tuple[str, Path]]]:
+    """Fail closed when any split target leaves its folder or aliases another target."""
+    seen: dict[Path, tuple[str, str]] = {}
+    located: dict[str, dict[str, tuple[str, Path]]] = {name: {} for name in SPLITS}
+    for name in SPLITS:
+        split_root = roots[name]
+        if split_root is None:
+            continue
+        directory = root / "ocr_gpu_v1" / SPLITS[name]
+        other = roots["holdout" if name == "dev" else "dev"]
+        for answer_id in id_lists[name]:
+            filename = f"ans_{mapping.get(answer_id, answer_id)}.md"
+            real = _real_transcript(directory / filename, answer_id, split_root, other)
+            label = (name, filename)
+            previous = seen.get(real)
+            if previous is not None and previous != label:
+                raise DatasetV2Error(f"transcript paths resolve to the same file: {answer_id}")
+            seen[real] = label
+            located[name][answer_id] = (filename, real)
+    return located
 
 
 def _split_transcript_roots(root: Path) -> dict[str, Path | None]:
