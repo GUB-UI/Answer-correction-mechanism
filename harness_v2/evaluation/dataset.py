@@ -142,6 +142,8 @@ def write_dataset(out: Path, *, dataset_id: str, version: str, cases: list[dict]
                   reference_scores: dict, reference_items: dict | None = None) -> Path:
     """Copy input bytes and rubrics into a portable manifest directory."""
     out = private_directory(Path(out), managed=True)
+    for folder in ("inputs", "rubrics"):
+        private_directory(out / folder, managed=True)
     def write(relative: str, data: bytes) -> dict:
         target = out / relative
         with private_open(target, 'wb') as handle:

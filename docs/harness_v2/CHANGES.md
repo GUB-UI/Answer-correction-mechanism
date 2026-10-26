@@ -773,3 +773,55 @@ A planned `problem_id` that is not text, a repetition that is not a positive int
 `harness_v2/recognition/skeleton.py` is unchanged. The skeleton measures Japanese high-school Math I/A notation: square roots, fractions, exponents, absolute values, inequalities, plus-minus, set notation including complement written with an overline, nPr and nCr, factorial, trigonometric functions, degrees, pi, and angle, triangle, parallel, and perpendicular symbols.
 
 Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contrived edge cases are out of scope. Skeleton review findings outside that list are recorded in `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` and not fixed. Sol r6 major: `√[x]y̅` and `√[x]y` both become `sqrt([x])y`; `∛[x]y̅` and `∛[x]y` both become `root(3,[x])y`; `∜` likewise becomes `root(4,[x])y`. Sol r6 minor: `√(x̅)` and `sqrt(x̅)` become `sqrt(overline(x))`, while `√x̅` and `\sqrt{x̅}` become `sqrt(x)`. Sol r5 skeleton minors 6–10 are reclassified under the same scope. Challenge minors 4 and 5 stay open.
+
+## dataset_v2: build a split from rubrics and OCR transcripts
+
+`harness_v2/evaluation/dataset_v2.py` builds a harness dataset for `dev` or `holdout` from a private `DATASET_DIR`. It copies `problem`, `problem_summary`, and `rubric` from `sol_draft/<problem>.json` and does not copy `answers` or any other field. `reference/scores_v1.json` is not opened. Each subquestion becomes one rubric item; its model answer and criteria text go in the description, and `acceptable_expression` stays empty. Holdout transcripts are read from `ocr_gpu_v1/holdout_sealed/`. A sheet shared by two answer ids is named in `ocr_gpu_v1/transcript_map.json` (`transcript_map_v1`, `by_answer_id` maps an answer id to another answer id or a basename in that split directory). Missing, empty, duplicate, and unexpected ids or transcript files fail the conversion. Subquestion points must sum to that problem's `full_marks`. Built files are 0600 and directories 0700. Reading inputs or outputs does not change their permissions.
+
+## dataset_v2: compare grader output to reference scores
+
+`evaluate` reads `reference/scores_v1.json` only while comparing saved grader output. It reports per-answer total MAE, the exact-match rate of totals, per-subquestion MAE, and a per-problem table. Answers listed in `excluded_low_confidence` are omitted. A missing total or item score stays missing and is not treated as zero. `max` on a reference row is not used as the score. Duplicate, missing, and unexpected answer ids invalidate the metrics. `sol_draft` is not opened.
+
+## dataset_v2: baseline command for Gemma and the offline fixture
+
+`python -m harness_v2.evaluation.dataset_v2 baseline --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"` grades a split with the existing Google AI Studio Gemma provider (`gemma-4-31b-it` by default) or `--provider fixture` for an offline run. The default prompt is `harness_v2_ambiguity_aware_v1` and the default temperature is 0. Metrics are written only when every case finishes. A saved grade is reused only when the model id, prompt version, rubric hash, and generation settings match; a failed grade is run again. A different identity in the same output directory is refused. Outputs are 0600 files and 0700 directories under `--out`. No API key is written into the run.
+
+## dataset_v2: a transcript map target must belong to the same split
+
+`ocr_gpu_v1/transcript_map.json` may point an answer id only at another answer id in that same split, or at `ans_<that id>.md` in that split's directory. A target in the other split, or a target that is not a split id, fails the conversion. The file is still read only from the source id's own transcript directory.
+
+## dataset_v2: transcript directories cannot alias each other
+
+Dev and holdout transcript directories are compared by real path. A directory symlink, or a transcript symlink, that resolves into the other split fails the conversion. A file is accepted only when its real path is inside its own split directory.
+
+## dataset_v2: writers stay disjoint
+
+`split.json` is rejected when a writer is listed in both dev and holdout, or when an answer id's writer is not one of that split's writers. Both splits are checked together, including ids that are not part of the split being converted.
+
+## dataset_v2: baseline accepts --commit
+
+`python -m harness_v2.evaluation.dataset_v2 baseline --commit <rev>` records that revision on the run. The same value is stored in `experiment.json` and each result row. Omitting `--commit` still uses the harness checkout identity. The revision is not copied into the grading config.
+
+## dataset_v2: tighten inputs and rubrics directories on write
+
+When a dataset is written, existing `inputs/` and `rubrics/` directories are set to 0700. Reading a dataset leaves directory and file modes unchanged.
+
+## dataset_v2: resolve both splits' transcript files before reading
+
+Before a transcript is read, every target file in dev and in holdout is resolved. A target whose real path leaves its own split directory fails the conversion. Two different targets, in one split or across splits, that resolve to the same file also fail. Two answer ids that name one file in the same split still share that sheet.
+
+## dataset_v2: writer check uses the converter's parser
+
+Each answer id is parsed with the same problem and writer split the converter uses. The writer must be listed for that split, and the same parsed writer cannot appear in both splits. An id that does not parse fails the conversion.
+
+## dataset_v2: tighten failure_cases on write
+
+An existing `failure_cases` directory is set to 0700 when a failure file is written. Reading a run, or skipping a failure file that already exists, leaves the directory mode unchanged.
+
+## dataset_v2: transcript targets that share an inode fail
+
+Resolved paths are not enough. Each target file in dev and holdout is also compared by `os.stat()` device and inode. Two different split-and-filename pairs that share one inode fail the conversion. Two answer ids that name one file in the same split still share that sheet.
+
+## dataset_v2: a missing transcript in the other split is not an alias
+
+A dev run no longer fails when a holdout answer has no transcript file. A file that is absent from the split not being converted is skipped, because a missing file cannot alias another target. A missing transcript in the split being converted still fails. Every file that does exist in either split is still checked for a symlink, a shared real path, and a shared inode. The other split's file contents are not read.

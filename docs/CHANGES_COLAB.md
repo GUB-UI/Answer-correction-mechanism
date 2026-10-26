@@ -1019,3 +1019,77 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - Sol r6 major: `√[x]y̅` と `√[x]y` はどちらも `sqrt([x])y`。`∛[x]y̅` と `∛[x]y` は `root(3,[x])y`、`∜` も同様に `root(4,[x])y`。
 - Sol r6 minor: `√(x̅)` と `sqrt(x̅)` は `sqrt(overline(x))`。`√x̅` と `\sqrt{x̅}` は `sqrt(x)`。
 - Sol r5 の骨格 minor 6–10（指数付き根号、太字スタイル、互換アクセント）も同じ範囲外へ再分類した。challenge の minor 4 と 5 は未修正のまま。
+
+## dataset_v2: ルーブリックと OCR から分割データを作る
+
+- `harness_v2/evaluation/dataset_v2.py` が、手元の `DATASET_DIR` から `dev` または `holdout` のハーネス用データセットを作る。
+- `sol_draft/<problem>.json` から読むのは `problem`、`problem_summary`、`rubric` だけ。`answers` もその他のフィールドもコピーしない。`reference/scores_v1.json` は開かない。
+- 小問は採点項目ひとつ。模範解答と基準の文は description に入れ、`acceptable_expression` は空のまま。配点の合計はその問題の `full_marks` と一致しなければならない。
+- holdout の書き起こしは `ocr_gpu_v1/holdout_sealed/` から読む。1枚の画像を二つの answer id が共有する場合は `ocr_gpu_v1/transcript_map.json`（`transcript_map_v1`。`by_answer_id` が answer id を、別の answer id かその分割ディレクトリ内のファイル名へ対応づける）で指定する。推測はしない。
+- 書き起こしの欠落・空ファイル、id の重複・不足・対象外は変換を失敗させる。出力ファイルは 0600、ディレクトリは 0700。入力も出力も、読むだけでは権限を変えない。
+
+## dataset_v2: 採点結果を参照得点と比べる
+
+- `evaluate` は、保存済みの採点結果と比べるときだけ `reference/scores_v1.json` を読む。`sol_draft` は開かない。
+- 指標は答案ごとの合計 MAE、合計の完全一致率、小問 MAE、問題ごとの誤差表。
+- `excluded_low_confidence` の答案は集計から外す。欠けた合計や小問の得点は 0 にせず、欠けたままにする。参照行の `max` は得点として使わない。
+- 参照または結果の id が重複・不足・対象外なら評価は失敗する。
+
+## dataset_v2: Gemma と fixture のベースライン
+
+- `python -m harness_v2.evaluation.dataset_v2 baseline --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"` が、既存の Google AI Studio Gemma（既定 `gemma-4-31b-it`）でその分割を採点する。オフラインは `--provider fixture`。
+- 既定のプロンプトは `harness_v2_ambiguity_aware_v1`、温度は 0。全件が終わるまで metrics は書かない。
+- 保存済みの採点を再利用するのは、モデル ID、プロンプト版、ルーブリックのハッシュ、生成設定がすべて一致するときだけ。失敗した採点はやり直す。同じ出力先でこれらが違う場合は拒否する。
+- 出力は `--out` 以下の 0600 ファイルと 0700 ディレクトリ。API キーは実行結果に書かない。
+
+## dataset_v2: transcript map の相手は同じ分割の id だけ
+
+- `ocr_gpu_v1/transcript_map.json` の相手は、同じ分割に含まれる answer id、またはその分割ディレクトリ内の `ans_<その id>.md` だけ。
+- 相手がもう一方の分割にいる、またはどちらの分割の id でもない場合は変換を失敗させる。ファイルは、その id 自身の分割ディレクトリからだけ読む。
+
+## dataset_v2: 書き起こしディレクトリの実体が重なったら失敗する
+
+- dev と holdout の書き起こしディレクトリは、シンボリックリンクを解決した実パスで比べる。
+- ディレクトリまたはファイルの実体がもう一方の分割に入る場合は変換を失敗させる。受け入れるファイルは、その分割ディレクトリの実体の中にあるものだけ。
+
+## dataset_v2: 執筆者は dev と holdout で重ならない
+
+- `split.json` で同じ執筆者が dev と holdout の両方にいる場合は失敗する。
+- answer id の執筆者が、その分割の writers に無い場合も失敗する。変換する分割だけでなく、両方の id を調べる。
+
+## dataset_v2: baseline に --commit を追加
+
+- `python -m harness_v2.evaluation.dataset_v2 baseline --commit <rev>` がそのリビジョンを実行の出所として記録する。`experiment.json` と各結果の行に同じ値が入る。
+- `--commit` を省略したときの既定は、これまでどおりハーネスのチェックアウト識別子。採点用 config には入れない。
+
+## dataset_v2: 書き込み時に inputs と rubrics を 0700 にする
+
+- データセットを書くとき、既にある `inputs/` と `rubrics/` も 0700 にする。
+- データセットを読むだけでは、ディレクトリもファイルも権限を変えない。
+
+## dataset_v2: 読む前に両方の分割の書き起こし実体を確認する
+
+- 書き起こしを読む前に、dev と holdout の対象ファイルをすべて実パスへ解決する。
+- 実体が自分の分割ディレクトリの外にある場合は変換を失敗させる。別々の対象が同じ実体を指す場合も、分割をまたいでも同じ分割の中でも失敗させる。
+- 同じ分割の一つのファイルを二つの answer id が名前で共有するシートは、これまでどおり使える。
+
+## dataset_v2: 執筆者は変換と同じ規則で読む
+
+- 各 answer id は、変換が問題 id の直後から執筆者を読むのと同じ関数で解析する。
+- 解析した執筆者がその分割の writers にあり、dev と holdout の両方に現れないことを確認する。解析できない id は失敗させる。
+
+## dataset_v2: failure_cases は書くときだけ 0700 にする
+
+- 失敗ファイルを書くとき、既にある `failure_cases` も 0700 にする。
+- 実行結果を読むだけ、または既にある失敗ファイルを書き直さないときは、ディレクトリの権限を変えない。
+
+## dataset_v2: 同じ inode を指す書き起こしは失敗する
+
+- 実パスに加えて、dev と holdout の対象ファイルを `os.stat()` のデバイスと inode でも比べる。
+- 別々の（分割, ファイル名）が同じ inode を共有する場合は変換を失敗させる。同じ分割の一つのファイルを二つの answer id が共有するシートは、これまでどおり使える。
+
+## dataset_v2: もう一方の分割に書き起こしが無くても変換できる
+
+- 変換する分割ではない方に、書き起こしファイルの無い answer id があっても失敗しない。無いファイルは別名になり得ないので飛ばす。
+- 変換する分割の対象ファイルが無い場合は、これまでどおり失敗させる。
+- どちらかの分割に実在する対象は、シンボリックリンク、実パス、inode の確認を続ける。もう一方の分割のファイル内容は読まない。
