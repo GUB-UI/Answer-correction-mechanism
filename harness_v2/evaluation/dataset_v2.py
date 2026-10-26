@@ -317,19 +317,17 @@ def _writer_and_image(answer_id: str, problem: str) -> tuple[str, str]:
 
 def _transcripts(root: Path, split: str, ids: list[str], dev_ids: set[str],
                  holdout_ids: set[str]) -> dict[str, tuple[bytes, str]]:
+    roots = _split_transcript_roots(root)
     directory = root / "ocr_gpu_v1" / SPLITS[split]
-    if not directory.is_dir():
+    resolved_root = roots[split]
+    if resolved_root is None:
         raise DatasetV2Error(f"missing transcript directory: {SPLITS[split]}")
     mapping = _transcript_map(root, dev_ids, holdout_ids)
-    resolved_root = directory.resolve()
+    other = roots["holdout" if split == "dev" else "dev"]
     chosen: dict[str, tuple[bytes, str, Path]] = {}
     for answer_id in ids:
         filename = f"ans_{mapping.get(answer_id, answer_id)}.md"
-        path = (directory / filename).resolve()
-        if path.parent != resolved_root:
-            raise DatasetV2Error(f"transcript map escapes directory: {answer_id}")
-        if not path.is_file():
-            raise DatasetV2Error(f"missing transcript: {answer_id}")
+        path = _real_transcript(directory / filename, answer_id, resolved_root, other)
         try:
             raw = path.read_bytes()
         except OSError as exc:
@@ -343,9 +341,55 @@ def _transcripts(root: Path, split: str, ids: list[str], dev_ids: set[str],
         chosen[answer_id] = (raw, filename, path)
     used = {item[2] for item in chosen.values()}
     for path in directory.glob("ans_*.md"):
-        if path.resolve() not in used:
+        try:
+            real = path.resolve(strict=True)
+        except OSError as exc:
+            raise DatasetV2Error(f"unexpected transcript: {path.name}") from exc
+        if other is not None and _within(other, real):
+            raise DatasetV2Error(f"transcript path crosses splits: {path.name}")
+        if real not in used:
             raise DatasetV2Error(f"unexpected transcript: {path.name}")
     return {answer_id: (raw, filename) for answer_id, (raw, filename, _path) in chosen.items()}
+
+
+def _split_transcript_roots(root: Path) -> dict[str, Path | None]:
+    roots = {name: _real_dir(root / "ocr_gpu_v1" / folder) for name, folder in SPLITS.items()}
+    dev, hold = roots["dev"], roots["holdout"]
+    if dev is not None and hold is not None and (_within(dev, hold) or _within(hold, dev)):
+        raise DatasetV2Error("transcript directory crosses splits")
+    return roots
+
+
+def _real_dir(path: Path) -> Path | None:
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise DatasetV2Error(f"missing transcript directory: {path.name}") from exc
+    if not resolved.is_dir():
+        raise DatasetV2Error(f"missing transcript directory: {path.name}")
+    return resolved
+
+
+def _real_transcript(path: Path, answer_id: str, split_root: Path, other_root: Path | None) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise DatasetV2Error(f"missing transcript: {answer_id}") from exc
+    if other_root is not None and _within(other_root, resolved):
+        raise DatasetV2Error(f"transcript path crosses splits: {answer_id}")
+    if not resolved.is_file() or resolved.parent != split_root:
+        raise DatasetV2Error(f"transcript map escapes directory: {answer_id}")
+    return resolved
+
+
+def _within(parent: Path, child: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _transcript_map(root: Path, dev_ids: set[str], holdout_ids: set[str]) -> dict[str, str]:

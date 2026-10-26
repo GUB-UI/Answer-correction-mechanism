@@ -789,3 +789,7 @@ Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contriv
 ## dataset_v2: a transcript map target must belong to the same split
 
 `ocr_gpu_v1/transcript_map.json` may point an answer id only at another answer id in that same split, or at `ans_<that id>.md` in that split's directory. A target in the other split, or a target that is not a split id, fails the conversion. The file is still read only from the source id's own transcript directory.
+
+## dataset_v2: transcript directories cannot alias each other
+
+Dev and holdout transcript directories are compared by real path. A directory symlink, or a transcript symlink, that resolves into the other split fails the conversion. A file is accepted only when its real path is inside its own split directory.

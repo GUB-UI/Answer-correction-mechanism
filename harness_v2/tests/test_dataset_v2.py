@@ -358,6 +358,43 @@ def test_transcript_map_target_must_stay_inside_the_same_split(tmp_path):
     assert texts == ["shared sheet\n", "shared sheet\n"]
 
 
+def test_split_transcript_directories_cannot_alias_each_other(tmp_path):
+    aliased = build_tree(tmp_path / "aliased")
+    ocr = aliased / "ocr_gpu_v1"
+    dev = ocr / "dev"
+    dev.rename(ocr / "dev_real")
+    dev.symlink_to("holdout_sealed", target_is_directory=True)
+    with pytest.raises(DatasetV2Error, match="transcript directory crosses splits"):
+        convert(aliased, "dev", tmp_path / "out-aliased")
+
+    reverse = build_tree(tmp_path / "reverse")
+    ocr = reverse / "ocr_gpu_v1"
+    hold = ocr / "holdout_sealed"
+    hold.rename(ocr / "hold_real")
+    hold.symlink_to("dev", target_is_directory=True)
+    with pytest.raises(DatasetV2Error, match="transcript directory crosses splits"):
+        convert(reverse, "holdout", tmp_path / "out-reverse")
+
+    nested = build_tree(tmp_path / "nested")
+    ocr = nested / "ocr_gpu_v1"
+    inside = ocr / "holdout_sealed" / "nested"
+    inside.mkdir()
+    dev = ocr / "dev"
+    dev.rename(ocr / "dev_real")
+    dev.symlink_to(inside, target_is_directory=True)
+    with pytest.raises(DatasetV2Error, match="transcript directory crosses splits"):
+        convert(nested, "dev", tmp_path / "out-nested")
+
+    linked = build_tree(tmp_path / "linked")
+    dev = linked / "ocr_gpu_v1" / "dev"
+    hold = linked / "ocr_gpu_v1" / "holdout_sealed"
+    transcript = dev / "ans_9-Z_C_XXXX.md"
+    transcript.unlink()
+    transcript.symlink_to(hold / "ans_9-Z_A_HHHH.md")
+    with pytest.raises(DatasetV2Error, match="transcript path crosses splits: 9-Z_C_XXXX"):
+        convert(linked, "dev", tmp_path / "out-linked")
+
+
 def test_problem_field_points_and_split_membership_fail_loudly(tmp_path):
     mismatch = build_tree(tmp_path / "mismatch", problems={"9-Z": _problem("10-A")})
     with pytest.raises(DatasetV2Error, match="problem field does not match filename: 9-Z"):
