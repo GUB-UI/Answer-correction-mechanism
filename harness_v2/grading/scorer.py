@@ -15,10 +15,29 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v1"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v2"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
+# Math I/A command names that start with a JSON control letter (b, f, n, r, t).
+# A match is the whole ASCII letter run, so the next character is not a letter.
+# dfrac, le, sqrt, and other names that do not start with those letters are
+# ordinary invalid escapes and are doubled below.
+# A name that starts with n is the same bytes as a newline plus the rest of
+# the name (\neq is a newline plus eq, \nu is a newline plus u). Those are
+# not rewritten.
+_LATEX_COMMANDS = frozenset({
+    "bar", "because", "beta",
+    "big", "bigg", "biggl", "biggm", "biggr", "bigl", "bigm", "bigr",
+    "binom",
+    "forall", "frac",
+    "nabla", "ne", "neg", "neq", "ngeq", "ngtr", "nleq", "nless",
+    "not", "notin", "nu",
+    "rangle", "rbrace", "rceil", "rfloor", "rho", "right", "rightarrow", "rvert",
+    "tan", "tau", "text", "textbf", "textit", "textrm",
+    "tfrac", "therefore", "theta", "tilde", "times", "to",
+    "triangle", "triangleleft", "triangleright",
+})
 
 
 class ScoringParseError(ValueError):
@@ -47,17 +66,28 @@ def strip_one_outer_fence(text: str) -> str | None:
     return None
 
 
-def repair_json_string_escapes(text: str) -> str:
-    """Keep LaTeX backslashes inside JSON strings.
+def _latex_command_name(text: str, start: int) -> str:
+    """ASCII letter run beginning at the control letter, else empty."""
+    end = start + 1
+    length = len(text)
+    while end < length and text[end].isascii() and text[end].isalpha():
+        end += 1
+    return text[start:end]
 
-    A backslash that is not a JSON escape is doubled. ``\\f \\b \\t \\n \\r``
-    immediately followed by an ASCII letter are kept as the two characters
-    backslash and letter, because ``\\frac`` and ``\\neq`` would otherwise
-    become a form feed or a newline. A newline, tab, or other control escape
-    whose next character is not an ASCII letter is left alone. ``\\\\`` and
-    ``\\uXXXX`` are left alone.
+
+def repair_json_string_escapes(text: str) -> tuple[str, bool]:
+    """Keep unambiguous LaTeX backslashes inside JSON strings.
+
+    A backslash that is not a JSON escape is doubled, so ``\\le`` survives.
+    ``\\f \\b \\t \\r`` are doubled only when the following letters are exactly
+    one known Math I/A command and a non-letter ends that name. A command
+    that starts with ``n`` is left as a newline and reported as ambiguous,
+    because ``\\neq`` is also a newline plus ``eq``. ``\\\\`` and ``\\uXXXX``
+    are left alone. Returns the repaired text and whether any newline
+    collision was left undecided.
     """
     out: list[str] = []
+    ambiguous = False
     in_string = False
     index = 0
     length = len(text)
@@ -99,8 +129,14 @@ def repair_json_string_escapes(text: str) -> str:
             index += 1
             continue
         if nxt in _JSON_CONTROL_ESCAPES:
-            follow = text[index + 2] if index + 2 < length else ""
-            if follow.isascii() and follow.isalpha():
+            command = _latex_command_name(text, index + 1)
+            if command in _LATEX_COMMANDS and command.startswith("n"):
+                ambiguous = True
+                out.append("\\")
+                out.append(nxt)
+                index += 2
+                continue
+            if command in _LATEX_COMMANDS:
                 out.append("\\\\")
                 out.append(nxt)
                 index += 2
@@ -111,29 +147,30 @@ def repair_json_string_escapes(text: str) -> str:
             continue
         out.append("\\\\")
         index += 1
-    return "".join(out)
+    return "".join(out), ambiguous
 
 
-def _load_repaired_json(text: str) -> tuple[Any, bool]:
-    repaired = repair_json_string_escapes(text)
-    return json.loads(repaired), repaired != text
+def _load_repaired_json(text: str) -> tuple[Any, bool, bool]:
+    repaired, ambiguous = repair_json_string_escapes(text)
+    return json.loads(repaired), repaired != text, ambiguous
 
 
-def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool]:
-    """Return the object, whether a fence was removed, and whether escapes were repaired.
+def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool]:
+    """Return the object, fence removal, escape repair, and newline ambiguity.
 
     Repair runs even when ``json.loads`` would succeed, so ``\\frac`` is not
-    silently stored as a form feed.
+    silently stored as a form feed. A newline that also spells a known
+    command is not rewritten.
     """
     try:
-        loaded, repaired = _load_repaired_json(raw)
+        loaded, repaired, ambiguous = _load_repaired_json(raw)
         fence = False
     except json.JSONDecodeError as first_error:
         body = strip_one_outer_fence(raw)
         if body is None:
             raise ScoringParseError(f"json_parse_failed: {first_error}", raw=raw) from first_error
         try:
-            loaded, repaired = _load_repaired_json(body)
+            loaded, repaired, ambiguous = _load_repaired_json(body)
         except json.JSONDecodeError as second_error:
             raise ScoringParseError(
                 f"json_parse_failed_after_fence: {second_error}",
@@ -143,7 +180,7 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool]:
         fence = True
     if not isinstance(loaded, dict):
         raise ScoringParseError("json object expected", raw=raw, fence_stripped=fence)
-    return loaded, fence, repaired
+    return loaded, fence, repaired, ambiguous
 
 
 def _number(value: Any) -> float | None:
@@ -178,8 +215,10 @@ def _spans(value: Any) -> list[EvidenceSpan]:
     return spans
 
 
-def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[ItemResult], float | None, bool, bool]:
-    payload, fence, repaired = parse_completion(raw)
+def items_from_completion(
+    raw: str, rubric: list[RubricItem]
+) -> tuple[list[ItemResult], float | None, bool, bool, bool]:
+    payload, fence, repaired, ambiguous = parse_completion(raw)
     maxima = {item.item_id: item.max_points for item in rubric}
     rows = payload.get("items")
     if rows is None:
@@ -228,7 +267,7 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
             )
         )
     total = payload.get("total_score", payload.get("score"))
-    return items, _number(total) if total is not None else None, fence, repaired
+    return items, _number(total) if total is not None else None, fence, repaired, ambiguous
 
 
 AMBIGUITY_AWARE_V1 = (

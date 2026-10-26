@@ -299,7 +299,8 @@ class Pipeline:
                 raw_response=exchange.raw_response,
             )
         try:
-            items, total, _fence, repaired = items_from_completion(exchange.raw_response, rubric)
+            items, total, _fence, repaired, ambiguous = items_from_completion(
+                exchange.raw_response, rubric)
         except ScoringParseError as exc:
             return GradingResult(
                 status="failed",
@@ -323,6 +324,14 @@ class Pipeline:
             raw_response=exchange.raw_response,
         )
         result.parse_repaired = repaired
+        result.parse_ambiguous = ambiguous
+        if ambiguous and result.status != "failed":
+            result.status = "review_required"
+            parts = [part for part in result.failure_reason.split(",") if part]
+            if "parse_ambiguous" not in parts:
+                parts.append("parse_ambiguous")
+            result.failure_reason = ",".join(parts)
+            result.checks.append(Check("parse_ambiguous", False, "newline_or_latex"))
         return result
 
     def _maybe_propose(

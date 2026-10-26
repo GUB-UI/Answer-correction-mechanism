@@ -1107,3 +1107,10 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - `\f` `\b` `\t` `\n` `\r` の直後が ASCII の英字なら、制御文字にせずバックスラッシュと英字のまま残す。`\frac` `\times` `\neq` `\right` `\beta` が化けるのを防ぐ。直後が英字でない改行やタブは、改行やタブのまま。`\\frac` と `\uXXXX` は変えない。
 - 厳密な解析が成功する場合でも、同じ修正を通す。修正して採用した採点は `parse_repaired` が true。
 - `completion_parser_version`（`json_latex_escapes_v1`）は再利用の識別子に入る。設定ファイルで古いパーサは選べない。以前の解析結果を、このパーサの結果として再利用しない。
+
+## dataset_v2: 改行か LaTeX か決まらないときは改行のまま見直す
+
+- JSON の `\n` `\t` `\r` `\b` `\f` は、続く英字が数学 I/A の決まったコマンドにちょうど一致し、その次が英字でないときだけ、バックスラッシュとコマンドとして残す。`\frac` `\times` `\theta` `\right` `\beta` はそうなる。
+- `n` で始まるコマンドは、改行とその後の文字と同じバイト列である。`\neq` は改行と `eq`、`\nu` は改行と `u`。これは改行のまま残す。`parse_ambiguous` を true にし、解析できた採点は `review_required`、理由は `parse_ambiguous`。どちらとも決めない。
+- JSON のエスケープでないバックスラッシュ（`\le` など）は、これまでどおり二重にする。`\\frac` と `\uXXXX` は変えない。
+- `completion_parser_version` は `json_latex_escapes_v2`。`json_latex_escapes_v1` で解析した採点は再利用しない。
