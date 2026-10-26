@@ -894,6 +894,32 @@ def test_cli_writes_metrics_and_quota_exits_3(tmp_path, monkeypatch, capsys):
     assert exc.value.code == 2
 
 
+def test_cli_commit_is_recorded_and_the_default_stays_the_resolver(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    default_out = tmp_path / "default"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(default_out), "--fixture-completion", str(completion),
+    ]) == 0
+    default_meta = json.loads((default_out / "run" / "experiment.json").read_text(encoding="utf-8"))
+    assert default_meta["commit"] == "test-revision"
+    pinned_out = tmp_path / "pinned"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(pinned_out), "--fixture-completion", str(completion),
+        "--commit", "pinned-commit-6497",
+    ]) == 0
+    pinned = json.loads((pinned_out / "run" / "experiment.json").read_text(encoding="utf-8"))
+    assert pinned["commit"] == "pinned-commit-6497"
+    runs = json.loads((pinned_out / "run" / "results.json").read_text(encoding="utf-8"))
+    assert runs["commit"] == "pinned-commit-6497"
+    assert runs["runs"][0]["commit"] == "pinned-commit-6497"
+    assert "pinned-commit-6497" not in (pinned_out / "config.json").read_text(encoding="utf-8")
+    capsys.readouterr()
+
+
 def test_invalid_score_is_not_coerced(tmp_path):
     root = build_tree(tmp_path / "data")
     scores = _scores()

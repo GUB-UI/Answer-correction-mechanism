@@ -811,6 +811,7 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--top-p", type=float)
     command.add_argument("--top-k", type=int)
     command.add_argument("--fixture-completion", type=Path)
+    command.add_argument("--commit", help="implementation identity recorded with the run")
     args = parser.parse_args(argv)
     settings: dict[str, Any] = {"temperature": args.temperature}
     for name in ("seed", "max_output_tokens", "top_p", "top_k"):
@@ -824,7 +825,7 @@ def main(argv: list[str] | None = None) -> int:
         result = baseline(
             args.dataset_dir, args.split, args.out, provider=args.provider, model=args.model,
             prompt_version=args.prompt_version, generation_settings=settings, repeats=args.repeats,
-            fixture_completion=completion,
+            fixture_completion=completion, commit=args.commit,
         )
     except (DatasetV2Error, ValueError, OSError) as exc:
         parser.error(str(exc))

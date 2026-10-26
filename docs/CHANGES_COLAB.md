@@ -1056,3 +1056,8 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - `split.json` で同じ執筆者が dev と holdout の両方にいる場合は失敗する。
 - answer id の執筆者が、その分割の writers に無い場合も失敗する。変換する分割だけでなく、両方の id を調べる。
+
+## dataset_v2: baseline に --commit を追加
+
+- `python -m harness_v2.evaluation.dataset_v2 baseline --commit <rev>` がそのリビジョンを実行の出所として記録する。`experiment.json` と各結果の行に同じ値が入る。
+- `--commit` を省略したときの既定は、これまでどおりハーネスのチェックアウト識別子。採点用 config には入れない。

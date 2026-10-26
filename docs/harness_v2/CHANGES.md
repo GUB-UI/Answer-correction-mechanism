@@ -797,3 +797,7 @@ Dev and holdout transcript directories are compared by real path. A directory sy
 ## dataset_v2: writers stay disjoint
 
 `split.json` is rejected when a writer is listed in both dev and holdout, or when an answer id's writer is not one of that split's writers. Both splits are checked together, including ids that are not part of the split being converted.
+
+## dataset_v2: baseline accepts --commit
+
+`python -m harness_v2.evaluation.dataset_v2 baseline --commit <rev>` records that revision on the run. The same value is stored in `experiment.json` and each result row. Omitting `--commit` still uses the harness checkout identity. The revision is not copied into the grading config.
