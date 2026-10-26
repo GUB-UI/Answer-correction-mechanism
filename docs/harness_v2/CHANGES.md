@@ -817,3 +817,7 @@ Each answer id is parsed with the same problem and writer split the converter us
 ## dataset_v2: tighten failure_cases on write
 
 An existing `failure_cases` directory is set to 0700 when a failure file is written. Reading a run, or skipping a failure file that already exists, leaves the directory mode unchanged.
+
+## dataset_v2: transcript targets that share an inode fail
+
+Resolved paths are not enough. Each target file in dev and holdout is also compared by `os.stat()` device and inode. Two different split-and-filename pairs that share one inode fail the conversion. Two answer ids that name one file in the same split still share that sheet.

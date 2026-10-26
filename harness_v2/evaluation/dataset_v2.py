@@ -17,6 +17,7 @@ import argparse
 import copy
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -389,6 +390,7 @@ def _resolve_transcript_targets(root: Path, roots: dict[str, Path | None],
                                 id_lists: dict[str, list[str]]) -> dict[str, dict[str, tuple[str, Path]]]:
     """Fail closed when any split target leaves its folder or aliases another target."""
     seen: dict[Path, tuple[str, str]] = {}
+    inodes: dict[tuple[int, int], tuple[str, str]] = {}
     located: dict[str, dict[str, tuple[str, Path]]] = {name: {} for name in SPLITS}
     for name in SPLITS:
         split_root = roots[name]
@@ -403,7 +405,16 @@ def _resolve_transcript_targets(root: Path, roots: dict[str, Path | None],
             previous = seen.get(real)
             if previous is not None and previous != label:
                 raise DatasetV2Error(f"transcript paths resolve to the same file: {answer_id}")
+            try:
+                info = os.stat(real)
+            except OSError as exc:
+                raise DatasetV2Error(f"missing transcript: {answer_id}") from exc
+            inode = (info.st_dev, info.st_ino)
+            previous_inode = inodes.get(inode)
+            if previous_inode is not None and previous_inode != label:
+                raise DatasetV2Error(f"transcript targets share an inode: {answer_id}")
             seen[real] = label
+            inodes[inode] = label
             located[name][answer_id] = (filename, real)
     return located
 

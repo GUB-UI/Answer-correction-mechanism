@@ -450,6 +450,29 @@ def test_other_split_and_duplicate_transcript_targets_fail_before_reading(tmp_pa
         convert(missing_other, "dev", tmp_path / "out-missing-other")
 
 
+def test_hardlinked_transcript_targets_share_an_inode(tmp_path):
+    linked = build_tree(tmp_path / "across")
+    dev = linked / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_XXXX.md"
+    hold = linked / "ocr_gpu_v1" / "holdout_sealed" / "ans_9-Z_A_HHHH.md"
+    hold.unlink()
+    os.link(dev, hold)
+    with pytest.raises(DatasetV2Error, match="transcript targets share an inode: 9-Z_A_HHHH"):
+        convert(linked, "dev", tmp_path / "out-across")
+
+    within = build_tree(
+        tmp_path / "within",
+        dev_ids=["9-Z_C_XXXX", "9-Z_C_YYYY"],
+        transcripts={"dev": {"9-Z_C_XXXX": "one\n", "9-Z_C_YYYY": "two\n"},
+                     "holdout": {"9-Z_A_HHHH": "h\n"}},
+    )
+    first = within / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_XXXX.md"
+    second = within / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_YYYY.md"
+    second.unlink()
+    os.link(first, second)
+    with pytest.raises(DatasetV2Error, match="transcript targets share an inode: 9-Z_C_YYYY"):
+        convert(within, "dev", tmp_path / "out-within")
+
+
 def test_problem_field_points_and_split_membership_fail_loudly(tmp_path):
     mismatch = build_tree(tmp_path / "mismatch", problems={"9-Z": _problem("10-A")})
     with pytest.raises(DatasetV2Error, match="problem field does not match filename: 9-Z"):
