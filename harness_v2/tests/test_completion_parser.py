@@ -32,8 +32,19 @@ def test_known_commands_stay_literal_and_invalid_escapes_are_doubled():
         r"\frac{1}{2}": r"\frac{1}{2}",
         r"\times": r"\times",
         r"\theta": r"\theta",
+        r"\tan ": r"\tan ",
+        r"\to ": r"\to ",
+        r"\triangle": r"\triangle",
+        r"\text{m}": r"\text{m}",
+        r"\tfrac{1}{2}": r"\tfrac{1}{2}",
         r"\beta": r"\beta",
+        r"\bar{A}": r"\bar{A}",
+        r"\boxed{x=1}": r"\boxed{x=1}",
+        r"\begin{aligned}a\end{aligned}": r"\begin{aligned}a\end{aligned}",
         r"\right)": r"\right)",
+        r"\rangle": r"\rangle",
+        r"\rho": r"\rho",
+        r"\left(x\right)": r"\left(x\right)",
     }
     for source, expected in samples.items():
         item, fence, repaired, ambiguous = _parsed(source)
@@ -101,6 +112,16 @@ def test_genuine_newlines_tabs_escaped_backslash_and_unicode_are_not_rewritten()
     assert repaired is False
     assert ambiguous is False
 
+    # Backspace and form feed stay controls only when no letter follows.
+    bare_b, _fence, repaired, ambiguous = _parsed("\\b.")
+    assert bare_b.math_reason == "\b."
+    assert repaired is False
+    assert ambiguous is False
+    bare_f, _fence, repaired, ambiguous = _parsed("\\f ")
+    assert bare_f.math_reason == "\f "
+    assert repaired is False
+    assert ambiguous is False
+
     already, _fence, repaired, ambiguous = _parsed(r"\\frac{1}{2}")
     assert already.math_reason == r"\frac{1}{2}"
     assert repaired is False
@@ -159,6 +180,46 @@ def test_pipeline_keeps_a_multiline_quote_validated(tmp_path):
     quote = grade["items"][0]["evidence_spans"][0]["text"]
     assert quote == answer
     assert "\n" in quote and "\\" not in quote
+    assert any(check["name"] == "evidence_traceable" and check["ok"] for check in grade["checks"])
+
+
+def test_backslash_and_formfeed_commands_stay_in_reason_and_evidence(tmp_path):
+    from harness_v2.core.pipeline import Pipeline
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.tests.test_p3_setup import store_at
+    from harness_v2.tests.test_pipeline import _case
+
+    quote = (
+        r"\boxed{x=1}"
+        r"\begin{aligned}a\end{aligned}"
+        r"\bar{A}\beta\frac{1}{2}"
+        r"\left(x\right)\text{m}"
+    )
+    raw = _raw(quote, evidence=quote)
+    strict = json.loads(_raw(r"\boxed{x=1}\frac{1}{2}"))
+    strict_reason = strict["items"][0]["math_reason"]
+    assert strict_reason.startswith("\b") and "\f" in strict_reason
+    assert r"\boxed" not in strict_reason and r"\frac" not in strict_reason
+    item, _fence, repaired, ambiguous = _parsed(quote, evidence=quote)
+    assert item.math_reason == quote
+    assert item.evidence_spans[0].text == quote
+    assert "\b" not in item.math_reason and "\f" not in item.math_reason
+    assert repaired is True and ambiguous is False
+
+    case = _case("latex", raw)
+    case["answer_text"] = quote
+    case["rubric"] = [{"item_id": "R1", "max_points": 1, "description": "work"}]
+    record = Pipeline(store_at(tmp_path), FixtureProvider(raw)).run(
+        case, experiment_id="e", commit="c")
+    grade = record.outputs["grading"]
+    assert grade["status"] == "validated"
+    assert grade["failure_reason"] == ""
+    assert grade["parse_repaired"] is True
+    assert grade["parse_ambiguous"] is False
+    assert grade["items"][0]["math_reason"] == quote
+    assert grade["items"][0]["evidence_spans"][0]["text"] == quote
+    assert "\b" not in grade["items"][0]["math_reason"]
+    assert "\f" not in grade["items"][0]["math_reason"]
     assert any(check["name"] == "evidence_traceable" and check["ok"] for check in grade["checks"])
 
 
@@ -223,18 +284,18 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v2"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v3"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION
     dataset = load_dataset(make_dataset(tmp_path))
     case = dataset.cases[0]
     current = request_id_for(dataset, case, loaded, 1)
-    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v1"}
+    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v2"}
     assert request_id_for(dataset, case, stale, 1) != current
     assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
         identity({"config": reusable_config(stale), "dataset": dataset.manifest, "commit": "c"}))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["completion_parser_version"] = "json_latex_escapes_v1"
+    payload["completion_parser_version"] = "json_latex_escapes_v2"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert load_config(path)["completion_parser_version"] == COMPLETION_PARSER_VERSION

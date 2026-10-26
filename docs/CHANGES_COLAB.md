@@ -1114,3 +1114,10 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - `n` で始まるコマンドは、改行とその後の文字と同じバイト列である。`\neq` は改行と `eq`、`\nu` は改行と `u`。これは改行のまま残す。`parse_ambiguous` を true にし、解析できた採点は `review_required`、理由は `parse_ambiguous`。どちらとも決めない。
 - JSON のエスケープでないバックスラッシュ（`\le` など）は、これまでどおり二重にする。`\\frac` と `\uXXXX` は変えない。
 - `completion_parser_version` は `json_latex_escapes_v2`。`json_latex_escapes_v1` で解析した採点は再利用しない。
+
+## dataset_v2: バックスラッシュ b と f のコマンドは常に残す
+
+- 採点の文章にバックスペースや改ページは出てこない。JSON 文字列の中で `\b` または `\f` の直後が ASCII の英字なら、一覧にあるかどうかにかかわらず、バックスラッシュと英字のまま残す。
+- `\boxed{x=1}`、`\begin{aligned}`、`\bar{A}`、`\beta`、`\frac` は、理由の文にも引用した根拠にも、書いた形のまま残る。根拠の引用は書き起こしと照合できる。
+- `\n` `\t` `\r` は、これまでどおり数学 I/A の決まったコマンドのときだけバックスラッシュとして残す。`\times` `\theta` `\tan` `\to` `\triangle` `\text` `\tfrac` `\right` `\rangle` `\rho` を含む。`n` で始まるコマンドは改行のまま、`parse_ambiguous` と `review_required`。
+- JSON のエスケープでないバックスラッシュ（`\le` や `\left`）は二重にする。`completion_parser_version` は `json_latex_escapes_v3`。`json_latex_escapes_v2` で解析した採点は再利用しない。
