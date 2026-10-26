@@ -241,31 +241,34 @@ def _load_split(root: Path) -> dict[str, Any]:
     shared_writers = sides["dev"]["writers"] & sides["holdout"]["writers"]
     if shared_writers:
         raise DatasetV2Error("writer is in both splits: " + sorted(shared_writers)[0])
-    for name in SPLITS:
-        for answer_id in sides[name]["ids"]:
-            _known_writer(answer_id, sides[name]["writers"])
+    _writers_match_ids(root, sides)
     return {"version": version, **sides}
 
 
-def _known_writer(answer_id: str, writers: set[str]) -> str:
-    found = []
-    for writer in writers:
-        needle = f"_{writer}_"
-        start = 0
-        while True:
-            index = answer_id.find(needle, start)
-            if index < 0:
-                break
-            if index > 0 and answer_id[index + len(needle):]:
-                found.append(writer)
-                break
-            start = index + 1
-    if not found:
-        raise DatasetV2Error(f"unknown writer: {answer_id}")
-    found.sort(key=len, reverse=True)
-    if len(found) > 1 and len(found[0]) == len(found[1]):
-        raise DatasetV2Error(f"unknown writer: {answer_id}")
-    return found[0]
+def _writers_match_ids(root: Path, sides: dict[str, Any]) -> None:
+    """Use the converter's own id parser. A writer letter later in the id does not count."""
+    stems = _problem_stems(root / "sol_draft")
+    parsed: dict[str, set[str]] = {}
+    for name in SPLITS:
+        found: set[str] = set()
+        for answer_id in sides[name]["ids"]:
+            writer = _parsed_writer(answer_id, stems)
+            if writer not in sides[name]["writers"]:
+                raise DatasetV2Error(f"unknown writer: {answer_id}")
+            found.add(writer)
+        parsed[name] = found
+    shared = parsed["dev"] & parsed["holdout"]
+    if shared:
+        raise DatasetV2Error("writer is in both splits: " + sorted(shared)[0])
+
+
+def _parsed_writer(answer_id: str, stems: list[str]) -> str:
+    try:
+        problem = _problem_for(answer_id, stems)
+        writer, _image = _writer_and_image(answer_id, problem)
+    except DatasetV2Error as exc:
+        raise DatasetV2Error(f"unparsable answer id: {answer_id}") from exc
+    return writer
 
 
 def _split_side(payload: Any, name: str) -> dict[str, Any]:

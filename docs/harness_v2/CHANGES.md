@@ -809,3 +809,7 @@ When a dataset is written, existing `inputs/` and `rubrics/` directories are set
 ## dataset_v2: resolve both splits' transcript files before reading
 
 Before a transcript is read, every target file in dev and in holdout is resolved. A target whose real path leaves its own split directory fails the conversion. Two different targets, in one split or across splits, that resolve to the same file also fail. Two answer ids that name one file in the same split still share that sheet.
+
+## dataset_v2: writer check uses the converter's parser
+
+Each answer id is parsed with the same problem and writer split the converter uses. The writer must be listed for that split, and the same parsed writer cannot appear in both splits. An id that does not parse fails the conversion.

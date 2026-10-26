@@ -285,6 +285,22 @@ def test_wrong_folder_empty_file_and_bad_writer_fail(tmp_path):
     with pytest.raises(DatasetV2Error, match="writer is in both splits: C"):
         convert(shared, "dev", tmp_path / "out-shared-writer")
 
+    embedded = build_tree(
+        tmp_path / "embedded-writer",
+        holdout_ids=["9-Z_C_A_HHHH"],
+        transcripts={"dev": {"9-Z_C_XXXX": "x\n"}, "holdout": {"9-Z_C_A_HHHH": "x\n"}},
+    )
+    with pytest.raises(DatasetV2Error, match="unknown writer: 9-Z_C_A_HHHH"):
+        convert(embedded, "dev", tmp_path / "out-embedded-writer")
+
+    unparsed = build_tree(
+        tmp_path / "unparsed-id",
+        dev_ids=["9-Z"],
+        transcripts={"dev": {"9-Z": "x\n"}, "holdout": {"9-Z_A_HHHH": "x\n"}},
+    )
+    with pytest.raises(DatasetV2Error, match="unparsable answer id: 9-Z"):
+        convert(unparsed, "dev", tmp_path / "out-unparsed-id")
+
     excluded = build_tree(tmp_path / "excluded", transcripts={"dev": {}, "holdout": {"9-Z_A_HHHH": "x\n"}})
     (excluded / "ocr_gpu_v1" / "excluded" / "ans_9-Z_C_XXXX.md").write_text("hidden\n", encoding="utf-8")
     with pytest.raises(DatasetV2Error, match="missing transcript: 9-Z_C_XXXX"):
