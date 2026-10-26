@@ -5,20 +5,30 @@ The dataset directory stays on the caller's machine. Conversion reads
 OCR transcripts for one split. It does not read ``answers`` or
 ``reference/scores_v1.json``. Evaluation reads that score file only while
 comparing grader output, and it does not fill in a missing score.
+
+Grade one split with the existing Gemma or fixture provider::
+
+    python -m harness_v2.evaluation.dataset_v2 baseline \\
+        --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"
 """
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from harness_v2.evaluation.dataset import write_dataset
 from harness_v2.evaluation.reference import optional_score
+from harness_v2.providers.gemma_ai_studio import MODEL_ID
+from harness_v2.run import run_experiment
+from harness_v2.storage.permissions import private_directory, private_write_text
 
 DATASET_ID = "dataset_v2"
 RUBRIC_VERSION = "dataset_v2"
+DEFAULT_PROMPT = "harness_v2_ambiguity_aware_v1"
 SPLITS = {"dev": "dev", "holdout": "holdout_sealed"}
 TRANSCRIPT_MAP = "transcript_map.json"
 TRANSCRIPT_MAP_VERSION = "transcript_map_v1"
@@ -142,6 +152,58 @@ def convert(dataset_dir: Path, split: str, out: Path, *,
         reference_scores={},
         reference_items={},
     )
+
+
+def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
+             model: str | None = None, prompt_version: str = DEFAULT_PROMPT,
+             generation_settings: dict | None = None, repeats: int = 1,
+             provider_factory: Callable | None = None, commit: str | None = None,
+             fixture_completion: Any = None, fixture_completions: dict | None = None,
+             rubric_version: str = RUBRIC_VERSION, delay_s: float = 0) -> dict[str, Any]:
+    """Grade one split and write metrics when every case finishes.
+
+    A saved grade is reused only when the model id, prompt version, rubric
+    hash, and generation settings still match that run.
+    """
+    if model is None:
+        model = MODEL_ID if provider == "gemma" else "fixture"
+    settings = {"temperature": 0}
+    if generation_settings:
+        settings.update(generation_settings)
+    config: dict[str, Any] = {
+        "name": f"{DATASET_ID}-{split}",
+        "provider": provider,
+        "model": model,
+        "prompt_version": prompt_version,
+        "rubric_version": rubric_version,
+        "generation_settings": settings,
+    }
+    if fixture_completion is not None:
+        config["fixture_completion"] = (fixture_completion if isinstance(fixture_completion, str)
+                                         else json.dumps(fixture_completion, ensure_ascii=False))
+    if fixture_completions is not None:
+        config["fixture_completions"] = fixture_completions
+    out = private_directory(Path(out), managed=True)
+    manifest = convert(dataset_dir, split, out / "dataset", rubric_version=rubric_version)
+    config_path = out / "config.json"
+    private_write_text(config_path, json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    summary = run_experiment(config_path, manifest, repeats=repeats, out=out / "run",
+                             delay_s=delay_s, provider_factory=provider_factory, commit=commit)
+    result = {
+        "completed": summary["completed"],
+        "failed": summary["failed"],
+        "pending": summary["pending"],
+        "skipped": summary["skipped"],
+        "stopped_reason": summary["stopped_reason"],
+        "metrics_path": None,
+    }
+    if summary["stopped_reason"] or summary["failed"] or summary["pending"]:
+        return result
+    metrics = evaluate(dataset_dir, split, out / "run" / "results.json")
+    metrics_path = out / "metrics.json"
+    private_write_text(metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    result["metrics_path"] = str(metrics_path)
+    return result
 
 
 def evaluate(dataset_dir: Path, split: str, results_path: Path) -> dict[str, Any]:
@@ -636,3 +698,60 @@ def _mean(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _result_code(result: dict) -> int:
+    if result["stopped_reason"] == "quota":
+        return 3
+    if result["failed"]:
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    command = sub.add_parser("baseline", help="grade one split and write metrics")
+    command.add_argument("--dataset-dir", type=Path, required=True)
+    command.add_argument("--split", required=True)
+    command.add_argument("--provider", required=True, choices=["gemma", "fixture"])
+    command.add_argument("--out", type=Path, required=True)
+    command.add_argument("--model")
+    command.add_argument("--prompt-version", default=DEFAULT_PROMPT)
+    command.add_argument("--repeats", type=int, default=1)
+    command.add_argument("--temperature", type=float, default=0)
+    command.add_argument("--seed", type=int)
+    command.add_argument("--max-output-tokens", type=int)
+    command.add_argument("--top-p", type=float)
+    command.add_argument("--top-k", type=int)
+    command.add_argument("--fixture-completion", type=Path)
+    args = parser.parse_args(argv)
+    settings: dict[str, Any] = {"temperature": args.temperature}
+    for name in ("seed", "max_output_tokens", "top_p", "top_k"):
+        value = getattr(args, name.replace("-", "_"))
+        if value is not None:
+            settings[name] = value
+    completion = None
+    if args.fixture_completion is not None:
+        completion = args.fixture_completion.read_text(encoding="utf-8")
+    try:
+        result = baseline(
+            args.dataset_dir, args.split, args.out, provider=args.provider, model=args.model,
+            prompt_version=args.prompt_version, generation_settings=settings, repeats=args.repeats,
+            fixture_completion=completion,
+        )
+    except (DatasetV2Error, ValueError, OSError) as exc:
+        parser.error(str(exc))
+    print(json.dumps({
+        "completed": result["completed"],
+        "failed": result["failed"],
+        "pending": result["pending"],
+        "skipped": result["skipped"],
+        "stopped_reason": result["stopped_reason"],
+        "metrics_path": result["metrics_path"],
+    }, ensure_ascii=False))
+    return _result_code(result)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

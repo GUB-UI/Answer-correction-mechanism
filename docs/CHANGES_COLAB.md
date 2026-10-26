@@ -1034,3 +1034,10 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - 指標は答案ごとの合計 MAE、合計の完全一致率、小問 MAE、問題ごとの誤差表。
 - `excluded_low_confidence` の答案は集計から外す。欠けた合計や小問の得点は 0 にせず、欠けたままにする。参照行の `max` は得点として使わない。
 - 参照または結果の id が重複・不足・対象外なら評価は失敗する。
+
+## dataset_v2: Gemma と fixture のベースライン
+
+- `python -m harness_v2.evaluation.dataset_v2 baseline --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"` が、既存の Google AI Studio Gemma（既定 `gemma-4-31b-it`）でその分割を採点する。オフラインは `--provider fixture`。
+- 既定のプロンプトは `harness_v2_ambiguity_aware_v1`、温度は 0。全件が終わるまで metrics は書かない。
+- 保存済みの採点を再利用するのは、モデル ID、プロンプト版、ルーブリックのハッシュ、生成設定がすべて一致するときだけ。失敗した採点はやり直す。同じ出力先でこれらが違う場合は拒否する。
+- 出力は `--out` 以下の 0600 ファイルと 0700 ディレクトリ。API キーは実行結果に書かない。

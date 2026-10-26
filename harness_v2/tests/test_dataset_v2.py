@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from harness_v2.evaluation.dataset import load_dataset
-from harness_v2.evaluation.dataset_v2 import DatasetV2Error, convert, evaluate, rubric_source
+from harness_v2.evaluation.dataset_v2 import DatasetV2Error, baseline, convert, evaluate, main, rubric_source
 from harness_v2.evaluation.independent import prepare_independent_input
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import build_prompt
@@ -612,6 +612,195 @@ def test_reference_and_result_ids_must_match_the_split(tmp_path):
     stopped = _write_results(tmp_path / "stopped.json", [_dev_grade()], stopped="quota")
     with pytest.raises(DatasetV2Error, match="grading did not finish: quota"):
         evaluate(root, "dev", stopped)
+
+
+def _completion() -> str:
+    return json.dumps({
+        "items": [
+            {"item_id": "(1)", "score": 3, "evidence_spans": [{"text": "x<2"}],
+             "math_reason": "shown", "uncertainty": 0, "review_reason": ""},
+            {"item_id": "(2)", "score": 4, "evidence_spans": [{"text": "shown"}],
+             "math_reason": "shown", "uncertainty": 0, "review_reason": ""},
+        ],
+        "total_score": 7,
+    })
+
+
+def _factory(calls, completion=_completion()):
+    from harness_v2.providers.fixture import FixtureProvider
+
+    def factory(config, case, repetition):
+        calls.append({"model": config["model"], "prompt": config["prompt_version"],
+                      "settings": dict(config["generation_settings"]), "case": case["case_id"]})
+        return FixtureProvider(completion, model_id=config["model"])
+
+    return factory
+
+
+def test_baseline_reuses_only_a_matching_grade(tmp_path):
+    root = build_tree(tmp_path / "data")
+    calls = []
+    out = tmp_path / "out"
+    first = baseline(root, "dev", out, provider="fixture", model="fixture-a",
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert first["completed"] == 1 and first["skipped"] == 0 and len(calls) == 1
+    assert first["metrics_path"]
+    saved = json.loads(Path(first["metrics_path"]).read_text(encoding="utf-8"))
+    assert saved["total_mae"] == 3
+    again = baseline(root, "dev", out, provider="fixture", model="fixture-a",
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert again["skipped"] == 1 and len(calls) == 1
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture-b",
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture-a",
+                 prompt_version="v0", provider_factory=_factory(calls),
+                 fixture_completion=_completion())
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture-a",
+                 generation_settings={"temperature": 0.2}, provider_factory=_factory(calls),
+                 fixture_completion=_completion())
+    assert len(calls) == 1
+    payload = json.loads((root / "sol_draft" / "9-Z.json").read_text(encoding="utf-8"))
+    payload["problem_summary"] = "Synthetic: a different statement."
+    (root / "sol_draft" / "9-Z.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture-a",
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    assert len(calls) == 1
+    other = baseline(root, "dev", tmp_path / "other", provider="fixture", model="fixture-b",
+                     generation_settings={"temperature": 0.2}, provider_factory=_factory(calls),
+                     fixture_completion=_completion())
+    assert len(calls) == 2
+    assert calls[-1]["model"] == "fixture-b"
+    assert calls[-1]["settings"]["temperature"] == 0.2
+    runs = json.loads((Path(other["metrics_path"]).parent / "run" / "results.json").read_text(encoding="utf-8"))
+    assert runs["runs"][0]["model_id"] == "fixture-b"
+    assert other["completed"] == 1
+
+
+def test_failed_grade_is_not_reused_and_quota_skips_metrics(tmp_path):
+    from harness_v2.core.contracts import ProviderExchange
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.providers.gemma_ai_studio import QuotaExceeded
+
+    root = build_tree(tmp_path / "data")
+    calls = []
+    out = tmp_path / "failed"
+    failed = baseline(root, "dev", out, provider="fixture", provider_factory=_factory(calls, "{}"))
+    assert failed["failed"] == 1 and failed["metrics_path"] is None
+    assert not (out / "metrics.json").exists()
+    baseline(root, "dev", out, provider="fixture", provider_factory=_factory(calls, "{}"))
+    assert len(calls) == 2
+    assert not (out / "metrics.json").exists()
+
+    def quota(config, case, repetition):
+        calls.append("quota")
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                raise QuotaExceeded(ProviderExchange(
+                    request_id, "fixture", "fixture", {}, None, None, 0, "", "quota"))
+
+        return Provider()
+
+    stopped = baseline(root, "dev", tmp_path / "quota", provider="fixture", provider_factory=quota)
+    assert stopped["stopped_reason"] == "quota" and stopped["metrics_path"] is None
+    assert not (tmp_path / "quota" / "metrics.json").exists()
+    del FixtureProvider
+
+
+def test_gemma_baseline_uses_the_existing_model_and_stays_offline(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "secret-key-should-not-leak")
+    root = build_tree(tmp_path / "data")
+    calls = []
+    out = tmp_path / "out"
+    result = baseline(root, "dev", out, provider="gemma", provider_factory=_factory(calls))
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["provider"] == "gemma"
+    assert config["model"] == "gemma-4-31b-it"
+    assert config["prompt_version"] == "harness_v2_ambiguity_aware_v1"
+    assert config["generation_settings"] == {"temperature": 0}
+    assert "fixture_completion" not in config
+    assert calls[0]["model"] == "gemma-4-31b-it"
+    blob = b"".join(path.read_bytes() for path in out.rglob("*") if path.is_file())
+    assert b"secret-key-should-not-leak" not in blob
+    assert SENTINEL.encode() not in blob
+    prompts = list((out / "run" / "artifacts").rglob("*.txt"))
+    assert any(b"x<2" in path.read_bytes() for path in prompts)
+    assert result["metrics_path"]
+    with pytest.raises(ValueError, match="Gemma model"):
+        baseline(root, "dev", tmp_path / "paid", provider="gemma", model="gemini-2.5-pro",
+                 provider_factory=_factory(calls))
+    assert len(calls) == 1
+
+
+def test_baseline_output_is_private_and_reading_does_not_change_modes(tmp_path):
+    previous = os.umask(0)
+    try:
+        root = build_tree(tmp_path / "data")
+        for path in [root, *root.rglob("*")]:
+            path.chmod(0o644 if path.is_file() else 0o755)
+        before = {path: mode(path) for path in [root, *root.rglob("*")]}
+        out = tmp_path / "out"
+        result = baseline(root, "dev", out, provider="fixture", model="fixture",
+                          fixture_completion=_completion())
+        assert {path: mode(path) for path in before} == before
+        assert mode(out) == 0o700
+        for path in out.rglob("*"):
+            assert mode(path) == (0o600 if path.is_file() else 0o700)
+        metrics = Path(result["metrics_path"])
+        metrics.chmod(0o640)
+        metrics.read_text(encoding="utf-8")
+        assert mode(metrics) == 0o640
+    finally:
+        os.umask(previous)
+
+
+def test_cli_writes_metrics_and_quota_exits_3(tmp_path, monkeypatch, capsys):
+    from harness_v2.core.contracts import ProviderExchange
+    from harness_v2.providers.gemma_ai_studio import QuotaExceeded
+
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    code = main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+    ])
+    assert code == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["metrics_path"] == str(out / "metrics.json")
+    assert printed["failed"] == 0
+    assert json.loads((out / "metrics.json").read_text(encoding="utf-8"))["n_evaluated"] == 1
+
+    def quota(config, case, repetition):
+        class Provider:
+            model_id = "fixture"
+
+            def generate(self, prompt, *, request_id, settings=None):
+                raise QuotaExceeded(ProviderExchange(
+                    request_id, "fixture", "fixture", {}, None, None, 0, "", "quota"))
+
+        return Provider()
+
+    monkeypatch.setattr("harness_v2.run.default_provider", quota)
+    quota_out = tmp_path / "quota"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(quota_out),
+    ]) == 3
+    assert not (quota_out / "metrics.json").exists()
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "gemma",
+            "--model", "gemini-2.5-pro", "--out", str(tmp_path / "paid"),
+        ])
+    assert exc.value.code == 2
 
 
 def test_invalid_score_is_not_coerced(tmp_path):

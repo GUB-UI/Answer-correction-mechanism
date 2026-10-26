@@ -781,3 +781,7 @@ Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contriv
 ## dataset_v2: compare grader output to reference scores
 
 `evaluate` reads `reference/scores_v1.json` only while comparing saved grader output. It reports per-answer total MAE, the exact-match rate of totals, per-subquestion MAE, and a per-problem table. Answers listed in `excluded_low_confidence` are omitted. A missing total or item score stays missing and is not treated as zero. `max` on a reference row is not used as the score. Duplicate, missing, and unexpected answer ids invalidate the metrics. `sol_draft` is not opened.
+
+## dataset_v2: baseline command for Gemma and the offline fixture
+
+`python -m harness_v2.evaluation.dataset_v2 baseline --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"` grades a split with the existing Google AI Studio Gemma provider (`gemma-4-31b-it` by default) or `--provider fixture` for an offline run. The default prompt is `harness_v2_ambiguity_aware_v1` and the default temperature is 0. Metrics are written only when every case finishes. A saved grade is reused only when the model id, prompt version, rubric hash, and generation settings match; a failed grade is run again. A different identity in the same output directory is refused. Outputs are 0600 files and 0700 directories under `--out`. No API key is written into the run.
