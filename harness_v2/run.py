@@ -219,8 +219,10 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         if path.exists():
             return
         failure = failure_from_run(row, **dataset.reference_for(case['problem_id']))
-        if failure is not None:
-            write_json(path, failure.to_dict())
+        if failure is None:
+            return
+        private_directory(path.parent, managed=True)
+        write_json(path, failure.to_dict())
 
     # Recover evaluation artifacts only after every durable row's full identity
     # is established, including failures from earlier attempts.

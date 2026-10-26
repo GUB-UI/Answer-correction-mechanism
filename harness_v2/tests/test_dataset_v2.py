@@ -960,6 +960,41 @@ def test_existing_output_folders_are_tightened_only_on_write(tmp_path):
         os.umask(previous)
 
 
+def test_failure_cases_directory_is_tightened_only_when_written(tmp_path):
+    previous = os.umask(0)
+    try:
+        root = build_tree(tmp_path / "data")
+        bad = tmp_path / "bad.json"
+        bad.write_text("{}", encoding="utf-8")
+        out = tmp_path / "out"
+        failure_dir = out / "run" / "failure_cases"
+        failure_dir.mkdir(parents=True)
+        for path in (out, out / "run", failure_dir):
+            path.chmod(0o755)
+        assert main([
+            "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+            "--model", "fixture", "--out", str(out), "--fixture-completion", str(bad),
+        ]) == 1
+        assert mode(failure_dir) == 0o700
+        assert list(failure_dir.glob("*.json"))
+
+        ok = tmp_path / "ok"
+        ok_dir = ok / "run" / "failure_cases"
+        ok_dir.mkdir(parents=True)
+        for path in (ok, ok / "run", ok_dir):
+            path.chmod(0o755)
+        completion = tmp_path / "completion.json"
+        completion.write_text(_completion(), encoding="utf-8")
+        assert main([
+            "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+            "--model", "fixture", "--out", str(ok), "--fixture-completion", str(completion),
+        ]) == 0
+        assert mode(ok_dir) == 0o755
+        assert list(ok_dir.glob("*.json")) == []
+    finally:
+        os.umask(previous)
+
+
 def test_cli_commit_is_recorded_and_the_default_stays_the_resolver(tmp_path, capsys):
     root = build_tree(tmp_path / "data")
     completion = tmp_path / "completion.json"

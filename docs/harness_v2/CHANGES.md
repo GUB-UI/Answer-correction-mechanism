@@ -813,3 +813,7 @@ Before a transcript is read, every target file in dev and in holdout is resolved
 ## dataset_v2: writer check uses the converter's parser
 
 Each answer id is parsed with the same problem and writer split the converter uses. The writer must be listed for that split, and the same parsed writer cannot appear in both splits. An id that does not parse fails the conversion.
+
+## dataset_v2: tighten failure_cases on write
+
+An existing `failure_cases` directory is set to 0700 when a failure file is written. Reading a run, or skipping a failure file that already exists, leaves the directory mode unchanged.

@@ -242,3 +242,39 @@ def test_resume_regenerates_missing_failures_for_earlier_attempts(tmp_path):
     assert failure_path.exists()
     assert 'temporary failure' in json.loads(failure_path.read_text())['errors'][0]
     assert len(json.loads((out / 'results.json').read_text())['attempt_runs']) == 2
+
+
+def test_failure_cases_directory_is_tightened_only_on_write(tmp_path):
+    import os
+    import stat
+    from harness_v2.run import run_experiment
+    previous = os.umask(0)
+    try:
+        manifest = make_dataset(tmp_path)
+        grade = json.loads(_valid())
+        grade['items'][0]['score'] = grade['total_score'] = 3
+        config = config_at(tmp_path, fixture_completion=grade)
+        out = tmp_path / 'runs'
+        failure_dir = out / 'failure_cases'
+        failure_dir.mkdir(parents=True)
+        failure_dir.chmod(0o755)
+        run_experiment(config, manifest, repeats=1, out=out)
+        assert stat.S_IMODE(failure_dir.stat().st_mode) == 0o700
+        assert len(list(failure_dir.glob('*.json'))) == 1
+        failure_dir.chmod(0o755)
+
+        def unexpected_provider(*args):
+            pytest.fail('completed mismatch must not call a provider')
+
+        run_experiment(config, manifest, repeats=1, out=out, provider_factory=unexpected_provider)
+        assert stat.S_IMODE(failure_dir.stat().st_mode) == 0o755
+
+        ok = tmp_path / 'ok'
+        ok_dir = ok / 'failure_cases'
+        ok_dir.mkdir(parents=True)
+        ok_dir.chmod(0o755)
+        run_experiment(config_at(tmp_path), manifest, repeats=1, out=ok)
+        assert stat.S_IMODE(ok_dir.stat().st_mode) == 0o755
+        assert list(ok_dir.glob('*.json')) == []
+    finally:
+        os.umask(previous)
