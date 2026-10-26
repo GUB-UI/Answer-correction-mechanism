@@ -6,10 +6,13 @@ OCR transcripts for one split. It does not read ``answers`` or
 ``reference/scores_v1.json``. Evaluation reads that score file only while
 comparing grader output, and it does not fill in a missing score.
 
-Grade one split with the existing Gemma or fixture provider::
+Grade one split with the existing Gemma or fixture provider. Thinking level
+and max output tokens are generation settings. The wall-clock limit is not::
 
     python -m harness_v2.evaluation.dataset_v2 baseline \\
-        --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"
+        --dataset-dir "$DATASET_DIR" --split dev --provider gemma \\
+        --model gemma-4-31b-it --thinking-level minimal \\
+        --max-output-tokens 8192 --wall-clock-limit-s 900 --out "$OUT"
 """
 from __future__ import annotations
 
@@ -24,14 +27,12 @@ from typing import Any, Callable
 from harness_v2.evaluation.dataset import write_dataset
 from harness_v2.evaluation.reference import optional_score
 from harness_v2.providers.gemma_ai_studio import (
-    DEADLINE_GROWTH,
-    DEADLINE_RETRY_PAUSE_S,
+    DEFAULT_MAX_OUTPUT_TOKENS,
     FAST_BACKOFF_MAX_S,
     FAST_BACKOFF_MIN_S,
     MAX_ATTEMPTS,
     MODEL_ID,
-    REQUEST_TIMEOUT_CAP_S,
-    REQUEST_TIMEOUT_S,
+    WALL_CLOCK_LIMIT_S,
 )
 from harness_v2.run import run_experiment
 from harness_v2.storage.permissions import private_directory, private_write_text
@@ -171,22 +172,24 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
              provider_factory: Callable | None = None, commit: str | None = None,
              fixture_completion: Any = None, fixture_completions: dict | None = None,
              rubric_version: str = RUBRIC_VERSION, delay_s: float = 0,
-             request_timeout_s: float = REQUEST_TIMEOUT_S,
-             request_timeout_cap_s: float = REQUEST_TIMEOUT_CAP_S,
-             deadline_growth: float = DEADLINE_GROWTH,
-             deadline_retry_pause_s: float = DEADLINE_RETRY_PAUSE_S,
+             wall_clock_limit_s: float = WALL_CLOCK_LIMIT_S,
              max_attempts: int = MAX_ATTEMPTS,
              fast_backoff_min_s: float = FAST_BACKOFF_MIN_S,
              fast_backoff_max_s: float = FAST_BACKOFF_MAX_S) -> dict[str, Any]:
     """Grade one split and write metrics when every case finishes.
 
     A saved grade is reused only when the model id, prompt version, rubric
-    hash, and generation settings still match that run. Timeout and retry
-    policy is not part of that identity.
+    hash, and generation settings still match that run. thinking_level and
+    max_output_tokens are generation settings. Wall-clock and retry policy
+    are not part of that identity.
     """
     if model is None:
         model = MODEL_ID if provider == "gemma" else "fixture"
-    settings = {"temperature": 0}
+    settings = {
+        "temperature": 0,
+        "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+        "thinking_level": "minimal",
+    }
     if generation_settings:
         settings.update(generation_settings)
     config: dict[str, Any] = {
@@ -196,10 +199,7 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
         "prompt_version": prompt_version,
         "rubric_version": rubric_version,
         "generation_settings": settings,
-        "request_timeout_s": request_timeout_s,
-        "request_timeout_cap_s": request_timeout_cap_s,
-        "deadline_growth": deadline_growth,
-        "deadline_retry_pause_s": deadline_retry_pause_s,
+        "wall_clock_limit_s": wall_clock_limit_s,
         "max_attempts": max_attempts,
         "fast_backoff_min_s": fast_backoff_min_s,
         "fast_backoff_max_s": fast_backoff_max_s,
@@ -880,28 +880,29 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--repeats", type=int, default=1)
     command.add_argument("--temperature", type=float, default=0)
     command.add_argument("--seed", type=int)
-    command.add_argument("--max-output-tokens", type=int)
+    command.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS,
+                         help="maximum output tokens, including thinking (default 8192)")
+    command.add_argument("--thinking-level", choices=["minimal", "high", "unset"], default="minimal",
+                         help="Gemma thinking level sent as ThinkingConfig (default minimal)")
     command.add_argument("--top-p", type=float)
     command.add_argument("--top-k", type=int)
     command.add_argument("--fixture-completion", type=Path)
     command.add_argument("--commit", help="implementation identity recorded with the run")
-    command.add_argument("--request-timeout-s", type=float, default=REQUEST_TIMEOUT_S,
-                         help="first-attempt generation deadline in seconds (default 600)")
-    command.add_argument("--request-timeout-cap-s", type=float, default=REQUEST_TIMEOUT_CAP_S,
-                         help="longest deadline after 504/timeout growth (default 1800)")
-    command.add_argument("--deadline-growth", type=float, default=DEADLINE_GROWTH,
-                         help="multiply the deadline after a 504 or read timeout (default 2)")
-    command.add_argument("--deadline-retry-pause-s", type=float, default=DEADLINE_RETRY_PAUSE_S,
-                         help="pause before a longer-deadline retry (default 1)")
+    command.add_argument("--wall-clock-limit-s", type=float, default=WALL_CLOCK_LIMIT_S,
+                         help="wall-clock limit for one case, including retries (default 900)")
     command.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS,
-                         help="generation attempts including the first (default 6)")
+                         help="generation attempts including the first (default 3)")
     command.add_argument("--fast-backoff-min-s", type=float, default=FAST_BACKOFF_MIN_S,
-                         help="minimum wait after a fast 500/502/503 (default 30)")
+                         help="minimum wait after a fast 500/502/503 or disconnect (default 5)")
     command.add_argument("--fast-backoff-max-s", type=float, default=FAST_BACKOFF_MAX_S,
-                         help="maximum wait after a fast 500/502/503 (default 120)")
+                         help="maximum wait after a fast 500/502/503 or disconnect (default 30)")
     args = parser.parse_args(argv)
-    settings: dict[str, Any] = {"temperature": args.temperature}
-    for name in ("seed", "max_output_tokens", "top_p", "top_k"):
+    settings: dict[str, Any] = {
+        "temperature": args.temperature,
+        "max_output_tokens": args.max_output_tokens,
+        "thinking_level": args.thinking_level,
+    }
+    for name in ("seed", "top_p", "top_k"):
         value = getattr(args, name.replace("-", "_"))
         if value is not None:
             settings[name] = value
@@ -913,10 +914,7 @@ def main(argv: list[str] | None = None) -> int:
             args.dataset_dir, args.split, args.out, provider=args.provider, model=args.model,
             prompt_version=args.prompt_version, generation_settings=settings, repeats=args.repeats,
             fixture_completion=completion, commit=args.commit,
-            request_timeout_s=args.request_timeout_s,
-            request_timeout_cap_s=args.request_timeout_cap_s,
-            deadline_growth=args.deadline_growth,
-            deadline_retry_pause_s=args.deadline_retry_pause_s,
+            wall_clock_limit_s=args.wall_clock_limit_s,
             max_attempts=args.max_attempts,
             fast_backoff_min_s=args.fast_backoff_min_s,
             fast_backoff_max_s=args.fast_backoff_max_s,

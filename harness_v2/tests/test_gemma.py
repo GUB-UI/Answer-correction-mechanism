@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from harness_v2.providers.gemma_ai_studio import (
-    DISCONNECT_DEADLINE_AFTER_S,
     MODEL_ID,
+    WALL_CLOCK_LIMIT_MS,
     GemmaAIStudio,
     MissingAPIKey,
     ProviderSetupError,
@@ -20,9 +21,12 @@ class _Models:
         self.behavior = behavior
         self.calls: list[dict] = []
 
-    def generate_content(self, **kwargs):
+    def generate_content_stream(self, **kwargs):
         self.calls.append(kwargs)
-        return self.behavior(kwargs)
+        result = self.behavior(kwargs)
+        if isinstance(result, (list, tuple)):
+            return iter(result)
+        return iter((result,))
 
 
 @pytest.fixture(autouse=True)
@@ -120,25 +124,30 @@ def test_transient_errors_retry_then_stop() -> None:
     assert exchange.status == "error"
     assert exchange.attempt_count == 3
     assert len(models.calls) == 3
-    assert slept == [30.0, 30.0]
+    assert slept == [5.0, 5.0]
 
 
 def test_transient_error_then_success() -> None:
     slept: list[float] = []
     state = {"n": 0}
 
+    class ServerError(Exception):
+        status_code = 503
+
     def behavior(_kwargs):
         state["n"] += 1
         if state["n"] == 1:
-            raise TimeoutError("timeout")
+            raise ServerError("unavailable")
         return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok")
 
     client, _models = _client(behavior)
-    exchange = GemmaAIStudio(free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append).generate("prompt", request_id="r5")
+    exchange = GemmaAIStudio(
+        free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append, rng=lambda: 0,
+    ).generate("prompt", request_id="r5")
     assert exchange.status == "ok"
     assert exchange.raw_response == "{}"
     assert exchange.attempt_count == 2
-    assert slept == [1.0]
+    assert slept == [5.0]
 
 
 def test_sdk_missing_does_not_switch_provider(monkeypatch) -> None:
@@ -175,7 +184,8 @@ def test_client_is_constructed_for_the_gemini_api(monkeypatch) -> None:
         def __init__(self, **kwargs):
             captured.append(kwargs)
             self.models = SimpleNamespace(
-                generate_content=lambda **_kwargs: SimpleNamespace(text="{}", response_id="resp-api")
+                generate_content_stream=lambda **_kwargs: iter(
+                    (SimpleNamespace(text="{}", response_id="resp-api"),))
             )
 
     google = ModuleType("google")
@@ -185,7 +195,7 @@ def test_client_is_constructed_for_the_gemini_api(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "google", google)
     monkeypatch.setitem(sys.modules, "google.genai", genai)
     exchange = GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-off")
-    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 600000}}]
+    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": WALL_CLOCK_LIMIT_MS}}]
     assert "project" not in captured[0]
     assert "location" not in captured[0]
     assert exchange.status == "ok"
@@ -199,59 +209,76 @@ def test_vertex_env_is_rejected(monkeypatch) -> None:
         GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-on")
 
 
-def test_deadline_retry_uses_a_longer_timeout_and_records_thoughts() -> None:
+def test_timeout_is_terminal_and_records_no_retry() -> None:
     slept: list[float] = []
     built: list[int] = []
-    state = {"n": 0}
 
     class Deadline(Exception):
         code = 504
 
+    class RequestTimeout(Exception):
+        status_code = 408
+
+    for exc in (Deadline("504 DEADLINE_EXCEEDED"), TimeoutError("read timeout"), RequestTimeout("408")):
+        built.clear()
+        slept.clear()
+
+        def fail(_kwargs, exc=exc):
+            raise exc
+
+        def build(**kwargs):
+            built.append(kwargs["http_options"]["timeout"])
+            client, _models = _client(fail)
+            return client
+
+        exchange = GemmaAIStudio(
+            client_factory=build, sleep=slept.append, rng=lambda: 0, max_attempts=3,
+            request_timeout_s=600, request_timeout_cap_s=1800, deadline_growth=2,
+        ).generate("prompt", request_id="deadline")
+        assert built == [WALL_CLOCK_LIMIT_MS], type(exc).__name__
+        assert slept == [], type(exc).__name__
+        assert exchange.status == "error"
+        assert exchange.attempt_count == 1
+        assert exchange.attempts[0]["timeout_s"] == 900
+        assert exchange.attempts[0]["thoughts_token_count"] is None
+
+
+def test_success_records_usage_finish_reason_and_timestamps() -> None:
     def behavior(_kwargs):
-        state["n"] += 1
-        if state["n"] == 1:
-            raise Deadline("504 DEADLINE_EXCEEDED")
         return SimpleNamespace(
             text="{}",
             model_version=MODEL_ID,
             response_id="ok",
+            finish_reason="STOP",
             usage_metadata=SimpleNamespace(
                 prompt_token_count=3, candidates_token_count=4, thoughts_token_count=11),
         )
 
-    def factory(**kwargs):
-        built.append(kwargs["http_options"]["timeout"])
-        client, _models = _client(behavior)
-        return client
-
-    now = {"t": 0.0}
-
-    def monotonic():
-        return now["t"]
-
-    def sleep(seconds):
-        slept.append(seconds)
-        now["t"] += seconds
-
+    stamps = iter([
+        datetime(2026, 10, 26, 1, 2, 3, tzinfo=timezone.utc),
+        datetime(2026, 10, 26, 1, 2, 4, tzinfo=timezone.utc),
+    ])
+    client, _models = _client(behavior)
     exchange = GemmaAIStudio(
-        client_factory=factory, sleep=sleep, monotonic=monotonic, rng=lambda: 0,
-        max_attempts=3, request_timeout_s=600, request_timeout_cap_s=1800, deadline_growth=2,
-    ).generate("prompt", request_id="deadline")
-    assert built == [600_000, 1_200_000]
-    assert slept == [1.0]
+        client_factory=lambda **_kwargs: client, wall_time=lambda: next(stamps),
+    ).generate("prompt", request_id="usage")
+    row = exchange.attempts[0]
     assert exchange.status == "ok"
-    assert exchange.attempt_count == 2
-    assert exchange.attempts[0]["timeout_s"] == 600
-    assert exchange.attempts[1]["timeout_s"] == 1200
-    assert exchange.attempts[1]["timeout_s"] > exchange.attempts[0]["timeout_s"]
-    assert exchange.attempts[0]["thoughts_token_count"] is None
-    assert exchange.attempts[1]["thoughts_token_count"] == 11
-    assert exchange.attempts[1]["elapsed_s"] == pytest.approx(0)
-    assert "max_output_tokens" not in exchange.settings
+    assert row["finish_reason"] == "STOP"
+    assert row["prompt_token_count"] == 3
+    assert row["candidates_token_count"] == 4
+    assert row["thoughts_token_count"] == 11
+    assert row["input_tokens"] == 3
+    assert row["output_tokens"] == 4
+    assert row["started_at"] == "2026-10-26T01:02:03+00:00"
+    assert row["ended_at"] == "2026-10-26T01:02:04+00:00"
+    assert row["elapsed_s"] >= 0
+    assert row["latency_ms"] == pytest.approx(row["elapsed_s"] * 1000)
 
 
-def test_fast_server_errors_backoff_with_jitter_up_to_six_attempts() -> None:
+def test_fast_server_errors_backoff_with_jitter_and_reuse_the_client() -> None:
     slept: list[float] = []
+    built: list[int] = []
 
     class ServerError(Exception):
         status_code = 500
@@ -259,16 +286,29 @@ def test_fast_server_errors_backoff_with_jitter_up_to_six_attempts() -> None:
     def behavior(_kwargs):
         raise ServerError("internal")
 
-    client, models = _client(behavior)
+    def factory(**kwargs):
+        built.append(kwargs["http_options"]["timeout"])
+        client, _models = _client(behavior)
+        return client
+
     exchange = GemmaAIStudio(
-        client_factory=lambda **_kwargs: client, sleep=slept.append, rng=lambda: 1,
+        client_factory=factory, sleep=slept.append, rng=lambda: 1,
     ).generate("prompt", request_id="fast")
     assert exchange.status == "error"
-    assert exchange.attempt_count == 6
-    assert len(models.calls) == 6
-    assert slept == [30.0, 60.0, 120.0, 120.0, 120.0]
-    assert all(row["timeout_s"] == 600 for row in exchange.attempts)
-    assert all("elapsed_s" in row for row in exchange.attempts)
+    assert exchange.attempt_count == 3
+    assert built == [WALL_CLOCK_LIMIT_MS]
+    assert slept == [5.0, 10.0]
+    assert all(row["timeout_s"] == 900 for row in exchange.attempts)
+    assert all("elapsed_s" in row and "started_at" in row and "ended_at" in row for row in exchange.attempts)
+
+    slept.clear()
+    built.clear()
+    capped = GemmaAIStudio(
+        client_factory=factory, sleep=slept.append, rng=lambda: 1, max_attempts=6,
+    ).generate("prompt", request_id="fast-cap")
+    assert capped.attempt_count == 6
+    assert slept == [5.0, 10.0, 20.0, 30.0, 30.0]
+    assert built == [WALL_CLOCK_LIMIT_MS]
 
 
 def _run_clocked(behavior, *, rng, max_attempts, advance_on_call: float):
@@ -296,7 +336,7 @@ def _run_clocked(behavior, *, rng, max_attempts, advance_on_call: float):
     return provider.generate("prompt", request_id="disconnect"), slept, built
 
 
-def test_long_transport_disconnect_grows_the_deadline_and_stops_at_max_attempts() -> None:
+def test_transport_disconnect_retries_with_a_fresh_client_and_the_same_timeout() -> None:
     class RemoteProtocolError(Exception):
         pass
 
@@ -331,14 +371,13 @@ def test_long_transport_disconnect_grows_the_deadline_and_stops_at_max_attempts(
     for exc in failures:
         exchange, slept, built = _run_clocked(
             one_failure(exc), rng=lambda: 0, max_attempts=3, advance_on_call=300)
-        assert built == [600_000, 1_200_000], type(exc).__name__
-        assert slept == [1.0], type(exc).__name__
+        assert built == [WALL_CLOCK_LIMIT_MS, WALL_CLOCK_LIMIT_MS], type(exc).__name__
+        assert slept == [5.0], type(exc).__name__
         assert exchange.status == "ok"
         assert exchange.attempt_count == 2
         assert exchange.attempts[0]["elapsed_s"] == pytest.approx(300)
-        assert exchange.attempts[0]["elapsed_s"] >= DISCONNECT_DEADLINE_AFTER_S
-        assert exchange.attempts[1]["timeout_s"] == 1200
-        assert "max_output_tokens" not in exchange.settings
+        assert exchange.attempts[0]["timeout_s"] == 900
+        assert exchange.attempts[1]["timeout_s"] == 900
 
     def always(_kwargs):
         raise RemoteProtocolError("Server disconnected")
@@ -346,8 +385,8 @@ def test_long_transport_disconnect_grows_the_deadline_and_stops_at_max_attempts(
     stopped, slept, built = _run_clocked(always, rng=lambda: 0, max_attempts=2, advance_on_call=400)
     assert stopped.status == "error"
     assert stopped.attempt_count == 2
-    assert built == [600_000, 1_200_000]
-    assert slept == [1.0]
+    assert built == [WALL_CLOCK_LIMIT_MS, WALL_CLOCK_LIMIT_MS]
+    assert slept == [5.0]
     assert [row["error_class"] for row in stopped.attempts] == [
         "RemoteProtocolError", "RemoteProtocolError"]
 
@@ -383,9 +422,8 @@ def test_fast_transport_disconnect_uses_fast_backoff() -> None:
         assert exchange.status == "error", exc_type.__name__
         assert exchange.attempt_count == 3
         assert len(models.calls) == 3
-        assert slept == [30.0, 30.0]
-        assert all(row["timeout_s"] == 600 for row in exchange.attempts)
-        assert all(row["elapsed_s"] < DISCONNECT_DEADLINE_AFTER_S for row in exchange.attempts)
+        assert slept == [5.0, 5.0]
+        assert all(row["timeout_s"] == 900 for row in exchange.attempts)
 
 
 def test_unrelated_provider_error_is_not_retried() -> None:
@@ -398,6 +436,168 @@ def test_unrelated_provider_error_is_not_retried() -> None:
     exchange = GemmaAIStudio(
         client_factory=lambda **_kwargs: client, sleep=slept.append,
     ).generate("prompt", request_id="not-transport")
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 1
+    assert len(models.calls) == 1
+    assert slept == []
+
+
+def test_thinking_level_and_max_output_tokens_are_recorded_and_sent() -> None:
+    def behavior(_kwargs):
+        return SimpleNamespace(text="{}")
+
+    client, models = _client(behavior)
+    provider = GemmaAIStudio(client_factory=lambda **_kwargs: client)
+    minimal = provider.generate(
+        "prompt", request_id="minimal",
+        settings={"temperature": 0, "max_output_tokens": 8192, "thinking_level": "minimal"},
+    )
+    assert models.calls[0]["config"]["max_output_tokens"] == 8192
+    assert models.calls[0]["config"]["thinking_config"] == {"thinking_level": "MINIMAL"}
+    assert "thinking_level" not in models.calls[0]["config"]
+    assert minimal.settings["thinking_level"] == "minimal"
+    assert minimal.settings["max_output_tokens"] == 8192
+    high = provider.generate("prompt", request_id="high", settings={"thinking_level": "high"})
+    assert models.calls[1]["config"]["thinking_config"] == {"thinking_level": "HIGH"}
+    assert high.settings["thinking_level"] == "high"
+    unset = provider.generate(
+        "prompt", request_id="unset", settings={"temperature": 0, "thinking_level": "unset"})
+    assert "thinking_config" not in models.calls[2]["config"]
+    assert "thinking_level" not in models.calls[2]["config"]
+    assert unset.settings["thinking_level"] == "unset"
+    absent = provider.generate("prompt", request_id="absent", settings={"temperature": 0})
+    assert "thinking_config" not in models.calls[3]["config"]
+    assert "thinking_level" not in absent.settings
+    with pytest.raises(ValueError, match="thinking_level"):
+        provider.generate("prompt", request_id="bad", settings={"thinking_level": "low"})
+
+
+def test_thinking_config_uses_sdk_types_when_importable(monkeypatch) -> None:
+    import sys
+    from types import ModuleType
+
+    class ThinkingLevel:
+        MINIMAL = "MINIMAL"
+        HIGH = "HIGH"
+
+    class ThinkingConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class GenerateContentConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    types_mod = ModuleType("google.genai.types")
+    types_mod.ThinkingLevel = ThinkingLevel
+    types_mod.ThinkingConfig = ThinkingConfig
+    types_mod.GenerateContentConfig = GenerateContentConfig
+    google = ModuleType("google")
+    genai = ModuleType("google.genai")
+    genai.types = types_mod
+    google.genai = genai
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.genai", genai)
+    monkeypatch.setitem(sys.modules, "google.genai.types", types_mod)
+
+    def behavior(_kwargs):
+        return SimpleNamespace(text="{}")
+
+    client, models = _client(behavior)
+    GemmaAIStudio(client_factory=lambda **_kwargs: client).generate(
+        "prompt", request_id="sdk",
+        settings={"temperature": 0, "max_output_tokens": 8192, "thinking_level": "minimal"},
+    )
+    config = models.calls[0]["config"]
+    assert isinstance(config, GenerateContentConfig)
+    assert config.kwargs["max_output_tokens"] == 8192
+    assert isinstance(config.kwargs["thinking_config"], ThinkingConfig)
+    assert config.kwargs["thinking_config"].kwargs["thinking_level"] == "MINIMAL"
+    assert "thinking_level" not in config.kwargs
+
+
+def test_max_tokens_without_a_parseable_answer_is_terminal() -> None:
+    slept: list[float] = []
+    usage = SimpleNamespace(prompt_token_count=20, candidates_token_count=0, thoughts_token_count=4000)
+
+    def empty(_kwargs):
+        return SimpleNamespace(text="", finish_reason="MAX_TOKENS", usage_metadata=usage)
+
+    def thoughts_only(_kwargs):
+        return SimpleNamespace(
+            candidates=[SimpleNamespace(
+                finish_reason="FinishReason.MAX_TOKENS",
+                content=SimpleNamespace(parts=[SimpleNamespace(thought=True, text="still thinking")]),
+            )],
+            usage_metadata=usage,
+        )
+
+    def prose(_kwargs):
+        return SimpleNamespace(text="not json", finish_reason="MAX_TOKENS", usage_metadata=usage)
+
+    for behavior in (empty, thoughts_only, prose):
+        slept.clear()
+        client, models = _client(behavior)
+        exchange = GemmaAIStudio(
+            client_factory=lambda **_kwargs: client, sleep=slept.append, max_attempts=3,
+        ).generate("prompt", request_id="max")
+        assert exchange.status == "error"
+        assert exchange.error == "MAX_TOKENS with no parseable answer"
+        assert exchange.attempt_count == 1
+        assert len(models.calls) == 1
+        assert slept == []
+        assert exchange.attempts[0]["finish_reason"] == "MAX_TOKENS"
+        assert exchange.attempts[0]["error_class"] == "MAX_TOKENS"
+        assert exchange.attempts[0]["prompt_token_count"] == 20
+        assert exchange.attempts[0]["thoughts_token_count"] == 4000
+        assert exchange.attempts[0]["candidates_token_count"] == 0
+        assert exchange.raw_response == ("" if behavior is not prose else "not json")
+
+
+def test_max_tokens_with_a_parseable_object_is_accepted() -> None:
+    def behavior(_kwargs):
+        return [
+            SimpleNamespace(
+                candidates=[SimpleNamespace(
+                    finish_reason=None,
+                    content=SimpleNamespace(parts=[
+                        SimpleNamespace(thought=True, text="hidden"),
+                        SimpleNamespace(thought=False, text='{"a": 1}'),
+                    ]),
+                )],
+            ),
+            SimpleNamespace(
+                finish_reason="MAX_TOKENS",
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=4, candidates_token_count=6, thoughts_token_count=2),
+            ),
+        ]
+
+    client, _models = _client(behavior)
+    exchange = GemmaAIStudio(client_factory=lambda **_kwargs: client).generate("prompt", request_id="kept")
+    assert exchange.status == "ok"
+    assert exchange.raw_response == '{"a": 1}'
+    assert exchange.attempts[0]["finish_reason"] == "MAX_TOKENS"
+    assert exchange.output_tokens == 6
+    assert exchange.attempts[0]["thoughts_token_count"] == 2
+
+
+def test_backoff_that_would_pass_the_wall_clock_does_not_start_another_attempt() -> None:
+    clock = {"t": 0.0}
+
+    class ServerError(Exception):
+        status_code = 502
+
+    def behavior(_kwargs):
+        clock["t"] += 896
+        raise ServerError("bad gateway")
+
+    client, models = _client(behavior)
+    slept: list[float] = []
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: client, sleep=slept.append, monotonic=lambda: clock["t"],
+        rng=lambda: 0, wall_clock_limit_s=900, max_attempts=3,
+    ).generate("prompt", request_id="budget")
     assert exchange.status == "error"
     assert exchange.attempt_count == 1
     assert len(models.calls) == 1

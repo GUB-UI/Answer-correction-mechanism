@@ -6,27 +6,31 @@ import math
 import os
 import random
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from harness_v2.core.contracts import ProviderExchange
+from harness_v2.grading.scorer import parse_completion
 from harness_v2.storage.secrets import redact
 
 MODEL_ID = "gemma-4-31b-it"
 API_KEY_ENV = "GEMINI_API_KEY"
 AI_STUDIO_ENDPOINT = "https://generativelanguage.googleapis.com"
-MAX_ATTEMPTS = 6
-# First-attempt HTTP timeout. google-genai sends this as the request deadline.
-# 180s matched observed 504s on long OCR answers; 600s is the default.
+MAX_ATTEMPTS = 3
+# Older configs still name a per-call deadline. generate() does not grow it.
+# The HTTP timeout is the case wall clock, once, for every attempt.
 REQUEST_TIMEOUT_S = 600
 REQUEST_TIMEOUT_CAP_S = 1800
 DEADLINE_GROWTH = 2
 DEADLINE_RETRY_PAUSE_S = 1
-FAST_BACKOFF_MIN_S = 30
-FAST_BACKOFF_MAX_S = 120
-# A transport drop after this long is a lost generation, same as a deadline.
-# A drop in a few seconds uses the fast 5xx backoff. Not a generation setting.
-DISCONNECT_DEADLINE_AFTER_S = 60
 REQUEST_TIMEOUT_MS = REQUEST_TIMEOUT_S * 1000
+FAST_BACKOFF_MIN_S = 5
+FAST_BACKOFF_MAX_S = 30
+WALL_CLOCK_LIMIT_S = 900
+WALL_CLOCK_LIMIT_MS = WALL_CLOCK_LIMIT_S * 1000
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
+THINKING_LEVELS = ("minimal", "high", "unset")
+_THINKING_API = {"minimal": "MINIMAL", "high": "HIGH"}
 TRANSPORT_CONFIG_KEYS = (
     "request_timeout_s",
     "request_timeout_cap_s",
@@ -35,6 +39,7 @@ TRANSPORT_CONFIG_KEYS = (
     "max_attempts",
     "fast_backoff_min_s",
     "fast_backoff_max_s",
+    "wall_clock_limit_s",
 )
 _FAST_HTTP = {500, 502, 503}
 _DEADLINE_HTTP = {408, 504}
@@ -51,7 +56,7 @@ _DISCONNECT_NAMES = frozenset({
     "closeerror",
 })
 _VERTEX_ENV = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_VERTEX_AI")
-_SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k", "seed")
+_SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k", "seed", "thinking_level")
 
 
 def _transport_number(name: str, value: Any, *, minimum: float, exclusive: bool = False) -> int | float:
@@ -107,7 +112,7 @@ def _is_quota(exc: BaseException, code: int | None) -> bool:
 
 
 def _is_deadline(exc: BaseException, code: int | None) -> bool:
-    """504 and read timeouts need a longer deadline, not the same one again."""
+    """A timeout ends the case. The next attempt does not get a longer deadline."""
     if code in _FAST_HTTP:
         return False
     if code in _DEADLINE_HTTP:
@@ -124,7 +129,7 @@ def _is_deadline(exc: BaseException, code: int | None) -> bool:
 def _is_connection(exc: BaseException) -> bool:
     """Transport disconnect, including httpx RemoteProtocolError and ReadError.
 
-    Timeouts stay on the deadline path. A name containing "timeout" is not a
+    A timeout is not a disconnect. A name containing "timeout" is not a
     disconnect here.
     """
     if isinstance(exc, TimeoutError):
@@ -159,19 +164,100 @@ def _raw_from_exception(exc: BaseException) -> str:
     return str(exc)
 
 
-def _response_text(response: Any) -> str:
+def _visible_text(response: Any) -> str:
+    """Visible answer text. Thought parts are not part of the completion."""
+    candidates = getattr(response, "candidates", None)
+    if candidates:
+        parts_out: list[str] = []
+        saw_part = False
+        for candidate in candidates:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", None) or []:
+                saw_part = True
+                if getattr(part, "thought", False) is True:
+                    continue
+                part_text = getattr(part, "text", None)
+                if isinstance(part_text, str):
+                    parts_out.append(part_text)
+        if saw_part:
+            return "".join(parts_out)
     text = getattr(response, "text", None)
-    if isinstance(text, str):
-        return text
-    candidates = getattr(response, "candidates", None) or []
-    parts: list[str] = []
-    for candidate in candidates:
-        content = getattr(candidate, "content", None)
-        for part in getattr(content, "parts", None) or []:
-            part_text = getattr(part, "text", None)
-            if isinstance(part_text, str):
-                parts.append(part_text)
-    return "".join(parts)
+    return text if isinstance(text, str) else ""
+
+
+def _finish_name(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    name = getattr(value, "name", None)
+    text = name if isinstance(name, str) and name else str(value)
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    text = text.strip()
+    return text or None
+
+
+def _finish_reason(response: Any) -> str | None:
+    for candidate in getattr(response, "candidates", None) or []:
+        name = _finish_name(getattr(candidate, "finish_reason", None))
+        if name:
+            return name
+    return _finish_name(getattr(response, "finish_reason", None))
+
+
+def _is_max_tokens(reason: str | None) -> bool:
+    return (reason or "").upper() == "MAX_TOKENS"
+
+
+def _parseable_visible_answer(text: str) -> bool:
+    if not isinstance(text, str) or not text.strip():
+        return False
+    try:
+        parsed, *_rest = parse_completion(text)
+    except Exception:
+        return False
+    return isinstance(parsed, dict)
+
+
+def _retry_kind(exc: BaseException, code: int | None) -> str | None:
+    """Fast 5xx and transport disconnects can be retried. A timeout cannot."""
+    if _is_deadline(exc, code):
+        return None
+    if _is_transport_disconnect(exc):
+        return "disconnect"
+    if code in _FAST_HTTP:
+        return "fast"
+    return None
+
+
+def _thinking_api_value(types: Any, name: str) -> Any:
+    enum = getattr(types, "ThinkingLevel", None)
+    if enum is not None and hasattr(enum, name):
+        return getattr(enum, name)
+    return name
+
+
+def _generation_config(public: dict[str, Any]) -> Any:
+    """Build the SDK config. thinking_level stays on the recorded settings."""
+    level = public.get("thinking_level", "unset")
+    if level is None:
+        level = "unset"
+    if not isinstance(level, str) or level not in THINKING_LEVELS:
+        raise ValueError("thinking_level must be minimal, high, or unset")
+    body = {key: value for key, value in public.items() if key != "thinking_level"}
+    api_level = _THINKING_API.get(level)
+    try:
+        from google.genai import types
+    except ImportError:
+        if api_level is not None:
+            body["thinking_config"] = {"thinking_level": api_level}
+        return body
+    kwargs = dict(body)
+    if api_level is not None:
+        kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=_thinking_api_value(types, api_level))
+    if hasattr(types, "GenerateContentConfig"):
+        return types.GenerateContentConfig(**kwargs)
+    return kwargs
 
 
 def _usage(response: Any) -> tuple[int | None, int | None, int | None]:
@@ -225,13 +311,14 @@ class GemmaAIStudio:
     free_tier_project is an optional operator note recorded with each run;
     it is not required (the project has no billing configured).
 
-    429 stops immediately. A 504 or read timeout is retried with a longer
-    deadline. A transport disconnect after DISCONNECT_DEADLINE_AFTER_S seconds
-    is retried the same way. A faster disconnect, or a fast 500/502/503, waits
-    on exponential backoff with jitter.
+    One wall-clock limit covers every attempt of a case. The HTTP timeout is
+    that limit and does not grow. Streaming keeps the connection active.
+    429 stops immediately. A timeout is terminal. A fast 500/502/503, or a
+    transport disconnect, waits on exponential backoff with jitter, and a
+    disconnect builds a new client. thinking_level and max_output_tokens are
+    generation settings. Wall-clock and retry counts are transport policy.
     The model id is fixed. No second project, key, or API. client_factory
-    is a test seam; it receives the same pinned SDK options. Timeout and
-    retry settings are transport policy: they are not generation settings.
+    is a test seam; it receives the same pinned SDK options.
     """
 
     def __init__(
@@ -243,7 +330,9 @@ class GemmaAIStudio:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.perf_counter,
         rng: Callable[[], float] = random.random,
+        wall_time: Callable[[], datetime] | None = None,
         max_attempts: int = MAX_ATTEMPTS,
+        wall_clock_limit_s: float = WALL_CLOCK_LIMIT_S,
         request_timeout_s: float = REQUEST_TIMEOUT_S,
         request_timeout_cap_s: float = REQUEST_TIMEOUT_CAP_S,
         deadline_growth: float = DEADLINE_GROWTH,
@@ -263,7 +352,11 @@ class GemmaAIStudio:
         self._sleep = sleep
         self._monotonic = monotonic
         self._rng = rng
+        self._wall_time = wall_time or (lambda: datetime.now(timezone.utc))
         self.max_attempts = max_attempts
+        self.wall_clock_limit_s = _transport_number(
+            "wall_clock_limit_s", wall_clock_limit_s, minimum=0, exclusive=True)
+        # Accepted so an older config still loads. generate() does not read them.
         self.request_timeout_s = _transport_number("request_timeout_s", request_timeout_s, minimum=0, exclusive=True)
         self.request_timeout_cap_s = _transport_number(
             "request_timeout_cap_s", request_timeout_cap_s, minimum=self.request_timeout_s, exclusive=True)
@@ -303,6 +396,18 @@ class GemmaAIStudio:
         self._client_timeout_ms = timeout_ms
         return self._client
 
+    def _drop_client(self) -> None:
+        self._client = None
+        self._client_timeout_ms = None
+
+    def _stamp(self) -> str:
+        moment = self._wall_time()
+        if not isinstance(moment, datetime):
+            raise ValueError("wall_time must return a datetime")
+        if moment.tzinfo is None or moment.tzinfo.utcoffset(moment) is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.isoformat()
+
     def _fast_backoff_s(self, failed_attempt: int) -> float:
         """Exponential backoff with jitter. The first wait is fast_backoff_min_s; later waits reach the cap."""
         ceiling = min(self.fast_backoff_max_s, self.fast_backoff_min_s * (2 ** (failed_attempt - 1)))
@@ -313,38 +418,92 @@ class GemmaAIStudio:
         unit = min(1.0, max(0.0, float(unit)))
         return floor + unit * (ceiling - floor)
 
-    def _next_timeout_s(self, timeout_s: float) -> float:
-        grown = float(timeout_s) * float(self.deadline_growth)
-        return min(float(self.request_timeout_cap_s), grown)
-
     def _provider_policy(self) -> dict[str, Any]:
         return {
             "free_tier_project": self.free_tier_project if isinstance(self.free_tier_project, bool) else None,
             "attestation_source": "caller_config" if isinstance(self.free_tier_project, bool) else "none",
             "vertexai": False,
             "base_url": AI_STUDIO_ENDPOINT,
-            "request_timeout_s": self.request_timeout_s,
-            "request_timeout_cap_s": self.request_timeout_cap_s,
-            "deadline_growth": self.deadline_growth,
-            "deadline_retry_pause_s": self.deadline_retry_pause_s,
+            "wall_clock_limit_s": self.wall_clock_limit_s,
             "max_attempts": self.max_attempts,
             "fast_backoff_min_s": self.fast_backoff_min_s,
             "fast_backoff_max_s": self.fast_backoff_max_s,
         }
 
-    def _attempt_row(self, *, elapsed_s: float, status: str, error_class: str, timeout_s: float,
-                     input_tokens: int | None, output_tokens: int | None,
-                     thoughts_token_count: int | None) -> dict[str, Any]:
+    def _attempt_row(
+        self, *, elapsed_s: float, status: str, error_class: str,
+        started_at: str, ended_at: str, finish_reason: str | None,
+        input_tokens: int | None, output_tokens: int | None,
+        thoughts_token_count: int | None,
+    ) -> dict[str, Any]:
         return {
             "latency_ms": elapsed_s * 1000,
             "elapsed_s": elapsed_s,
+            "started_at": started_at,
+            "ended_at": ended_at,
             "status": status,
             "error_class": error_class,
+            "finish_reason": finish_reason,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
+            "prompt_token_count": input_tokens,
+            "candidates_token_count": output_tokens,
             "thoughts_token_count": thoughts_token_count,
-            "timeout_s": timeout_s,
+            "timeout_s": self.wall_clock_limit_s,
         }
+
+    def _read_stream(self, stream: Any, deadline: float) -> tuple[str, str | None, tuple[int | None, int | None, int | None], str, str]:
+        parts: list[str] = []
+        finish: str | None = None
+        usage = (None, None, None)
+        model = ""
+        response_id = ""
+        for chunk in stream:
+            if self._monotonic() > deadline:
+                raise TimeoutError("wall-clock limit")
+            piece = _visible_text(chunk)
+            if piece:
+                parts.append(piece)
+            reason = _finish_reason(chunk)
+            if reason:
+                finish = reason
+            prompt, output, thoughts = _usage(chunk)
+            usage = (
+                prompt if prompt is not None else usage[0],
+                output if output is not None else usage[1],
+                thoughts if thoughts is not None else usage[2],
+            )
+            found_model = _model_returned(chunk)
+            if found_model:
+                model = found_model
+            found_id = _response_id(chunk)
+            if found_id:
+                response_id = found_id
+        if self._monotonic() > deadline:
+            raise TimeoutError("wall-clock limit")
+        return "".join(parts), finish, usage, model, response_id
+
+    def _exchange(
+        self, *, request_id: str, recorded: dict[str, Any], attempts: list[dict[str, Any]],
+        total_started: float, status: str, raw_response: str, error: str,
+        input_tokens: int | None, output_tokens: int | None, model_returned: str,
+        provider_response_id: str, attempt: int,
+    ) -> ProviderExchange:
+        return ProviderExchange(
+            request_id=request_id,
+            model_requested=self.model_id,
+            model_returned=model_returned,
+            settings=recorded,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=(self._monotonic() - total_started) * 1000,
+            raw_response=raw_response,
+            status=status,
+            error=error,
+            provider_response_id=provider_response_id,
+            attempt_count=attempt,
+            attempts=list(attempts),
+        )
 
     def generate(
         self,
@@ -354,86 +513,89 @@ class GemmaAIStudio:
         settings: dict[str, Any] | None = None,
     ) -> ProviderExchange:
         public = {key: value for key, value in dict(settings or {}).items() if key in _SETTINGS_KEYS}
-        config = redact(public)
-        config.setdefault("temperature", 0)
-        recorded = {**config, "provider_policy": self._provider_policy()}
-        last_error = ""
+        recorded_settings = redact(public)
+        recorded_settings.setdefault("temperature", 0)
+        api_config = _generation_config(recorded_settings)
+        recorded = {**recorded_settings, "provider_policy": self._provider_policy()}
         attempts: list[dict[str, Any]] = []
         total_started = self._monotonic()
-        timeout_s = float(self.request_timeout_s)
+        case_deadline = total_started + float(self.wall_clock_limit_s)
+        last_exchange: ProviderExchange | None = None
         for attempt in range(1, self.max_attempts + 1):
-            client = self._build_client(timeout_s)
+            if self._monotonic() > case_deadline:
+                break
+            client = self._build_client(float(self.wall_clock_limit_s))
             started = self._monotonic()
+            started_at = self._stamp()
             try:
-                response = client.models.generate_content(
+                if self._monotonic() > case_deadline:
+                    raise TimeoutError("wall-clock limit")
+                stream = client.models.generate_content_stream(
                     model=self.model_id,
                     contents=prompt,
-                    config=config,
+                    config=api_config,
                 )
+                visible, finish, usage, model_returned, response_id = self._read_stream(stream, case_deadline)
             except Exception as exc:
-                elapsed_s = self._monotonic() - started
+                ended = self._monotonic()
                 code = _status_code(exc)
                 raw = _raw_from_exception(exc)
                 input_tokens, output_tokens, thoughts = _usage_from_exception(exc)
                 status = "quota" if _is_quota(exc, code) else "error"
                 attempts.append(self._attempt_row(
-                    elapsed_s=elapsed_s, status=status, error_class=type(exc).__name__,
-                    timeout_s=timeout_s, input_tokens=input_tokens, output_tokens=output_tokens,
+                    elapsed_s=ended - started, status=status, error_class=type(exc).__name__,
+                    started_at=started_at, ended_at=self._stamp(), finish_reason=None,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
                     thoughts_token_count=thoughts,
                 ))
-                exchange = ProviderExchange(
-                    request_id=request_id,
-                    model_requested=self.model_id,
-                    model_returned="",
-                    settings=recorded,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    latency_ms=(self._monotonic() - total_started) * 1000,
-                    raw_response=raw,
-                    status=status,
-                    error=redact(str(exc)),
-                    attempt_count=attempt,
-                    attempts=list(attempts),
+                exchange = self._exchange(
+                    request_id=request_id, recorded=recorded, attempts=attempts,
+                    total_started=total_started, status=status, raw_response=raw,
+                    error=redact(str(exc)), input_tokens=input_tokens, output_tokens=output_tokens,
+                    model_returned="", provider_response_id="", attempt=attempt,
                 )
                 if _is_quota(exc, code):
                     raise QuotaExceeded(exchange) from exc
-                last_error = exchange.error
-                if attempt >= self.max_attempts:
+                last_exchange = exchange
+                kind = _retry_kind(exc, code)
+                if kind is None or attempt >= self.max_attempts:
                     return exchange
-                if _is_transport_disconnect(exc):
-                    if elapsed_s >= DISCONNECT_DEADLINE_AFTER_S:
-                        timeout_s = self._next_timeout_s(timeout_s)
-                        self._sleep(float(self.deadline_retry_pause_s))
-                    else:
-                        self._sleep(self._fast_backoff_s(attempt))
-                    continue
-                if code in _FAST_HTTP:
-                    self._sleep(self._fast_backoff_s(attempt))
-                    continue
-                if _is_deadline(exc, code):
-                    timeout_s = self._next_timeout_s(timeout_s)
-                    self._sleep(float(self.deadline_retry_pause_s))
-                    continue
-                return exchange
-            elapsed_s = self._monotonic() - started
-            input_tokens, output_tokens, thoughts = _usage(response)
+                if kind == "disconnect":
+                    self._drop_client()
+                wait = self._fast_backoff_s(attempt)
+                if self._monotonic() + wait > case_deadline:
+                    return exchange
+                self._sleep(wait)
+                continue
+            input_tokens, output_tokens, thoughts = usage
+            if _is_max_tokens(finish) and not _parseable_visible_answer(visible):
+                attempts.append(self._attempt_row(
+                    elapsed_s=self._monotonic() - started, status="error", error_class="MAX_TOKENS",
+                    started_at=started_at, ended_at=self._stamp(), finish_reason=finish,
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    thoughts_token_count=thoughts,
+                ))
+                return self._exchange(
+                    request_id=request_id, recorded=recorded, attempts=attempts,
+                    total_started=total_started, status="error", raw_response=visible,
+                    error="MAX_TOKENS with no parseable answer",
+                    input_tokens=input_tokens, output_tokens=output_tokens,
+                    model_returned=model_returned or self.model_id,
+                    provider_response_id=response_id, attempt=attempt,
+                )
             attempts.append(self._attempt_row(
-                elapsed_s=elapsed_s, status="ok", error_class="", timeout_s=timeout_s,
+                elapsed_s=self._monotonic() - started, status="ok", error_class="",
+                started_at=started_at, ended_at=self._stamp(), finish_reason=finish,
                 input_tokens=input_tokens, output_tokens=output_tokens,
                 thoughts_token_count=thoughts,
             ))
-            return ProviderExchange(
-                request_id=request_id,
-                model_requested=self.model_id,
-                model_returned=_model_returned(response) or self.model_id,
-                settings=recorded,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                latency_ms=(self._monotonic() - total_started) * 1000,
-                raw_response=_response_text(response),
-                status="ok",
-                provider_response_id=_response_id(response),
-                attempt_count=attempt,
-                attempts=list(attempts),
+            return self._exchange(
+                request_id=request_id, recorded=recorded, attempts=attempts,
+                total_started=total_started, status="ok", raw_response=visible, error="",
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                model_returned=model_returned or self.model_id,
+                provider_response_id=response_id, attempt=attempt,
             )
-        raise ProviderSetupError(last_error or "generate failed")
+        if last_exchange is not None:
+            return last_exchange
+        raise ProviderSetupError("generate failed")

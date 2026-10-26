@@ -1127,3 +1127,13 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - `RemoteProtocolError`（`Server disconnected`）、`ReadError`、`ConnectError` は再試行する。包んだ例外の原因がそれらでも再試行する。
 - その試行が 60 秒以上なら、504 と同じく待ち時間を延ばして再試行する。それより短い切断は、速い 500 / 502 / 503 と同じバックオフで待つ。
 - 試行回数は `--max-attempts` まで。この方針はプロンプト、モデル、サンプリングを変えない。再利用の識別子には入らない。
+
+## dataset_v2: 思考は MINIMAL、出力トークンに上限、1 件に 1 つの壁時計
+
+- Gemma の採点設定に `thinking_level`（`minimal` / `high` / `unset`、`--thinking-level`、既定 `minimal`）と `max_output_tokens`（`--max-output-tokens`、既定 8192）を入れる。`minimal` と `high` は `ThinkingConfig(thinking_level=MINIMAL|HIGH)` として送る。`unset` は思考設定を送らない。
+- この二つは生成設定なので、保存結果の再利用の識別子に入る。思考や出力上限が違う結果は再利用しない。パーサは `json_latex_escapes_v3` のまま。
+- 各試行に `finish_reason`、`prompt_token_count`、`thoughts_token_count`、`candidates_token_count`、タイムゾーン付き ISO の `started_at` と `ended_at` を残す。`perf_counter` の `latency_ms` と `elapsed_s` も残す。思考パートは可視の回答に入れない。
+- 可視の本文が JSON オブジェクトとして読めず、`finish_reason` が `MAX_TOKENS` のときは、再試行しない失敗として残す。読める JSON オブジェクトなら、その本文を採点する。
+- 生成は `generate_content_stream` で受ける。1 件の壁時計は `--wall-clock-limit-s`（既定 900 秒）で、各試行の HTTP タイムアウトもその値である。408、504、読み取りタイムアウトはそこで終わる。
+- 再試行するのは速い 500 / 502 / 503 と通信切断で、`--max-attempts`（既定 3）まで。待ちは `--fast-backoff-min-s`（既定 5）から `--fast-backoff-max-s`（既定 30）のジッタ。バックオフが壁時計を超えるときは次の試行を始めない。
+- 429 は実行を止め、完了した行は残る。通信切断のあとはクライアントを捨て、次の試行で新しいクライアントを作る。壁時計と再試行回数は再利用の識別子に入らない。

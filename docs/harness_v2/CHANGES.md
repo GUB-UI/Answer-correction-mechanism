@@ -845,3 +845,11 @@ Backspace and form feed do not occur in grading prose. Inside a JSON string, `\b
 ## dataset_v2: retry a transport disconnect
 
 `RemoteProtocolError` (`Server disconnected`), `ReadError`, and `ConnectError` are retried, including when a wrapper's cause is one of those errors. A disconnect whose attempt lasted at least 60 seconds is retried with a longer deadline, the same growth and pause as a 504. A faster disconnect uses the fast 500/502/503 backoff. Retries stop at `--max-attempts`. This is retry policy. It does not change the prompt, model, or sampling, and it is not part of the reuse identity.
+
+## dataset_v2: minimal thinking, a finite output cap, and one wall clock
+
+Gemma grading settings accept `thinking_level` (`minimal`, `high`, or `unset`; `--thinking-level`, default `minimal`) and `max_output_tokens` (`--max-output-tokens`, default 8192). `minimal` and `high` are sent as `ThinkingConfig(thinking_level=MINIMAL|HIGH)`. `unset` sends no thinking config. Both values are generation settings, so they are part of the saved-result reuse identity. A result from another thinking level or another output cap is not reused. The completion parser stays `json_latex_escapes_v3`.
+
+Each attempt records `finish_reason`, `prompt_token_count`, `thoughts_token_count`, `candidates_token_count`, and timezone-aware ISO `started_at` and `ended_at` next to the `perf_counter` fields `latency_ms` and `elapsed_s`. Thought parts are left out of the visible answer. A `MAX_TOKENS` finish whose visible text is not a JSON object is a terminal failure and is stored that way. A `MAX_TOKENS` finish whose visible text is a JSON object is graded.
+
+Generation uses `generate_content_stream`. One case has one wall-clock limit (`--wall-clock-limit-s`, default 900). That limit is the HTTP timeout on every attempt. A timeout, including 408 and 504, is terminal. Retries are a fast 500, 502, or 503, and a transport disconnect, at most `--max-attempts` (default 3), with jittered backoff from `--fast-backoff-min-s` (default 5) to `--fast-backoff-max-s` (default 30). A backoff that would pass the wall clock does not start another attempt. A 429 stops the run and leaves completed rows in place. A transport disconnect drops the client so the next attempt builds a new one. Wall-clock and retry counts stay out of the reuse identity.

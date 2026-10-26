@@ -19,14 +19,11 @@ from harness_v2.evaluation.dataset import Dataset, load_dataset
 from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.providers.fixture import FixtureProvider
 from harness_v2.providers.gemma_ai_studio import (
-    DEADLINE_GROWTH,
-    DEADLINE_RETRY_PAUSE_S,
     FAST_BACKOFF_MAX_S,
     FAST_BACKOFF_MIN_S,
     MAX_ATTEMPTS,
-    REQUEST_TIMEOUT_CAP_S,
-    REQUEST_TIMEOUT_S,
     TRANSPORT_CONFIG_KEYS,
+    WALL_CLOCK_LIMIT_S,
     GemmaAIStudio,
     QuotaExceeded,
 )
@@ -77,13 +74,19 @@ def load_config(path: Path) -> dict:
     settings = config.get('generation_settings')
     if not isinstance(settings, dict):
         raise ValueError('generation_settings must be an object')
-    if set(settings) - {'temperature', 'seed', 'max_output_tokens', 'top_p', 'top_k'}:
+    if set(settings) - {'temperature', 'seed', 'max_output_tokens', 'top_p', 'top_k', 'thinking_level'}:
         raise ValueError('unsupported generation settings')
     for name, value in settings.items():
+        if name == 'thinking_level':
+            if value not in {'minimal', 'high', 'unset'}:
+                raise ValueError('thinking_level must be minimal, high, or unset')
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f'invalid generation setting: {name}')
         if name in {'seed', 'top_k', 'max_output_tokens'} and not isinstance(value, int):
             raise ValueError(f'{name} must be an integer')
+        if name == 'max_output_tokens' and value < 1:
+            raise ValueError('max_output_tokens must be at least 1')
         if name != 'seed' and value < 0:
             raise ValueError(f'{name} must be nonnegative')
     config = {**config, 'generation_settings': {'temperature': 0, **settings},
@@ -96,35 +99,39 @@ def load_config(path: Path) -> dict:
 def reusable_config(config: dict) -> dict:
     """Config that changes what the model is asked to generate.
 
-    Timeout and retry policy does not change the prompt, model, or sampling.
+    thinking_level and max_output_tokens live in generation_settings, so a
+    different thinking level or output cap is a different saved result.
+    Wall-clock and retry policy do not change the prompt, model, or sampling.
     A successful grade stays reusable when only that policy changes.
     """
     return {key: value for key, value in config.items() if key not in TRANSPORT_CONFIG_KEYS}
 
 
+_LEGACY_TRANSPORT = (
+    'request_timeout_s', 'request_timeout_cap_s', 'deadline_growth', 'deadline_retry_pause_s')
+
+
 def _with_transport_defaults(config: dict) -> dict:
     defaults = {
-        'request_timeout_s': REQUEST_TIMEOUT_S,
-        'request_timeout_cap_s': REQUEST_TIMEOUT_CAP_S,
-        'deadline_growth': DEADLINE_GROWTH,
-        'deadline_retry_pause_s': DEADLINE_RETRY_PAUSE_S,
         'max_attempts': MAX_ATTEMPTS,
         'fast_backoff_min_s': FAST_BACKOFF_MIN_S,
         'fast_backoff_max_s': FAST_BACKOFF_MAX_S,
+        'wall_clock_limit_s': WALL_CLOCK_LIMIT_S,
     }
     merged = {**defaults, **config}
     # Validate by constructing the numeric policy. The provider applies the same rules.
-    GemmaAIStudio(
-        model_id='gemma-transport-check',
-        request_timeout_s=merged['request_timeout_s'],
-        request_timeout_cap_s=merged['request_timeout_cap_s'],
-        deadline_growth=merged['deadline_growth'],
-        deadline_retry_pause_s=merged['deadline_retry_pause_s'],
-        max_attempts=merged['max_attempts'],
-        fast_backoff_min_s=merged['fast_backoff_min_s'],
-        fast_backoff_max_s=merged['fast_backoff_max_s'],
-    )
-    for key in defaults:
+    # Older deadline-growth keys are checked when a config still names them.
+    provider_kwargs = {
+        'model_id': 'gemma-transport-check',
+        **{key: merged[key] for key in defaults},
+    }
+    for key in _LEGACY_TRANSPORT:
+        if key in config:
+            provider_kwargs[key] = config[key]
+    GemmaAIStudio(**provider_kwargs)
+    for key in (*defaults, *_LEGACY_TRANSPORT):
+        if key not in merged:
+            continue
         value = merged[key]
         if isinstance(value, float) and value.is_integer():
             merged[key] = int(value)
@@ -139,16 +146,17 @@ def request_id_for(dataset: Dataset, case: dict, config: dict, repetition: int) 
 
 def default_provider(config: dict, case: dict, repetition: int):
     if config['provider'] == 'gemma':
-        return GemmaAIStudio(
-            model_id=config['model'],
-            request_timeout_s=config['request_timeout_s'],
-            request_timeout_cap_s=config['request_timeout_cap_s'],
-            deadline_growth=config['deadline_growth'],
-            deadline_retry_pause_s=config['deadline_retry_pause_s'],
-            max_attempts=config['max_attempts'],
-            fast_backoff_min_s=config['fast_backoff_min_s'],
-            fast_backoff_max_s=config['fast_backoff_max_s'],
-        )
+        provider_kwargs = {
+            'model_id': config['model'],
+            'max_attempts': config['max_attempts'],
+            'fast_backoff_min_s': config['fast_backoff_min_s'],
+            'fast_backoff_max_s': config['fast_backoff_max_s'],
+            'wall_clock_limit_s': config['wall_clock_limit_s'],
+        }
+        for key in _LEGACY_TRANSPORT:
+            if key in config:
+                provider_kwargs[key] = config[key]
+        return GemmaAIStudio(**provider_kwargs)
     completion = config.get('fixture_completions', {}).get(case['case_id'], config.get('fixture_completion'))
     if isinstance(completion, list):
         completion = completion[repetition - 1]

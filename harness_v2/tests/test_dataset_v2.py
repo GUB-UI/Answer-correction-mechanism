@@ -937,7 +937,8 @@ def test_gemma_baseline_uses_the_existing_model_and_stays_offline(tmp_path, monk
     assert config["provider"] == "gemma"
     assert config["model"] == "gemma-4-31b-it"
     assert config["prompt_version"] == "harness_v2_ambiguity_aware_v1"
-    assert config["generation_settings"] == {"temperature": 0}
+    assert config["generation_settings"] == {
+        "temperature": 0, "max_output_tokens": 8192, "thinking_level": "minimal"}
     assert "fixture_completion" not in config
     assert calls[0]["model"] == "gemma-4-31b-it"
     blob = b"".join(path.read_bytes() for path in out.rglob("*") if path.is_file())
@@ -960,20 +961,50 @@ def test_timeout_policy_is_recorded_and_does_not_block_reuse(tmp_path, capsys):
     common = [
         "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
         "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
-        "--fast-backoff-min-s", "30", "--fast-backoff-max-s", "120",
-        "--deadline-growth", "2", "--request-timeout-cap-s", "1800",
+        "--fast-backoff-min-s", "5", "--fast-backoff-max-s", "30",
+        "--thinking-level", "minimal", "--max-output-tokens", "8192",
     ]
-    assert main([*common, "--request-timeout-s", "600", "--max-attempts", "6"]) == 0
+    assert main([*common, "--wall-clock-limit-s", "900", "--max-attempts", "3"]) == 0
     config = json.loads((out / "config.json").read_text(encoding="utf-8"))
-    assert config["request_timeout_s"] == 600
-    assert config["max_attempts"] == 6
-    assert config["fast_backoff_min_s"] == 30
-    assert config["fast_backoff_max_s"] == 120
-    assert "max_output_tokens" not in config["generation_settings"]
-    assert main([*common, "--request-timeout-s", "900", "--max-attempts", "4"]) == 0
+    assert config["wall_clock_limit_s"] == 900
+    assert config["max_attempts"] == 3
+    assert config["fast_backoff_min_s"] == 5
+    assert config["fast_backoff_max_s"] == 30
+    assert config["generation_settings"]["max_output_tokens"] == 8192
+    assert config["generation_settings"]["thinking_level"] == "minimal"
+    assert "deadline_growth" not in config
+    assert main([*common, "--wall-clock-limit-s", "1200", "--max-attempts", "2"]) == 0
     second = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert second["skipped"] == 1
-    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["request_timeout_s"] == 900
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["wall_clock_limit_s"] == 1200
+
+
+def test_thinking_level_and_max_tokens_change_the_reuse_identity(tmp_path):
+    root = build_tree(tmp_path / "data")
+    out = tmp_path / "out"
+    calls = []
+    first = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert first["skipped"] == 0 and len(calls) == 1
+    assert calls[0]["settings"]["thinking_level"] == "minimal"
+    assert calls[0]["settings"]["max_output_tokens"] == 8192
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     wall_clock_limit_s=1200, max_attempts=2,
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert again["skipped"] == 1 and len(calls) == 1
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 generation_settings={"thinking_level": "high"},
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 generation_settings={"max_output_tokens": 4096},
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 generation_settings={"thinking_level": "unset"},
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    assert len(calls) == 1
 
 
 def test_baseline_output_is_private_and_reading_does_not_change_modes(tmp_path):
