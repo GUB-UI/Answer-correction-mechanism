@@ -1061,3 +1061,8 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - `python -m harness_v2.evaluation.dataset_v2 baseline --commit <rev>` がそのリビジョンを実行の出所として記録する。`experiment.json` と各結果の行に同じ値が入る。
 - `--commit` を省略したときの既定は、これまでどおりハーネスのチェックアウト識別子。採点用 config には入れない。
+
+## dataset_v2: 書き込み時に inputs と rubrics を 0700 にする
+
+- データセットを書くとき、既にある `inputs/` と `rubrics/` も 0700 にする。
+- データセットを読むだけでは、ディレクトリもファイルも権限を変えない。

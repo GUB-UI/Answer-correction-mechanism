@@ -894,6 +894,30 @@ def test_cli_writes_metrics_and_quota_exits_3(tmp_path, monkeypatch, capsys):
     assert exc.value.code == 2
 
 
+def test_existing_output_folders_are_tightened_only_on_write(tmp_path):
+    previous = os.umask(0)
+    try:
+        root = build_tree(tmp_path / "data")
+        out = tmp_path / "out"
+        inputs = out / "inputs"
+        rubrics = out / "rubrics"
+        inputs.mkdir(parents=True)
+        rubrics.mkdir()
+        for path in (out, inputs, rubrics):
+            path.chmod(0o755)
+        convert(root, "dev", out)
+        assert mode(out) == mode(inputs) == mode(rubrics) == 0o700
+        inputs.chmod(0o755)
+        rubrics.chmod(0o755)
+        sample = next(inputs.glob("*.txt"))
+        sample.chmod(0o644)
+        load_dataset(out / "manifest.json")
+        assert mode(inputs) == mode(rubrics) == 0o755
+        assert mode(sample) == 0o644
+    finally:
+        os.umask(previous)
+
+
 def test_cli_commit_is_recorded_and_the_default_stays_the_resolver(tmp_path, capsys):
     root = build_tree(tmp_path / "data")
     completion = tmp_path / "completion.json"

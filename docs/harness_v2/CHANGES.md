@@ -801,3 +801,7 @@ Dev and holdout transcript directories are compared by real path. A directory sy
 ## dataset_v2: baseline accepts --commit
 
 `python -m harness_v2.evaluation.dataset_v2 baseline --commit <rev>` records that revision on the run. The same value is stored in `experiment.json` and each result row. Omitting `--commit` still uses the harness checkout identity. The revision is not copied into the grading config.
+
+## dataset_v2: tighten inputs and rubrics directories on write
+
+When a dataset is written, existing `inputs/` and `rubrics/` directories are set to 0700. Reading a dataset leaves directory and file modes unchanged.
