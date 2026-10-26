@@ -60,7 +60,7 @@ def review_disagreement(saved: dict[str, Any], result: GradingResult,
     if not _finite_json(loaded) or not Draft202012Validator(REVIEW_SCHEMA).is_valid(loaded):
         return "independent_review_invalid_contract"
     try:
-        items, total, _ = items_from_completion(text, rubric)
+        items, total, *_ = items_from_completion(text, rubric)
     except ScoringParseError:
         return "independent_review_invalid_contract"
     reviewed = validate(rubric, items, total, answer_text)

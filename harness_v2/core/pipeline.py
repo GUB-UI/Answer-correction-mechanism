@@ -299,7 +299,7 @@ class Pipeline:
                 raw_response=exchange.raw_response,
             )
         try:
-            items, total, _fence = items_from_completion(exchange.raw_response, rubric)
+            items, total, _fence, repaired = items_from_completion(exchange.raw_response, rubric)
         except ScoringParseError as exc:
             return GradingResult(
                 status="failed",
@@ -312,7 +312,7 @@ class Pipeline:
                 model_id=exchange.model_returned or exchange.model_requested,
                 raw_response=exchange.raw_response,
             )
-        return validate(
+        result = validate(
             rubric,
             items,
             total,
@@ -322,6 +322,8 @@ class Pipeline:
             model_id=exchange.model_returned or exchange.model_requested,
             raw_response=exchange.raw_response,
         )
+        result.parse_repaired = repaired
+        return result
 
     def _maybe_propose(
         self,

@@ -68,7 +68,7 @@ def load_config(path: Path) -> dict:
     for field in ('name', 'provider', 'model', 'prompt_version', 'rubric_version'):
         if not isinstance(config.get(field), str) or not config[field].strip():
             raise ValueError(f'config {field} must be a nonempty string')
-    from harness_v2.grading.scorer import prompt_suffix
+    from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION, prompt_suffix
     prompt_suffix(config['prompt_version'])  # rejects unregistered versions before any call
     if config['provider'] not in {'gemma', 'fixture'}:
         raise ValueError('provider must be gemma or fixture; no fallback')
@@ -86,7 +86,8 @@ def load_config(path: Path) -> dict:
             raise ValueError(f'{name} must be an integer')
         if name != 'seed' and value < 0:
             raise ValueError(f'{name} must be nonnegative')
-    config = {**config, 'generation_settings': {'temperature': 0, **settings}}
+    config = {**config, 'generation_settings': {'temperature': 0, **settings},
+              'completion_parser_version': COMPLETION_PARSER_VERSION}
     config = _with_transport_defaults(config)
     canonical(config)
     return config

@@ -14,7 +14,7 @@ def grade(row, answer='x'):
     raw = json.dumps({'items': [{'item_id': 'a', 'score': 0, 'evidence_spans': [],
         'math_reason': 'not written', 'uncertainty': 0, 'review_reason': '', **row}],
         'total_score': row.get('score', 0)})
-    items, total, _ = items_from_completion(raw, rubric)
+    items, total, *_ = items_from_completion(raw, rubric)
     return validate(rubric, items, total, answer), raw
 
 

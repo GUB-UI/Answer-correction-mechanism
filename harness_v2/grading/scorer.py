@@ -13,6 +13,12 @@ from typing import Any
 from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
+# Bumped when repaired text can change a grade. Reuse identity includes this
+# so a grade parsed by an older pass is not treated as this parser's output.
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v1"
+_JSON_SIMPLE_ESCAPES = set('"\\/')
+_JSON_CONTROL_ESCAPES = set("bfnrt")
+_JSON_HEX = set("0123456789abcdefABCDEF")
 
 
 class ScoringParseError(ValueError):
@@ -41,16 +47,93 @@ def strip_one_outer_fence(text: str) -> str | None:
     return None
 
 
-def parse_completion(raw: str) -> tuple[dict[str, Any], bool]:
+def repair_json_string_escapes(text: str) -> str:
+    """Keep LaTeX backslashes inside JSON strings.
+
+    A backslash that is not a JSON escape is doubled. ``\\f \\b \\t \\n \\r``
+    immediately followed by an ASCII letter are kept as the two characters
+    backslash and letter, because ``\\frac`` and ``\\neq`` would otherwise
+    become a form feed or a newline. A newline, tab, or other control escape
+    whose next character is not an ASCII letter is left alone. ``\\\\`` and
+    ``\\uXXXX`` are left alone.
+    """
+    out: list[str] = []
+    in_string = False
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if not in_string:
+            out.append(char)
+            if char == '"':
+                in_string = True
+            index += 1
+            continue
+        if char == '"':
+            out.append(char)
+            in_string = False
+            index += 1
+            continue
+        if char != "\\":
+            out.append(char)
+            index += 1
+            continue
+        if index + 1 >= length:
+            out.append("\\\\")
+            index += 1
+            continue
+        nxt = text[index + 1]
+        if nxt in _JSON_SIMPLE_ESCAPES:
+            out.append("\\")
+            out.append(nxt)
+            index += 2
+            continue
+        if nxt == "u":
+            hexpart = text[index + 2:index + 6]
+            if len(hexpart) == 4 and all(item in _JSON_HEX for item in hexpart):
+                out.append("\\u")
+                out.append(hexpart)
+                index += 6
+                continue
+            out.append("\\\\")
+            index += 1
+            continue
+        if nxt in _JSON_CONTROL_ESCAPES:
+            follow = text[index + 2] if index + 2 < length else ""
+            if follow.isascii() and follow.isalpha():
+                out.append("\\\\")
+                out.append(nxt)
+                index += 2
+                continue
+            out.append("\\")
+            out.append(nxt)
+            index += 2
+            continue
+        out.append("\\\\")
+        index += 1
+    return "".join(out)
+
+
+def _load_repaired_json(text: str) -> tuple[Any, bool]:
+    repaired = repair_json_string_escapes(text)
+    return json.loads(repaired), repaired != text
+
+
+def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool]:
+    """Return the object, whether a fence was removed, and whether escapes were repaired.
+
+    Repair runs even when ``json.loads`` would succeed, so ``\\frac`` is not
+    silently stored as a form feed.
+    """
     try:
-        loaded = json.loads(raw)
+        loaded, repaired = _load_repaired_json(raw)
         fence = False
     except json.JSONDecodeError as first_error:
         body = strip_one_outer_fence(raw)
         if body is None:
             raise ScoringParseError(f"json_parse_failed: {first_error}", raw=raw) from first_error
         try:
-            loaded = json.loads(body)
+            loaded, repaired = _load_repaired_json(body)
         except json.JSONDecodeError as second_error:
             raise ScoringParseError(
                 f"json_parse_failed_after_fence: {second_error}",
@@ -60,7 +143,7 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool]:
         fence = True
     if not isinstance(loaded, dict):
         raise ScoringParseError("json object expected", raw=raw, fence_stripped=fence)
-    return loaded, fence
+    return loaded, fence, repaired
 
 
 def _number(value: Any) -> float | None:
@@ -95,8 +178,8 @@ def _spans(value: Any) -> list[EvidenceSpan]:
     return spans
 
 
-def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[ItemResult], float | None, bool]:
-    payload, fence = parse_completion(raw)
+def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[ItemResult], float | None, bool, bool]:
+    payload, fence, repaired = parse_completion(raw)
     maxima = {item.item_id: item.max_points for item in rubric}
     rows = payload.get("items")
     if rows is None:
@@ -145,7 +228,7 @@ def items_from_completion(raw: str, rubric: list[RubricItem]) -> tuple[list[Item
             )
         )
     total = payload.get("total_score", payload.get("score"))
-    return items, _number(total) if total is not None else None, fence
+    return items, _number(total) if total is not None else None, fence, repaired
 
 
 AMBIGUITY_AWARE_V1 = (

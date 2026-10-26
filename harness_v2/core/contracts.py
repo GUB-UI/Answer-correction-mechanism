@@ -121,6 +121,7 @@ class GradingResult:
     model_id: str = ""
     raw_response: str = ""
     checks: list[Check] = field(default_factory=list)
+    parse_repaired: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -134,6 +135,7 @@ class GradingResult:
             "model_id": self.model_id,
             "raw_response": self.raw_response,
             "checks": [check.to_dict() for check in self.checks],
+            "parse_repaired": self.parse_repaired,
         }
 
 

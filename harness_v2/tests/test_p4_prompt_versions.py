@@ -65,7 +65,7 @@ def test_uncertainty_routes_to_review_and_null_score_fails_without_filling():
                                   'math_reason': 'r', 'uncertainty': 0.9, 'review_reason': 'garbled'}],
                        'total_score': None})
     for raw, status in ((ok, 'review_required'), (null, 'failed')):
-        items, total, _ = items_from_completion(raw, RUBRIC)
+        items, total, *_ = items_from_completion(raw, RUBRIC)
         result = validate(RUBRIC, items, total, 'x+1')
         assert result.status == status
     assert result.items[0].score is None
