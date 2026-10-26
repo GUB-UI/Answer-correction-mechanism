@@ -1019,3 +1019,11 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - Sol r6 major: `√[x]y̅` と `√[x]y` はどちらも `sqrt([x])y`。`∛[x]y̅` と `∛[x]y` は `root(3,[x])y`、`∜` も同様に `root(4,[x])y`。
 - Sol r6 minor: `√(x̅)` と `sqrt(x̅)` は `sqrt(overline(x))`。`√x̅` と `\sqrt{x̅}` は `sqrt(x)`。
 - Sol r5 の骨格 minor 6–10（指数付き根号、太字スタイル、互換アクセント）も同じ範囲外へ再分類した。challenge の minor 4 と 5 は未修正のまま。
+
+## dataset_v2: ルーブリックと OCR から分割データを作る
+
+- `harness_v2/evaluation/dataset_v2.py` が、手元の `DATASET_DIR` から `dev` または `holdout` のハーネス用データセットを作る。
+- `sol_draft/<problem>.json` から読むのは `problem`、`problem_summary`、`rubric` だけ。`answers` もその他のフィールドもコピーしない。`reference/scores_v1.json` は開かない。
+- 小問は採点項目ひとつ。模範解答と基準の文は description に入れ、`acceptable_expression` は空のまま。配点の合計はその問題の `full_marks` と一致しなければならない。
+- holdout の書き起こしは `ocr_gpu_v1/holdout_sealed/` から読む。1枚の画像を二つの answer id が共有する場合は `ocr_gpu_v1/transcript_map.json`（`transcript_map_v1`。`by_answer_id` が answer id を、別の answer id かその分割ディレクトリ内のファイル名へ対応づける）で指定する。推測はしない。
+- 書き起こしの欠落・空ファイル、id の重複・不足・対象外は変換を失敗させる。出力ファイルは 0600、ディレクトリは 0700。入力も出力も、読むだけでは権限を変えない。
