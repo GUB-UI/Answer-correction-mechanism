@@ -269,8 +269,21 @@ def test_wrong_folder_empty_file_and_bad_writer_fail(tmp_path):
 
     writer = build_tree(tmp_path / "writer", dev_ids=["9-Z_B_XXXX"],
                         transcripts={"dev": {"9-Z_B_XXXX": "x\n"}, "holdout": {"9-Z_A_HHHH": "x\n"}})
-    with pytest.raises(DatasetV2Error, match="writer is not in the split: 9-Z_B_XXXX"):
+    with pytest.raises(DatasetV2Error, match="unknown writer: 9-Z_B_XXXX"):
         convert(writer, "dev", tmp_path / "out-writer")
+
+    other = build_tree(tmp_path / "other-writer", holdout_ids=["9-Z_Z_HHHH"],
+                       transcripts={"dev": {"9-Z_C_XXXX": "x\n"}, "holdout": {"9-Z_Z_HHHH": "x\n"}})
+    with pytest.raises(DatasetV2Error, match="unknown writer: 9-Z_Z_HHHH"):
+        convert(other, "dev", tmp_path / "out-other-writer")
+
+    shared = build_tree(tmp_path / "shared-writer")
+    payload = json.loads((shared / "split.json").read_text(encoding="utf-8"))
+    payload["dev"]["writers"] = ["C"]
+    payload["holdout"]["writers"] = ["A", "C"]
+    (shared / "split.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="writer is in both splits: C"):
+        convert(shared, "dev", tmp_path / "out-shared-writer")
 
     excluded = build_tree(tmp_path / "excluded", transcripts={"dev": {}, "holdout": {"9-Z_A_HHHH": "x\n"}})
     (excluded / "ocr_gpu_v1" / "excluded" / "ans_9-Z_C_XXXX.md").write_text("hidden\n", encoding="utf-8")

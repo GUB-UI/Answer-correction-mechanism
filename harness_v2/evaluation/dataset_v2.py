@@ -238,7 +238,34 @@ def _load_split(root: Path) -> dict[str, Any]:
     overlap = set(sides["dev"]["ids"]) & set(sides["holdout"]["ids"])
     if overlap:
         raise DatasetV2Error("answer id is in both splits: " + sorted(overlap)[0])
+    shared_writers = sides["dev"]["writers"] & sides["holdout"]["writers"]
+    if shared_writers:
+        raise DatasetV2Error("writer is in both splits: " + sorted(shared_writers)[0])
+    for name in SPLITS:
+        for answer_id in sides[name]["ids"]:
+            _known_writer(answer_id, sides[name]["writers"])
     return {"version": version, **sides}
+
+
+def _known_writer(answer_id: str, writers: set[str]) -> str:
+    found = []
+    for writer in writers:
+        needle = f"_{writer}_"
+        start = 0
+        while True:
+            index = answer_id.find(needle, start)
+            if index < 0:
+                break
+            if index > 0 and answer_id[index + len(needle):]:
+                found.append(writer)
+                break
+            start = index + 1
+    if not found:
+        raise DatasetV2Error(f"unknown writer: {answer_id}")
+    found.sort(key=len, reverse=True)
+    if len(found) > 1 and len(found[0]) == len(found[1]):
+        raise DatasetV2Error(f"unknown writer: {answer_id}")
+    return found[0]
 
 
 def _split_side(payload: Any, name: str) -> dict[str, Any]:

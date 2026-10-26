@@ -793,3 +793,7 @@ Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contriv
 ## dataset_v2: transcript directories cannot alias each other
 
 Dev and holdout transcript directories are compared by real path. A directory symlink, or a transcript symlink, that resolves into the other split fails the conversion. A file is accepted only when its real path is inside its own split directory.
+
+## dataset_v2: writers stay disjoint
+
+`split.json` is rejected when a writer is listed in both dev and holdout, or when an answer id's writer is not one of that split's writers. Both splits are checked together, including ids that are not part of the split being converted.
