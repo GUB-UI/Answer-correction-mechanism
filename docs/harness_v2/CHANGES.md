@@ -785,3 +785,7 @@ Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contriv
 ## dataset_v2: baseline command for Gemma and the offline fixture
 
 `python -m harness_v2.evaluation.dataset_v2 baseline --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"` grades a split with the existing Google AI Studio Gemma provider (`gemma-4-31b-it` by default) or `--provider fixture` for an offline run. The default prompt is `harness_v2_ambiguity_aware_v1` and the default temperature is 0. Metrics are written only when every case finishes. A saved grade is reused only when the model id, prompt version, rubric hash, and generation settings match; a failed grade is run again. A different identity in the same output directory is refused. Outputs are 0600 files and 0700 directories under `--out`. No API key is written into the run.
+
+## dataset_v2: a transcript map target must belong to the same split
+
+`ocr_gpu_v1/transcript_map.json` may point an answer id only at another answer id in that same split, or at `ans_<that id>.md` in that split's directory. A target in the other split, or a target that is not a split id, fails the conversion. The file is still read only from the source id's own transcript directory.

@@ -113,9 +113,10 @@ def convert(dataset_dir: Path, split: str, out: Path, *,
     root = Path(dataset_dir)
     loaded = _load_split(root)
     side = loaded[split]
-    known_ids = set(loaded["dev"]["ids"]) | set(loaded["holdout"]["ids"])
+    dev_ids = set(loaded["dev"]["ids"])
+    holdout_ids = set(loaded["holdout"]["ids"])
     stems = _problem_stems(root / "sol_draft")
-    transcripts = _transcripts(root, split, side["ids"], known_ids)
+    transcripts = _transcripts(root, split, side["ids"], dev_ids, holdout_ids)
     sources: dict[str, dict] = {}
     cases = []
     for answer_id in side["ids"]:
@@ -314,19 +315,16 @@ def _writer_and_image(answer_id: str, problem: str) -> tuple[str, str]:
     return writer, image
 
 
-def _transcripts(root: Path, split: str, ids: list[str],
-                 known_ids: set[str]) -> dict[str, tuple[bytes, str]]:
+def _transcripts(root: Path, split: str, ids: list[str], dev_ids: set[str],
+                 holdout_ids: set[str]) -> dict[str, tuple[bytes, str]]:
     directory = root / "ocr_gpu_v1" / SPLITS[split]
     if not directory.is_dir():
         raise DatasetV2Error(f"missing transcript directory: {SPLITS[split]}")
-    mapping = _transcript_map(root)
-    unexpected_keys = sorted(set(mapping) - known_ids)
-    if unexpected_keys:
-        raise DatasetV2Error(f"unexpected transcript map id: {unexpected_keys[0]}")
+    mapping = _transcript_map(root, dev_ids, holdout_ids)
     resolved_root = directory.resolve()
     chosen: dict[str, tuple[bytes, str, Path]] = {}
     for answer_id in ids:
-        filename = mapping.get(answer_id) or f"ans_{answer_id}.md"
+        filename = f"ans_{mapping.get(answer_id, answer_id)}.md"
         path = (directory / filename).resolve()
         if path.parent != resolved_root:
             raise DatasetV2Error(f"transcript map escapes directory: {answer_id}")
@@ -350,7 +348,8 @@ def _transcripts(root: Path, split: str, ids: list[str],
     return {answer_id: (raw, filename) for answer_id, (raw, filename, _path) in chosen.items()}
 
 
-def _transcript_map(root: Path) -> dict[str, str]:
+def _transcript_map(root: Path, dev_ids: set[str], holdout_ids: set[str]) -> dict[str, str]:
+    """Map each answer id to a transcript id in the same split. No cross-split targets."""
     path = root / "ocr_gpu_v1" / TRANSCRIPT_MAP
     if not path.exists():
         return {}
@@ -360,22 +359,38 @@ def _transcript_map(root: Path) -> dict[str, str]:
     pairs = payload.get("by_answer_id")
     if not isinstance(pairs, dict):
         raise DatasetV2Error("invalid transcript map")
+    homes = (("dev", dev_ids), ("holdout", holdout_ids))
     mapping = {}
     for answer_id, value in pairs.items():
         if not isinstance(answer_id, str) or not answer_id.strip():
             raise DatasetV2Error("invalid transcript map")
-        mapping[answer_id] = _mapped_filename(value)
+        home = next((ids for _name, ids in homes if answer_id in ids), None)
+        if home is None:
+            raise DatasetV2Error(f"unexpected transcript map id: {answer_id}")
+        target = _target_answer_id(value)
+        if target in home:
+            mapping[answer_id] = target
+            continue
+        other = dev_ids if home is holdout_ids else holdout_ids
+        if target in other:
+            raise DatasetV2Error(f"transcript map crosses splits: {answer_id}")
+        raise DatasetV2Error(f"transcript map target is not in the split: {answer_id}")
     return mapping
 
 
-def _mapped_filename(value: Any) -> str:
+def _target_answer_id(value: Any) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
         raise DatasetV2Error("invalid transcript map")
     if "/" in value or "\\" in value or value.startswith("."):
         raise DatasetV2Error("transcript map escapes directory")
     if value.endswith(".md"):
-        return value
-    return f"ans_{value}.md"
+        if not value.startswith("ans_"):
+            raise DatasetV2Error("transcript map target is not in the split")
+        answer_id = value[len("ans_"):-len(".md")]
+        if not answer_id or answer_id.startswith(".") or "/" in answer_id or "\\" in answer_id:
+            raise DatasetV2Error("transcript map target is not in the split")
+        return answer_id
+    return value
 
 
 def _criteria(value: Any, problem: str, item_id: str, points: int | float) -> list[dict]:

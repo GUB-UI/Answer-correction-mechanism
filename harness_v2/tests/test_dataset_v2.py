@@ -310,11 +310,52 @@ def test_shared_transcript_uses_the_map_and_does_not_guess(tmp_path):
 def test_map_wins_and_an_unused_direct_file_is_unexpected(tmp_path):
     root = build_tree(
         tmp_path / "both",
-        mapping={"9-Z_C_XXXX": "9-Z_A_HHHH"},
-        extra_dev_files={"ans_9-Z_A_HHHH.md": "from the map\n"},
+        dev_ids=["9-Z_C_XXXX", "9-Z_C_YYYY"],
+        transcripts={"dev": {"9-Z_C_XXXX": "direct\n", "9-Z_C_YYYY": "mapped\n"},
+                     "holdout": {"9-Z_A_HHHH": "h\n"}},
+        mapping={"9-Z_C_XXXX": "9-Z_C_YYYY"},
     )
     with pytest.raises(DatasetV2Error, match="unexpected transcript: ans_9-Z_C_XXXX.md"):
         convert(root, "dev", tmp_path / "out")
+
+
+def test_transcript_map_target_must_stay_inside_the_same_split(tmp_path):
+    crossed = build_tree(
+        tmp_path / "crossed",
+        mapping={"9-Z_C_XXXX": "9-Z_A_HHHH"},
+        extra_dev_files={"ans_9-Z_A_HHHH.md": "holdout text copied into dev\n"},
+    )
+    with pytest.raises(DatasetV2Error, match="transcript map crosses splits: 9-Z_C_XXXX"):
+        convert(crossed, "dev", tmp_path / "out-crossed")
+
+    named = build_tree(
+        tmp_path / "named",
+        mapping={"9-Z_C_XXXX": "ans_9-Z_A_HHHH.md"},
+        extra_dev_files={"ans_9-Z_A_HHHH.md": "named holdout file\n"},
+    )
+    with pytest.raises(DatasetV2Error, match="transcript map crosses splits: 9-Z_C_XXXX"):
+        convert(named, "dev", tmp_path / "out-named")
+
+    unknown = build_tree(tmp_path / "unknown", mapping={"9-Z_C_XXXX": "9-Z_C_NOPE"})
+    with pytest.raises(DatasetV2Error, match="transcript map target is not in the split: 9-Z_C_XXXX"):
+        convert(unknown, "dev", tmp_path / "out-unknown")
+
+    loose = build_tree(tmp_path / "loose", mapping={"9-Z_C_XXXX": "sheet.md"},
+                       extra_dev_files={"sheet.md": "unlisted\n"})
+    with pytest.raises(DatasetV2Error, match="transcript map target is not in the split"):
+        convert(loose, "dev", tmp_path / "out-loose")
+
+    same = build_tree(
+        tmp_path / "same",
+        dev_ids=["30-A_C_xxxx", "39-A_C_yyyy"],
+        holdout_ids=["30-A_A_hhhh"],
+        problems={"30-A": _problem("30-A"), "39-A": _problem("39-A")},
+        transcripts={"dev": {"30-A_C_xxxx": "shared sheet\n"}, "holdout": {"30-A_A_hhhh": "other\n"}},
+        mapping={"39-A_C_yyyy": "ans_30-A_C_xxxx.md"},
+    )
+    manifest = convert(same, "dev", tmp_path / "out-same")
+    texts = [Path(case["ocr_import_path"]).read_text(encoding="utf-8") for case in load_dataset(manifest).cases]
+    assert texts == ["shared sheet\n", "shared sheet\n"]
 
 
 def test_problem_field_points_and_split_membership_fail_loudly(tmp_path):
