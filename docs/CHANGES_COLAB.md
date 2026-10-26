@@ -1,5 +1,28 @@
 # Colab / CUDA 対応の変更一覧
 
+## PR #12 追補: 数式モードの区切りを OCR 骨格から除去
+
+- `\(` / `\)`、`\[` / `\]`、`$`、`$$` をレイアウトの区切りとして除去し、数字・関数名・未知の命令のトークン境界を保持する。分数・根号・指数・括弧の範囲は既存の規則で維持する。
+- 内容としてのエスケープ済み波括弧 `\{` / `\}` はその表記を保持し、再正規化で数式モードの区切りと誤認しないようにした。
+- 区切りあり／なしの同値性、境界、内容の括弧、15組の区切りを含むページ、冪等性の回帰テストを36件追加。修正前は26件が失敗することを確認した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **378 件成功**（ネットワーク・API 呼び出しなし）。
+
+## PR #12: OCR 骨格から LaTeX レイアウトを除去し、記号表記を統一
+
+- 改行 `\\`、任意の環境の `\begin` / `\end` マーカー、空白命令、`\left` / `\right`、`\displaystyle`、整列用 `&` を区切りとして除去する。分数・根号の引数を読む前に処理し、数字や関数名が連結されないよう既存の括弧処理で境界を保持する。
+- Greek 文字（大文字・異体字を含む）、`\circ` / `°`、`\infty` / `∞` を共通の Unicode 表記に揃える。既存の乗除算・不等号・複号の規則、未知の命令の独立したトークン、括弧・根号・指数の範囲を維持する。
+- 複数行 aligned ブロックとプレーンテキストの一致（CER 0）、記号の同値性、レイアウト除去時の境界、冪等性の回帰テストを追加。修正前は新規テストの88件が失敗することを確認した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **342 件成功**（ネットワーク・API 呼び出しなし）。
+
+## 修正 1: 係数・変数の直後にある正規形の根号の範囲を維持
+
+- 正規形 `sqrt(...)` を数字・英字の直後も含む任意の位置で認識し、既存の括弧対応処理で根号の範囲を保持する。係数付き・入れ子の LaTeX、Unicode、正規形を同じ表現に揃え、再度正規化しても結果が変わらないようにした。
+- 表記の同値性、根号の範囲、正規化の冪等性について回帰テストを36件追加した。入れ子、分数、指数、全角表記も含み、修正前は新規テストの31件が失敗することを確認した。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **902 件成功**（ローカルの模擬 HTTP サーバー起動を許可して実行）。
+
 ## PR #10 ログ整理・修正3: Git のない環境で hygiene テストを skip
 
 - 各 hygiene チェックの前に `git rev-parse --is-inside-work-tree` を確認し、Git を実行できない場合や checkout 外では `pytest.skip` とする。
@@ -520,6 +543,86 @@ Gemma は `free_tier_project=True` という呼出側の明示的な確認を必
 
 検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **704 passed in 22.43s**。
 
+## harness v2 Phase 5 / 01: OCR のメモリ確認を MemAvailable に変更（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | 空きメモリを /proc/meminfo の MemAvailable で判定（取れなければ従来の値）。しきい値 4.5 GiB は同じ。従来の値は解放可能なキャッシュを含まない MemFree で、実際は 7.6 GiB 使えるのに 3.5 GiB と見なして OCR を拒否していた（Sol 計画レビュー1回目の blocker）。 |
+| `harness_v2/tests/test_p5_ocr_memory.py` | 偽の meminfo、項目なし・ファイルなしの場合を検証。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **708 passed in 20.95s**。
+
+## harness v2 Phase 5 / 02: 事前登録した OCR 前処理と表記に依存しない CER（2026-10-24）
+
+改善サイクル2（Cycle A）、変更コンポーネントは recognition のみ。計画は GPT-6.1 Sol が3回レビュー。最後に残った指摘（LaTeX と普通の表記の違いで CER が変わる）は、表記をそろえてから記号を除く方式で対応。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | `--preprocess` を追加（既定 none は従来と同じ）。前処理はグレースケール→autocontrast(cutoff 1)→1.5倍拡大（長辺最大4096px）→RGB で、全画像に同じ設定。stats.jsonl に元画像の sha256、前処理名と値、モデルに渡した画像のハッシュとサイズ、OCR プロンプトの sha256 を記録。画像ごとの調整はしない。 |
+| `harness_v2/recognition/skeleton.py` | 分数・不等号・マイナス・掛け算・根号などの表記をそろえてから書式記号と空白を除く `skeleton()`、CER、事前登録した判定 `gate_a1()`（対象画像で 0.02 以上改善、他の画像が 0.01 超悪化しない）。手書き答案の手動書き起こしと比べる（点数ラベルではない）。 |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | none は無変化、決定性、サイズ上限、未知の名前の拒否、同じ式は同じ・違う式は違う、CER と判定のしきい値。候補 OCR を作る前に固定。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **730 passed in 22.46s**。
+
+## harness v2 Phase 5 / 03: 点数ラベルを使わない頑健性チャレンジセット（2026-10-24）
+
+Cycle B。評価用のみで採点部は変えない。合否判定ではなく傾向の把握で、開発データ上の頑健性であり汎化の証明ではない。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `scripts/build_challenge_set.py` | 手動書き起こし・問題・ルーブリックだけを読む（正解点ファイルは読まない）。各ケースで O 原文、F 半角数字→全角、S ASCII の = + - < > の前後に空白、N 漢字・かなを3%（最低1字）削除（対象0字なら作らない）。変化しない版は除外して記録。正解点が空のデータセットと inventory.json（0600）を書く。 |
+| `harness_v2/evaluation/challenge.py` | 各版を同じ元・同じ繰り返しの O と対にし、項目一致率・O に比べて新たに要確認になった数などを数える。失敗や欠けた実行は数えるだけで補わない。 |
+| `harness_v2/tests/test_p5_challenge.py` | 変換、決定性、対象0字の扱い、空の正解点、権限、対応付けを検証。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **734 passed in 22.16s**。
+
+## harness v2 Phase 5 / 04: 分数の解析修正・判定境界・OCR 記録のテスト（2026-10-24）
+
+Sol 差分レビュー1回目（REJECT: major 1、minor 2）への対応。02 で「表記の違いを吸収した」と書いたが、括弧を含む分数では不十分だったので訂正する。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/recognition/skeleton.py` | 先に NFKC をかけ、`\\frac` の引数を括弧の対応をとって再帰的に読む。`\\frac{x^{2}}{3}` で割り算記号が消え、表記だけの違いで判定を通ってしまう問題（major）を修正。判定の境界は等号を含め、1e-9 の誤差を許す（minor）。 |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | 指数・根号・添字・入れ子の分数、境界値、OCR 実行の記録（元画像ハッシュ、モデルに渡した画像、前処理、プロンプト、設定）を偽モデルで検証（minor）。 |
+
+修正後の skeleton で A1 判定を再計算し、結果は Phase 5 レポートに記載。
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **744 passed in 21.11s**。
+
+## harness v2 Phase 5 / 05: チャレンジ報告で予定した全実行を数える（2026-10-24）
+
+Sol 差分レビュー2回目（REJECT: major 2、minor 1）への対応。03 の記述を訂正（欠けた実行が数えられず、失敗した採点が比較に入り得た）。
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/evaluation/challenge.py` | 予定した実行ごとに ok / missing（記録なし）/ failed / incomplete（項目の重複・欠け・想定外・非有限）に分類し、ok 同士だけ比べる。元の版が ok でない場合は別に数える。結果を元の書き起こしごと・版ごとに出し、要確認率は分母つき。補完はしない。 |
+| `harness_v2/tests/test_p5_challenge.py` | 欠け、失敗、重複・NaN、C0/C1 の分離を検証。 |
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **748 passed in 20.31s**。
+
+## harness v2 Phase 5 / 06: チャレンジ報告でルーブリック項目を必須に（2026-10-24）
+
+Sol 差分レビュー3回目（REJECT: major 1）への対応。05 の記述を訂正（項目IDが任意だった）。ルーブリック項目IDを必須にし、ない問題があれば止める。項目が同じように欠けた O と F や、想定外の項目IDが一致扱いになる問題を修正。レビュー上限（3回）に達したため、この修正は Sol の再レビューを受けていない。
+
+検証: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` → **750 passed in 20.75s**。
+
+## PR #12: skeleton CER で根号と指数を保持（2026-10-24）
+
+`harness_v2/recognition/skeleton.py` で平方根を `sqrt(...)` として保持する。
+LaTeX と Unicode の根号、括弧や上線の有無を共通表記にそろえ、入れ子の
+根号の範囲も保持する。上付き数字列は NFKC の前に変換し、LaTeX の指数と
+同じ `^` を残す。根号・指数・べき乗記号が OCR で欠落した場合は CER の
+誤りとして数える。OCR 判定はこの共通正規化を使い、前処理の既定は
+引き続き `none`（無効）。
+
+`harness_v2/tests/test_skeleton_semantics.py` に47件を追加。同じ数式表記の
+一致、根号と分数の入れ子、根号の範囲、全上付き数字、複数桁・符号付き
+指数、記号欠落時の CER 増加を検証する。
+
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests --deselect=harness_v2/tests/test_contracts.py::test_design_summary_records_metrics_and_dev_set`。
+設計概要の既存テスト1件は閲覧禁止ファイルを読むため除外。アプリの
+テストには制限サンドボックス外でのローカルソケット接続が必要。
+結果: **796 passed, 1 deselected in 21.42s**（新規47件を含む）。
 ## Phase 4 / 03: 旧・新プロンプト比較の実験サマリーをコミット（2026-10-24）
 
 | ファイル | 何を、なぜ |
@@ -561,12 +664,97 @@ external モードでは実際の OCR 接続先の `/health` から `ok: true`�
 
 合計点が数値でも `question_scores` が空または未保存なら、読み込み時に `review_required` とする。空文字・未指定・validated の旧ステータスにも適用し、failed は維持する。合計点や設問別得点は補完・変更しない。旧 JSON の読み込みと一括処理の診断キャッシュ再利用、明示的な設問別得点がそろう場合の検証を追加。
 
+## Phase 5 / 07: 改善履歴（追記のみ）・根拠に結び付いた承認・版のロールバック（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/history.py` | ハッシュ連鎖・fsync・排他ロック付きの追記専用履歴。再生時に全遷移を検証（ID重複禁止、最新評価が improved でなければ採用不可、却下は確定）。評価は experiment.json と比較結果から snapshot（コミット・設定/データセットのハッシュ・プロンプト・OCR前処理・比較結果のハッシュ）を導出。承認はリポジトリ・ベースブランチ・PR・最新 snapshot を明記し、昇格は版が snapshot と完全一致する場合のみ。版は設定とデータセット一式を内容アドレスで保存し、最初の版が不変のベースライン。ロールバックはベースラインか過去に昇格した版のみ。`materialize` で worktree と入力を復元しハッシュ検証。改ざん「検知」と誤昇格の防止であり、セキュリティ境界ではない（実際のマージ制限は GitHub のブランチ保護）。 |
+| `harness_v2/tests/test_improvement_history.py` | 複数サイクル＋ロールバック、ベースライン不変、古い承認の無効化、証拠の結び付け、クラッシュ・途中切れ・欠落の検出など。 |
+
+## Phase 5 / 08: 提案の重複検出（実際の変更内容から判定）（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/duplicates.py` | 変更されたファイルと内容（バイト単位）から `change_id` を作り、`git patch-id` を類似のヒントに使う。過去の提案と一致すれば判定結果つきで列挙。提案者の自己申告ではなく実物で判定するため。 |
+| `harness_v2/improvement/history.py` | 一致した提案には `duplicate_of_…` / `retry_on_new_baseline` の印を付け、承認者と理由を記録した override なしでは昇格不可。 |
+| `harness_v2/tests/test_improvement_duplicates.py` | 空白の違いの区別、却下済みの再提案、別ベースラインでの再試行。 |
+
+## Phase 5 / 09: 提案レビューの受け渡し（依頼IDと snapshot に結び付け）（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/handoff.py` ほかスキーマ2件 | 提案ごとに request.json・issue.md・pr.md・branch.txt・実行権限のない commands.txt（0600）を作成し、依頼を履歴に記録。結果は発行済み・未回答の依頼ID かつ同じ提案・snapshot の場合のみ受理。レビューは承認扱いにしない。HTTP のモデルAPIを使わず Issue/ブランチ/PR で受け渡すため。 |
+| `harness_v2/providers/grokbot_exchange.py` | 文字列の `enum` 検査が抜けていたのを修正（Sol 指摘）。 |
+| `harness_v2/improvement/history.py` | 履歴ディレクトリを管理対象の非公開出力として作成（PR #10 の権限方針に合わせる）。 |
+| `harness_v2/tests/test_improvement_handoff.py` | 権限、enum、snapshot 不一致、未発行ID、再送の拒否。 |
+
+## Phase 5 / 10: 履歴CLI（承認・マージ確認・ロールバック）と過去サイクルの登録（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `scripts/improvement_history.py` | `status`・`verify`・`approve`（承認を書く唯一の経路。承認者とオーナー指示の原文が必須）・`override`・`rollback`・読み取り専用の `check-merge`（PR の head が評価済み候補と一致し、リポジトリ/ベース/PR/最新 snapshot に結び付いた承認がなければ終了コード1）。実際のマージ制限は GitHub のブランチ保護（オーナー操作）。 |
+| `scripts/register_history.py` | Phase 4 のプロンプト改善（improved、採否は人の確認待ち）と Phase 5 の OCR 前処理（ゲート不合格で却下）を、根拠ファイルのハッシュつきで冪等に登録。 |
+| `harness_v2/tests/test_improvement_cli.py` | 承認前後・head 変更後の check-merge、昇格→ロールバック、検証。 |
+
+## Phase 5 / 11: 改善ループのレビュー修正（Sol 差分1回目）（2026-10-24）
+
+| ファイル | 何を、なぜ |
+| --- | --- |
+| `harness_v2/improvement/history.py` | 評価は2つの results.json から比較を再計算し、結果と比較を保存（判定ファイルを信用しない）。新しい評価で採用を「保留」に戻し、承認・昇格は最新 snapshot の採用を共通の判定で要求。候補の追加時にも重複判定。途中切れの修復は head.json と照合してから置き換え。 |
+| `harness_v2/improvement/duplicates.py` | 却下済みの変更に無関係な変更を足しても検出（`contains_change_of_…`）。 |
+| `harness_v2/improvement/handoff.py` | 秘密情報の伏せ字（redact）を適用してからファイルを作成。 |
+| `scripts/register_history.py` | 途中で止まった登録を手順ごとに再開。 |
+| テスト | 上記の各ケース。 |
+
+## Phase 5 / 12: 改善ループのレビュー修正（Sol 差分2回目）（2026-10-24）
+
+| ファイル | 変更 |
+|---|---|
+| `harness_v2/improvement/history.py` | 評価時に実験IDを設定・データセット・コミットから再計算し、すべての実行がその実験のもの（コミット・名前・プロンプト・モデル・ルーブリック）か確認。候補を登録していない提案や、提案と違うベースラインの評価は拒否。下書きの取り込みでも重複判定。提案IDは英数字と ._- のみ。 |
+| `harness_v2/improvement/duplicates.py` | 同じ部品の同じ変更を1つでも含めば重複として検出（無関係な変更が違っても）。 |
+| `harness_v2/improvement/handoff.py` | 伏せ字で変わる提案IDは受け渡しを拒否。 |
+| `scripts/register_history.py` | 途中で止まった登録で、候補の登録だけを再開。 |
+| テスト | `test_improvement_review2.py` ほか。 |
+
+## Phase 5 / 13: 実行の実験ID確認（Sol 差分3回目）（2026-10-24）
+
+| ファイル | 変更 |
+|---|---|
+| `harness_v2/improvement/history.py` | 各実行に記録された実験ID（experiment_case.experiment_identity）がヘッダーと一致することも確認。Sol 3回目の指摘。上限後の修正のため再レビューなし。 |
+| テスト | 別実験の実行を混ぜた場合の拒否。 |
+
+## PR #12 / 修正A: skeleton の分数・括弧・演算子の範囲を保持（2026-10-24）
+
+`harness_v2/recognition/skeleton.py` で通常の括弧と分数全体の範囲を保持し、演算子の優先順位・結合方向から不要と判断できる括弧だけを除去する。分子・分母、乗除算、加減算、累乗の異なる構造を区別し、LaTeX・Unicode・通常表記は同じ構造なら一致させる。既存の `sqrt(...)` と `^` の動作を維持する。
+
+`test_skeleton_semantics.py` に構造の衝突防止、同値表記、正規化の冪等性の回帰テストを追加。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **166 件成功**。追加のローカル検証では生成した算術式 10,000 件で演算子の構造と冪等性を確認。ネットワーク・API 呼び出しなし。
+
+## PR #12 / 修正B: challenge の request_id と実行計画を照合（2026-10-24）
+
+`harness_v2/evaluation/challenge.py` は実行記録を上書きせず、計画と照合して重複・欠落・予定外の `request_id` を `reasons` に列挙する。いずれかがあれば `comparable: false`、CLI 終了コード 2 とする。重複した実行は incomplete として扱い、どちらの記録も一致率の比較に使わない。残りの集計は診断用であり、得点の補完や採点ステータス名の変更は行わない。
+
+`test_p5_challenge.py` に重複（原本・変形、記録順の両方）、欠落、予定外、複数の異常、正常系、CLI の出力・終了コードの検証を追加。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **19 件成功、1 件除外**。`references.json` を読む既存の dataset-builder テストは指示に従い除外。修正Aの関連テストと合わせて **185 件成功、1 件除外**。ネットワーク・API 呼び出しなし。
 ## PR #9 修正4: 採点設定が完全一致する診断だけを再利用する
 
 一括処理で新しい診断に `grading_metadata` を保存する。モデル ID、provider、実際のプロンプト全文の SHA-256（内容に基づくバージョン）、ルーブリック・配点・問題文・模範解答・問題 ID の SHA-256、生成設定がすべて一致する場合だけ再利用する。生成設定は API 呼び出しと共通化し、managed モードではサーバーのモデル・量子化・生成上限なども記録する。メタデータ全体または一部がない旧診断と、設定を特定できないアダプターの診断は再採点する。得点の補完や状態名の変更は行わない。
 
 検証: `tests/test_diagnosis_reuse.py` に完全一致時の保存・再利用、モデル・プロンプト本文・テンプレート・種別・ルーブリック・配点・問題文・模範解答・生成設定の変更、旧診断と部分的なメタデータ、再実行指定、設定不明時の回帰テストを追加。新規テストは通信を禁止し、クライアントとサービス管理をモック化した。関連テストを `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider` で実行し、161 件成功。ネットワーク・API 通信は実施していない。`docs/harness_v2/CHANGES.md` はこの worktree に存在しないため追加していない。
 
+## PR #12 / 再修正A: skeleton の演算子スコープとトークン境界（2026-10-24）
+
+符号付きの暗黙の乗算因子は括弧を保持し、上付き文字の連続全体を一つの指数として扱う。`±` と `\pm` は専用トークンに統一し、`\div`・`÷` は除算へ正規化する。既知の装飾コマンドだけを除去し、未知の意味を持つコマンドとその境界を保持する。括弧を外す際にはトークン列を照合し、数値・コマンド・根号関数の生成を防ぐ。式や得点ごとの例外は追加しない。
+
+回帰テストは符号付き積（分数・和・根号・冪を含む）、複合指数、加減記号と負数の加算、除算、未知コマンド、分割された関数名の衝突・表記一致・冪等性を検証する。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **236 件成功**。ネットワーク・API 呼び出しおよび除外対象ファイルの読み取りなし。
+
+## PR #12 / 再修正B: challenge の計画の存在と ID 一意性（2026-10-24）
+
+明示された空でないジョブ計画を必須とし、計画なし・空リスト・不正な計画型を `reasons` に記録する。計画 ID は集合化の前に数え、重複した ID を報告する。重複計画に属するセルは incomplete とし、一つの実行記録を複数ジョブの得点や一致率に利用しない。いずれの計画異常も `comparable: false`・CLI 終了コード 2 とする。曖昧でない残りのペアは診断用に保持する。得点補完および採点ステータス名の変更なし。
+
+回帰テストは原本・変形間、異なる入力元・反復間の計画 ID 重複、計画順序、記録数 0/1/2、正常ペアとの混在、計画欠落・空・不正型、および CLI の JSON と終了コードを検証する。
+検証: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **47 件成功、1 件除外**。skeleton 関連 3 ファイルとの結合実行は **283 件成功、1 件除外**。`references.json` を読む既存 builder テストのみ除外した。ネットワーク・API 呼び出しおよび除外対象ファイルの読み取りなし。
 ## PR #9 再修正1・2: 実際の診断バックエンドを確認し、managed 設定変更で再起動
 
 診断 API の実接続先の `/v1/health`（base URL に `/health` を追加）から、`ok: true` と `backend_fingerprint` のロード済み `model_id`・空でない実効 `settings` を確認する。モデルの別名や希望設定を実体の証明として使わず、確認できないサーバーでは毎回再採点する。内蔵 LLM サーバーはロード後の生成設定、生成上限、量子化、dtype、device、チャットテンプレート、取得可能な revision を返す。採点直前と直後で情報が変わった結果にも、再利用可能なメタデータを付けない。
@@ -586,6 +774,70 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 クライアントのリクエスト構築を共通化し、assistant プレフィルを追加した最終メッセージの JSON をプロンプトの SHA-256 に使う。プレフィル変更で再採点し、同じ内容なら再利用する。最終メッセージを取得できないクライアントでは再利用しない。入力メッセージは変更せず、既存 assistant の末尾や思考無効化を使わない場合も送信内容と一致させる。
 
 検証: 実クライアントの送信経路を SDK のメモリ内モックで動かし、送信メッセージと保存ハッシュの一致、プレフィル変更時の再採点、その後の再利用を確認。最終リクエスト不明時、既存 assistant と思考無効化の組合せも回帰確認。指定 Python・pytest コマンドで関連 200 件成功。さらに全体のオフライン検証で 313 件成功。ソケット接続を禁止する一時 pytest プラグインを使い、通信が必要な既存 4 件と HTTP サーバーを使う `test_intake_ui.py` は除外した。ネットワーク・API 通信は実施していない。`docs/harness_v2/CHANGES.md` は存在しない。
+
+
+## PR #12 / 修正1: 根の指数を保持
+
+省略可能な `[index]` と被開平数を分離し、立方根・四乗根を Unicode と同じ `root(index,radicand)` に統一する。平方根は `sqrt(...)` を維持。衝突・同値・冪等性（入れ子を含む）を追加し、関連375件成功。
+
+
+## PR #12 / 修正2: 添字を演算子として保持
+
+`_` を削除せず `^` と同じ結合規則で保持する。添字・通常文字・括弧付き因子の衝突を防ぎ、分数の既存期待値も更新。衝突・同値・冪等性の回帰を含む関連379件成功。
+
+
+## PR #12 / 修正3: 階乗と不等号を区別
+
+後置 `!` を最高優先順位とし、`!=`・`<=`・`>=` を一つのトークンとして扱う。括弧除去で階乗と等号から不等号を生成することも防止。衝突・同値・冪等性を含む関連383件成功。
+
+
+## PR #12 / 修正4: 内容を持つ括弧と区切りを保持
+
+角括弧・エスケープ波括弧・半開区間を元の種類で保持し、カンマを区切りとして扱って座標等の囲みを残す。入れ子を含む衝突・同値・冪等性の回帰を追加。関連389件成功。
+
+
+## PR #12 / 修正5: 字句境界と数学の括弧を分離
+
+コマンド・空白によるトークン境界を U+2063 で表し、実際の関数引数の丸括弧と区別する。コマンド直後の実括弧を保持し、三角関数・対数の指数スコープの衝突を防止。衝突・同値・冪等性を含む関連393件成功。
+
+
+## PR #12 / 修正6: 行・列・数式スパンの構造を保持
+
+最上位の改行・LaTeX行区切り・数式スパン境界を `;`、列区切りを `¦` として保持する。pmatrix/bmatrix/vmatrix/Vmatrix/matrix/array/cases の環境名と形状を残す。式を連結していた旧テストの期待値を訂正。衝突・同値・冪等性を含む関連398件成功。
+
+
+## PR #12 / 修正7: Unicode互換正規化前に意味を保護
+
+Unicode の `<super>`・`<sub>` 分解を使い、数字以外も含む上付き・下付き文字列を `^`・`_` に変換する。丸数字・括弧付き数字等は独立した文字として保持し、通常数字への NFKC による衝突を防ぐ。衝突・同値・冪等性を含む関連414件成功。
+
+
+## PR #12 / 修正8: 意味のある装飾とテキストを保持
+
+上線・bar・vec・hat・dot・tilde・太字・text を区別するトークンで保持し、結合文字も対応する装飾へ統一する。text の語間は `␠` で保持する。上線は根号の被開平数を示す場合だけ除去する。衝突・同値・冪等性を含む関連425件成功。
+
+
+## PR #12 / 修正9: 純粋なLaTeXレイアウトの引数を除去
+
+array の入れ子を含む列指定、環境の位置指定、行間隔、hspace/vspace、tag、番号抑制、hline、括弧サイズ、不可視区切り、`~` を除去する。行・列の区切りと括弧の種類は維持。衝突・同値・冪等性を含む関連441件成功。
+
+
+## PR #12 / 修正10: 根号と未完成入力の冪等性
+
+根号・分数等の単一引数はコマンド全体で読み、括弧の入れ子・対応を検証する。未完成コマンドの境界マーカーを再解析せず、孤立した結合記号を明示トークン化し、レイアウト除去後の区切りも正規化する。衝突・同値・冪等性の回帰と seed 固定4,000入力の fuzz を追加。関連445件成功、追加20,000入力も冪等。
+
+
+## PR #12 / 修正11: ÷ と暗黙の乗算の優先順位
+
+`\div`・`÷` を `/` と異なる `÷` に統一し、日本の学校数学の規約に合わせて暗黙の乗算を明示的な乗除算より強く扱う。分数全体に後続の因子がある場合の括弧を保持する。旧除算・分数テストの期待値を訂正。衝突・同値・冪等性を含む関連448件成功。
+
+
+## PR #12 / 修正12: 表記の同値性と関数括弧を統一
+
+角度の指数表記、数字が続く指数、Unicode分数文字、`\mp`、斜体不等号（Unicode ⩽/⩾ を含む）、角括弧コマンドを同じ形へ統一する。識別子（添字・プライム付きも含む）に直接続く関数括弧を保持する。併せて、表記統一と括弧除去の相互作用として、混在する上付き・下付きの入れ子、text内の実括弧、根の引数内のカンマ、階乗等式の字句境界を回帰確認する。いずれも式名や得点による例外なし。`gate_a1`・`cer` API、採点状態名、得点処理は変更しない。
+
+検証: 指定 `/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider` による関連4ファイルは **491件成功**。seed固定4,000入力のfuzzを含む。追加の生成入力は元のトークン集合20,000件と拡張集合20,000件で冪等。読み取り専用レビュー後の回帰も成功。構文チェックと `git diff --check` 成功。
+
+全体テストも実行した。一時的な監査フックで通信と禁止ファイルの読み取りを遮断し、**1,197件成功、269件失敗、24件エラー、1件除外**。失敗・エラーの内訳は references.json 読み取り遮断277件、通信遮断2件、ソケット権限制限14件。除外は `test_builder_writes_label_free_private_dataset` のみ。既存テストが自ら生成する references.json も、明示許可がないため読み取りを遮断した。禁止ファイル・通信を使わずに全体成功とは主張しない。監査フックは `/tmp` のみで、実行ログは作成・コミットしていない。
 
 ## レビュー修正 #1: 後処理設定と診断再利用
 
@@ -654,6 +906,31 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 - `/health` は送信と同じ `ensure_ascii=False` の UTF-8 符号化を検証する。サロゲートなどで符号化できない fingerprint は null と例外名を返し、health 自体は 200 のままにする。
 - 通常の非 ASCII 文字は応答に残す。サロゲート文字列の回帰テストを追加。
 
+## PR #12 / challenge 修正1: 同じ計画スロットの上書きを比較不能にする
+
+- 計画上の別 request ID が同じ（出典、バリアント、反復）に入る場合、後の結果で前の結果を置き換えない。`duplicate planned slot` を理由にして comparable を false にし、そのスロットの得点は使わない。
+- 二つの設定を混ぜ、一方だけ一致する例で、順序に関わらず合意率を出さないことを回帰確認。CLI は終了コード 2。出力は 0600、新規ディレクトリは 0700、入力の権限は変えない。
+
+## PR #12 / challenge 修正2: 実行の出自を計画と照合する
+
+- 各実行の `outputs.experiment_case` が、計画の case ID・反復・問題 ID と一致し、実験 ID を持つことを要求する。欠落も理由にする。比較する実行の実験 ID は一つに限る。
+- 一致しない実行の得点は使わず、comparable を false にする。CLI は終了コード 2。出力は 0600 のまま、入力の権限は変えない。
+
+## PR #12 / challenge 修正3: 空や None の request ID は一致させない
+
+- 計画と実行の request ID は、空白でない文字列だけを識別子として使う。None、空文字、空白、文字列以外は互いに一致させず、`invalid request_id` として比較不能にする。
+- CLI は終了コード 2。出力は 0600、入力の権限は変えない。
+
+## PR #12 / challenge 修正4: 元答案またはバリアントがない計画は比較不能
+
+- 同じ出典・反復に元答案（O）の計画がない、またはバリアントの計画がない場合は、`unpaired_no_valid_O` の加算だけでは済まさず比較不能にする。
+- 理由は `missing planned original` または `missing planned variant`。CLI は終了コード 2。得点は補わない。出力は 0600、入力の権限は変えない。
+
+## PR #12 / challenge 修正5: 壊れた入力は例外にせず比較不能にする
+
+- 結果がオブジェクトでない、`runs` がリストでない、実行記録がオブジェクトでない、計画に request ID・case ID・反復がない、request ID がハッシュできない、のいずれも理由にして comparable を false にする。CLI は終了コード 2。
+- それらは突き合わせのキーにしないので、別のスロットを上書きしない。得点は補わない。出力は 0600、入力の権限は変えない。
+
 ## PR #9 / 再レビュー修正1: 共有所有者を全員記録する
 
 - 同じ起動設定のワーカーは、最初のプロセスだけでなく生存中のホルダー全員を所有権ファイルに残す。最初のワーカーが終了しても、残っているワーカーがいるあいだは別設定の引き継ぎを拒否する。
@@ -669,6 +946,41 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 - `/health` の `model` など fingerprint 以外のフィールドにサロゲートが含まれても、応答全体を UTF-8 で送る。符号化できないときは ASCII エスケープに落とす。
 - 既定の served name がモデル ID そのものである backend の回帰テストを追加。fingerprint が作れないときは null のまま、health は 200 を返す。
 
+## PR #12 / challenge 再レビュー修正1: 計画の出自フィールドをすべて照合する
+
+- 実行の `experiment_case` は、計画ジョブの全フィールド（`request_id`、`input_version`、`input_sha256`、`rubric_sha256` を含む）と一致しなければならない。結果に実験 `identity` があるときは、比較する実行もその identity を持つ。
+- 不一致は comparable を false にし、得点は使わない。CLI は終了コード 2。出力は 0600、入力の権限は変えない。
+
+## PR #12 / skeleton 再レビュー修正2: 根号の中の内容の括弧を残す
+
+- 根号の中身としての角括弧は、指数の後ろも含めて骨格に残す。`√[x]` は `\sqrt{[x]}` と同じ `sqrt([x])` になり、`√x` とは区別する。
+- 丸括弧と波括弧はこれまでどおり根号の区切りとして外す。既存の根号・括弧・冪等性は維持する。
+
+## PR #12 / skeleton 再レビュー修正3: 根号の中の明示的な bar を残す
+
+- 根号全体を包む上線は、根号自身の線（vinculum）としてだけ外す。明示的な `\bar` は装飾として残し、`\sqrt{\bar{z}}` は `sqrt(bar(z))` になって `\sqrt{z}` とは一致しない。
+- その bar を包む overline はこれまでどおり外す。
+
+## PR #12 / skeleton 再レビュー修正4: Unicode の太字を残す
+
+- 数学用の太字（ラテン・ギリシャ・数字）は NFKC で普通の文字へ潰す前に `mathbf(...)` へ写す。`\mathbf{...}` と同じ骨格になり、太字でない文字とは区別する。
+- 太字以外の数学用スタイルは変えない。
+
+## PR #12 / skeleton 再レビュー修正6: 互換文字の装飾を一度で畳む
+
+- スペーシングマクロン、全角マクロン、上線、スペーシングチルダは、骨格を返す前に結合記号として前の文字へ付ける。`x` と U+00AF は最初から `overline(x)` になり、再正規化しても変わらない。
+- 既存のファズ用アルファベットにこれらの文字を加えた。2回目の結合は、既に畳んだ文字を再び分解しない。
+
+## PR #12 / skeleton 再レビュー修正7: 指数 2 の根号は sqrt
+
+- 正規化後の指数が `2` の根号（`\sqrt[2]{...}` と `root(2,...)`）は `sqrt(...)` にする。それ以外の指数は `root(n,...)` のままにする。
+- その中身の角括弧は残す。平方根の既存の同値性と冪等性は維持する。
+
+## PR #12 / challenge 再レビュー修正5: 入れ子の壊れた項目は比較不能にする
+
+- `problem_id` が文字列でない、反復が正の整数でない、採点がオブジェクトでない、採点 status が文字列でない場合は理由にして comparable を false にする。例外にはしない。
+- その記録の得点は使わない。CLI は終了コード 2。出力は 0600、入力の権限は変えない。
+
 ## PR #9 / Sol r5 修正1: managed OCR はロード済みモデルを記録する
 
 - managed モードの OCR provenance は、設定上のモデル名ではなく `/health` が返すロード済みの model、revision、有効な settings を記録する。設定側の `server_model_id` とコマンドハッシュは残す。
@@ -679,3 +991,31 @@ managed のキャッシュは設定変更時に管理対象プロセスを停止
 
 - 修正していない。Sol r5 minor 2 を `docs/DEFERRED_REVIEW_ITEMS.md` に記録した。
 - 保存済み採点メタデータが欠けると再採点はされるが、バッチ項目と新しい結果の `reuse_unavailable_reason` は `None` のまま。望む理由名は `existing_grading_metadata_incomplete`。
+
+## PR #12 / Sol r5 修正1: 根号の中の明示的な overline を残す
+
+- 根号全体を包む上線のうち、結合記号から正規化が作った線だけを根号自身の線として外す。入力に書かれた `\overline` は装飾として残し、`\sqrt{\overline{z}}` は `sqrt(overline(z))` になって `\sqrt{z}` とは一致しない。
+- 数字や文字の上の結合線（`√13̅`、`√A̅B̅`）はこれまでどおり根号の線として畳む。衝突を前提にしていたテストを更新した。
+
+## PR #12 / Sol r5 修正2: 根号の中の区間は閉じ括弧を保つ
+
+- 根号の中身として読んだ角括弧は、実際に閉じた文字を残す。`√[0,1)` は `sqrt([0,1))` になり、`√[0,1]` とは一致しない。指数付きの根号も同じ。
+- 波括弧で書いた同じ区間も同じ骨格になる。丸括弧はこれまでどおり根号の区切り。
+
+## PR #12 / Sol r5 修正3: 太字を含む数学用文字スタイルを残す
+
+- 太字を含む数学用英数字は、文字ごとの例外ではなく Unicode 名のスタイルから一つの規則で `math…` コマンドへ写す。太字イタリックは `mathbfit`、サンセリフ太字は `mathsfbf` で、同じ LaTeX コマンドと一致し、普通の文字とは区別する。
+- 太字を含まないスタイル（イタリックだけなど）はこれまでどおり畳む。隣り合う文字は一つにまとめない。
+
+## PR #12 / Sol r5 保留: minor 4–10（未修正）
+
+- 修正していない。Sol r5 minor 4 から 10 を `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` に記録した。
+- 入れ子の壊れた採点項目、巨大整数の得点、指数 `(2)` の非冪等、太字が直前のコマンドにくっつくこと、太字と互換マクロン、追加の互換アクセント、太字の並びの正規形はいずれも未修正。
+
+## PR #12 / Sol r6: 数学I・A の範囲外として記録（未修正）
+
+- `harness_v2/recognition/skeleton.py` は変更していない。骨格が測るのは高校数学I・Aの記法に限る。平方根、分数、指数、絶対値、不等式、±、集合（補集合の上線を含む）、nPr、nCr、階乗、三角比、度、π、角・三角形・平行・垂直。
+- 立方根、四乗根、指数付き根号、数学用 Unicode の装飾スタイル、作為的な端のケースは範囲外。範囲外の骨格レビューは `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` に記録し、修正しない。
+- Sol r6 major: `√[x]y̅` と `√[x]y` はどちらも `sqrt([x])y`。`∛[x]y̅` と `∛[x]y` は `root(3,[x])y`、`∜` も同様に `root(4,[x])y`。
+- Sol r6 minor: `√(x̅)` と `sqrt(x̅)` は `sqrt(overline(x))`。`√x̅` と `\sqrt{x̅}` は `sqrt(x)`。
+- Sol r5 の骨格 minor 6–10（指数付き根号、太字スタイル、互換アクセント）も同じ範囲外へ再分類した。challenge の minor 4 と 5 は未修正のまま。

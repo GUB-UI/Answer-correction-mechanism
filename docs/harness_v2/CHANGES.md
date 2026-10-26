@@ -1,5 +1,28 @@
 # Harness v2 changes
 
+## PR #12 follow-up: remove math-mode delimiters from OCR skeletons
+
+- Remove `\(` / `\)`, `\[` / `\]`, `$`, and `$$` as layout separators, preserving numeric, function, and unknown-command token boundaries. Keep existing fraction, root, power, and expression grouping rules.
+- Preserve literal escaped braces `\{` / `\}` in their original spelling so repeated normalization cannot mistake them for math-mode delimiters.
+- Added 36 regression cases covering delimited/undelimited equivalence, token boundaries, content brackets, a page with 15 delimiter pairs, and idempotence. Before the fix, 26 new cases failed.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **378 passed**, with no network or API calls.
+
+## PR #12: remove LaTeX layout from OCR skeletons and canonicalize symbols
+
+- Remove line breaks `\\`, arbitrary `\begin` / `\end` environment markers, spacing commands, `\left` / `\right`, `\displaystyle`, and alignment `&` as separators before parsing fraction/root arguments. Preserve numeric and function token boundaries through the existing grouping pass.
+- Canonicalize Greek letters (including capitals and variants), `\circ` / `°`, and `\infty` / `∞` to common Unicode forms. Retain existing multiplication, division, inequality, and plus-minus rules, distinct unknown commands, and grouping/root/power scope.
+- Added regression coverage for multiline aligned LaTeX versus plain text (zero CER), symbol equivalence, boundaries after layout removal, and idempotence. Before the fix, 88 new cases failed.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py harness_v2/tests/test_p3_ocr_metadata.py` — **342 passed**, with no network or API calls.
+
+## Fix 1: preserve canonical root scope after coefficients and variables
+
+- Recognize canonical `sqrt(...)` at any position, including immediately after digits or letters, using the existing balanced radicand parser. LaTeX, Unicode, and canonical roots now retain the same explicit scope when prefixed or nested, and repeated normalization preserves the result.
+- Added 36 regression cases for notation equivalence, radical scope, and idempotence, including nested roots, fractions, exponents, and full-width notation. Before the fix, 31 of the new cases failed.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests` — **902 passed** (localhost mock servers permitted).
+
 ## PR #10 log cleanup / fix 3: skip hygiene checks without a Git work tree
 
 - Check `git rev-parse --is-inside-work-tree` before each hygiene check; call `pytest.skip` if Git cannot run or ROOT is outside a work tree.
@@ -429,6 +452,94 @@ Improvement cycle 1, `changed_components = ["prompt"]`. Plan reviewed twice by G
 
 Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **704 passed in 22.43s**.
 
+## Phase 5 / 01: OCR memory check uses MemAvailable (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | `available_bytes()` reads `MemAvailable` from /proc/meminfo, falling back to `SC_AVPHYS_PAGES`. The 4.5 GiB threshold is unchanged. | `SC_AVPHYS_PAGES` is MemFree, which excludes reclaimable page cache: on the box MemFree was 3.5 GiB while MemAvailable was 7.6 GiB, so OCR was refused although memory was usable (Sol plan review round 1, blocker). |
+| `harness_v2/tests/test_p5_ocr_memory.py` | Fake meminfo, missing field and missing file fallbacks, threshold pinned. | Regression contract. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **708 passed in 20.95s**.
+
+## Phase 5 / 02: Preregistered OCR preprocessing bundle and notation-neutral CER (2026-10-24)
+
+Improvement cycle 2 (Cycle A), `changed_components = ["recognition"]`. Plan reviewed by GPT-6.1 Sol in three rounds; the last remaining finding (CER sensitive to LaTeX vs plain notation) is fixed here by canonicalizing notation before stripping.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/run_ocr_cpu.py` | `--preprocess {none,gray_autocontrast_x1.5}` (default `none`, byte-identical behaviour). The bundle is grayscale, autocontrast (cutoff 1), LANCZOS x1.5 capped at a 4096 px long edge, back to RGB; one setting for every image. stats.jsonl now records the original image sha256, the preprocessing name and parameters, the pixel hash and size of the image given to the model, the OCR prompt sha256 and prompt tokens. | One generic, image-independent recognition change chosen before seeing outputs; full provenance so control and candidate OCR runs can be compared. |
+| `harness_v2/recognition/skeleton.py` | `skeleton()`: fences removed; \\frac/\\dfrac/\\tfrac → (A)/(B), \\leq/≤/≦ → <=, \\geq/≥/≧ → >=, \\neq/≠, U+2212 → -, \\times/\\cdot/×/· → *, \\pm/±, \\sqrt/√ dropped; then other command words, $ \\ { } ( ) [ ] ^ _ and whitespace removed after NFKC. `cer()`, `gate_a1()` (target image gain ≥ 0.02, no other image worse by > 0.01). | OCR-only gate before any grading. Manual transcriptions are human transcripts, not score labels. Sol round 3 [major]: notation-only differences must not pass the gate. |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | Identity of `none`, determinism, size cap, unknown names rejected; equivalent notations equal, different mathematics different; CER and gate thresholds. | Regression contract frozen before candidate OCR is generated. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **730 passed in 22.46s**.
+
+## Phase 5 / 03: Reference-free robustness challenge set (2026-10-24)
+
+Cycle B, evaluation only (no grading component changes). Characterization, not a gate; development-data robustness, not generalization.
+
+| File | What | Why |
+| --- | --- | --- |
+| `scripts/build_challenge_set.py` | Reads only manual transcriptions, problems and rubrics (never a reference file). Per manual case, seed 20261024: O original; F ASCII digits → full-width (math included); S one space around ASCII = + - < >; N delete max(1, round(3% of n)) CJK characters, only when n ≥ 1. No-op variants dropped and recorded. Writes a dataset with empty reference mappings plus `inventory.json` (0600). | Phase 4 follow-up: test false flags and score stability without score labels. The existing loader accepts empty references, so the runner is unchanged. |
+| `harness_v2/evaluation/challenge.py` | Pairs each variant run with the O run of the same source and repetition; per variant: complete pairs, incomplete pairs, item agreement, runs with all items equal, newly flagged / unflagged relative to O, flagged count. | Label-free report; incomplete or failed runs are counted, never filled. |
+| `harness_v2/tests/test_p5_challenge.py` | Transforms, determinism, zero-eligible handling, empty references, 0700/0600 permissions, pairing and incomplete counting. | Regression contract. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **734 passed in 22.16s**.
+
+## Phase 5 / 04: Skeleton fraction parsing, inclusive gate boundaries, runner provenance tests (2026-10-24)
+
+Sol diff review round 1 (REJECT: 1 major, 2 minor). The 02 entry's claim that notation differences were fully neutralized was wrong for fractions with grouped arguments; this entry fixes it.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/recognition/skeleton.py` | NFKC is applied first; `\\frac` arguments are parsed with balanced braces (or a single token), recursively. | [major] `\\frac{x^{2}}{3}` lost its division operator, so a notation-only change could pass the A1 gate. |
+| `harness_v2/recognition/skeleton.py` | `gate_a1` boundaries are inclusive with a 1e-9 tolerance. | [minor] 0.30 → 0.28 failed the 0.02 gain and a 0.01 loss was rejected because of float subtraction. |
+| `harness_v2/tests/test_p5_preprocess_skeleton.py` | Powers, roots, subscripts, redundant groups, nested and brace-less fractions, full-width braces; boundary values; mocked `_run_model` for both modes checking source hash, model-image hash and size, preprocessing record, prompt hash, revision, dtype and generation settings. | [minor] provenance contract was untested. |
+
+The A1 gate was recomputed with the fixed skeleton; the outcome is reported in the Phase 5 report.
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **744 passed in 21.11s**.
+
+## Phase 5 / 05: Challenge report counts every scheduled job (2026-10-24)
+
+Sol diff review round 2 (REJECT: 2 major, 1 minor). Corrects the 03 entry: missing runs were not counted and failed grades could be compared.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/challenge.py` | Iterates `expected_runs`; each job is ok / missing / failed (status not validated or review_required) / incomplete (duplicate, unexpected, missing or non-finite item scores; optional `--dataset` supplies rubric item ids, no labels). Only ok pairs are compared; variants whose O is not ok are counted as `unpaired_no_valid_O`. Results per source and per variant, with `flag_rate` = flagged / scored runs (None when no scored run). | [major] missing jobs vanished from coverage; [major] a failed grade with duplicate item ids could count as full agreement; [minor] per-source results and flag-rate denominators. |
+| `harness_v2/tests/test_p5_challenge.py` | Missing variants and originals, failed/duplicate/NaN/unexpected items, per-source separation of C0/C1. | Regression contract. |
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **748 passed in 20.31s**.
+
+## Phase 5 / 06: Challenge report requires rubric item ids (2026-10-24)
+
+Sol diff review round 3 (REJECT: 1 major). Corrects the 05 entry: rubric ids were optional.
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/evaluation/challenge.py` | `rubric_items` is a required argument and `--dataset` a required CLI option; a scheduled problem without rubric ids raises. | [major] equally truncated O/F scores or matching unexpected item ids counted as agreement when rubric ids were omitted. |
+| `harness_v2/tests/test_p5_challenge.py` | Omitted metadata, uncovered problem, truncated scores, unexpected ids. | Regression contract. |
+
+Review cap (3 rounds) reached; this fix was not re-reviewed by Sol.
+
+Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` — **750 passed in 20.75s**.
+
+## PR #12: Preserve radicals and exponents in skeleton CER (2026-10-24)
+
+`harness_v2/recognition/skeleton.py` now keeps square roots as `sqrt(...)`,
+canonicalizing LaTeX and Unicode roots, grouped or bare radicands, and vinculum
+marks. Nested roots retain their scope. Superscript digit runs are converted
+before NFKC; LaTeX and Unicode powers keep the same `^` operator. Losing a root,
+an exponent, or its operator therefore contributes to OCR CER. The shared CER
+normalizer is used by the OCR gate; preprocessing still defaults to `none`.
+
+`harness_v2/tests/test_skeleton_semantics.py` adds 47 regression cases for
+equivalent notation, nested roots and fractions, root scope, all superscript
+digits, multi-digit and signed powers, and CER errors when operators are lost.
+
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests math-answer-diagnosis/tests --deselect=harness_v2/tests/test_contracts.py::test_design_summary_records_metrics_and_dev_set`.
+The design-summary test is excluded because it reads a file forbidden for this
+fix. App tests require loopback socket access outside the restricted sandbox.
+Result: **796 passed, 1 deselected in 21.42s** (including 47 new cases).
 ## Phase 4 / 03: Committed old-vs-new prompt experiment summary (2026-10-24)
 
 | File | What | Why |
@@ -441,3 +552,224 @@ Validation: `python -m pytest -q harness_v2/tests math-answer-diagnosis/tests` �
 | File | What | Why |
 | --- | --- | --- |
 | `harness_v2/tests/test_private_permissions.py` | Use the registered `harness_v2_default` prompt version in the shared-input runner test. | The PR #10 permission test used an ad-hoc `v1` label, which the PR #11 strict registry rejects after the restack merge. |
+
+## Phase 5 / 07: Append-only improvement history with evidence-bound approval and version rollback (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/history.py` | Hash-chained, fsync'd, flock'd `history.jsonl` + atomic `head.json`; replay validates every transition (unique ids, accepted only after an improved latest evaluation, rejected is final). Evaluations derive a snapshot (full commits, config/dataset digests, prompt, OCR preprocess, comparison digest) from experiment.json/comparison files. Approvals must name repository, base branch, PR and the latest snapshot; promotion requires the version to equal that snapshot (`promotion_blockers`). Versions store config and the complete dataset tree as content-addressed objects; the first version is the immutable baseline; rollback only to baseline or previously promoted versions; `materialize` restores a git worktree plus config/dataset and verifies hashes. | Design §8 Phase 5 (a)(c)(e) and the completion criterion: multiple cycles without losing data/versions/history, with rollback. Scope: tamper-evidence and a guard against accidental/automated promotion, not a security boundary; real merge enforcement is GitHub branch protection. |
+| `harness_v2/tests/test_improvement_history.py` | Multi-cycle + rollback + materialize; baseline immutability; stale-approval and repo/base binding; snapshot mismatch; evidence binding; crash between log and head; torn tail repair; truncation; missing head; idempotent draft import; runner never approves. | Contracts for the above. |
+
+## Phase 5 / 08: Content-derived duplicate detection for proposals (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/duplicates.py` | `change_identity`: byte-sensitive `change_id` (sha256 of changed paths + candidate blob ids) plus `git patch-id --stable` as a similarity hint; `find_duplicates` lists exact/similar earlier proposals with their decisions. | Design §8 (b): detect changes that repeat past failures/proposals from the actual artifacts, not proposer-supplied labels. |
+| `harness_v2/improvement/history.py` | `propose_change` records identity and duplicates; replay flags `duplicate_of_<decision>` or `retry_on_new_baseline`; flagged proposals cannot be promoted without an audited `override` (approver + reason). | Retrying a rejected change must be a deliberate, recorded decision. |
+| `harness_v2/tests/test_improvement_duplicates.py` | Whitespace sensitivity, duplicate-of-rejected override, retry on a new baseline. | |
+
+## Phase 5 / 09: Proposal review handoff bound to request and snapshot (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/handoff.py`, `harness_v2/providers/schemas/proposal_review_{request,result}.schema.json` | Writes request.json, issue.md, pr.md, branch.txt and non-executable commands.txt (0600) for a proposal; records a `review_requested` event. `record_review` validates the result schema and accepts it only for an issued, unanswered request_id with the same proposal and snapshot; reviews never count as approvals. Score text is scrubbed and image content rejected. | Design §8 (d): Grokbot request/confirmation flow via GitHub Issue/branch/PR without an HTTP model API. |
+| `harness_v2/providers/grokbot_exchange.py` | `_check` now enforces `enum` on string fields. | Sol plan review: enum was skipped after the string check. |
+| `harness_v2/improvement/history.py` | History directories are created as managed private outputs (`managed=True`); replay validates review requests/replays. | Align with the PR #10 permission rule. |
+| `harness_v2/tests/test_improvement_handoff.py` | Files/modes, enum, snapshot mismatch, unknown request, replay. | |
+
+## Phase 5 / 10: History CLI (approve/check-merge/rollback) and historical cycle registration (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `scripts/improvement_history.py` | `status`, `verify`, `approve` (the only approval writer; requires approver + verbatim quote), `override`, `rollback`, and read-only advisory `check-merge` (gh pr view; exit 1 unless the PR head equals the evaluated candidate and an approval binds repository/base/PR/latest snapshot). | Design §8 (e): no merge without a recorded approval; the actual merge boundary remains GitHub branch protection (owner action). |
+| `scripts/register_history.py` | Idempotently registers the Phase 4 prompt cycle (evaluated improved from experiment/comparison evidence; decision pending human review) and the Phase 5 OCR-preprocess cycle (skeleton-CER gate evidence; rejected). | Design §8 (a)(c): keep successful and non-improving proposals with their evidence. |
+| `harness_v2/tests/test_improvement_cli.py` | check-merge before/after approval and after the PR head moves; promote then rollback; verify; status. | Rollback demonstration. |
+
+## Phase 5 / 11: Loop review fixes (Sol diff round 1) (2026-10-24)
+
+| File | What | Why |
+| --- | --- | --- |
+| `harness_v2/improvement/history.py` | `record_evaluation` now takes both `results.json` files, recomputes the comparison with `compare_experiments` and retains results + comparison as objects (no trusted verdict file). A new evaluation resets an `accepted` decision to `pending`; approval and promotion use one shared eligibility predicate that requires acceptance of the latest snapshot. `attach_candidate` derives the change identity and recomputes duplicate flags. Torn-tail repair validates the remaining chain against head.json before replacing anything. | Sol blocker 1 (evidence not bound), majors 2, 3, 5. |
+| `harness_v2/improvement/duplicates.py` | Identity keeps (path, blob) pairs; `overlaps` flags a proposal that contains a prior proposal's exact edits plus unrelated edits (`contains_change_of_<decision>`). | Sol major 4: unrelated edits evaded detection. |
+| `harness_v2/improvement/handoff.py` | Apply `redact()` (secrets) before score scrubbing and render every file from the cleaned request. | Sol major 6. |
+| `scripts/register_history.py` | Resumes each missing step (candidate, evaluation, decision) instead of skipping an existing proposal. | Sol minor 7. |
+| tests | Comparison not comparable / evidence objects retained; re-evaluation invalidates acceptance; refused repair keeps bytes; contains-change and attach-candidate duplicates; secret redaction. | |
+
+## Phase 5 / 12: Loop review fixes (Sol diff round 2) (2026-10-24)
+
+| File | Change | Why |
+|---|---|---|
+| `harness_v2/improvement/history.py` | `record_evaluation` recomputes each experiment identity from config/dataset/commit and requires every run and attempt run to match the header commit, experiment name, prompt, model and rubric. Evaluations require an identified candidate and, on replay, the proposal's baseline commit. `import_draft` derives identity and duplicate flags when the draft names a candidate. `proposal_id` must be `[A-Za-z0-9._-]{1,100}` and unchanged by redaction. | Sol blocker 1 (run provenance), majors 2, 3, 5. |
+| `harness_v2/improvement/duplicates.py` | `overlaps` flags any shared exact (path, blob) edit, not only whole-set containment. | Sol major 4. |
+| `harness_v2/improvement/handoff.py` | Refuses a proposal_id that sanitization would change, so every file uses the same validated id. | Sol major 5. |
+| `scripts/register_history.py` | Attaches a missing candidate independently of proposal creation. | Sol minor 6. |
+| tests | `test_improvement_review2.py`; fixtures now carry real experiment identities and attach candidates. | |
+
+## Phase 5 / 13: Run identity check (Sol diff round 3) (2026-10-24)
+
+| File | Change | Why |
+|---|---|---|
+| `harness_v2/improvement/history.py` | Each run and attempt run must also carry `outputs.experiment_case.experiment_identity` equal to the header identity. | Sol round-3 blocker: runs from another experiment with matching header fields passed. Fixed after the 3-round cap; not re-reviewed. |
+| tests | `test_foreign_run_in_results_is_rejected` covers a run with a foreign experiment identity. | |
+
+## PR #12 / Fix A: Preserve fraction and operator grouping in skeleton CER (2026-10-24)
+
+`harness_v2/recognition/skeleton.py` retains ordinary parentheses and whole-fraction scope, removing parentheses only when precedence and associativity permit it. Different numerator, denominator, product, sum, and power structures stay distinct; equivalent LaTeX, Unicode, and plain notation share an idempotent form. Existing `sqrt(...)` and `^` behavior is preserved.
+
+`test_skeleton_semantics.py` adds collision, notation-equivalence, and idempotence regressions.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **166 passed**. An additional local check preserved operator trees and idempotence for 10,000 generated arithmetic expressions. No network or API calls.
+
+## PR #12 / Fix B: Validate challenge run IDs against the job plan (2026-10-24)
+
+`harness_v2/evaluation/challenge.py` retains all run records and reports duplicate, missing, and unexpected `request_id` values in `reasons`. Any such error sets `comparable: false` and CLI exit code 2. Duplicate records are classified as incomplete and neither record contributes to agreement pairs. Remaining metrics are diagnostic only; scores are never filled in and grading status names are unchanged.
+
+`test_p5_challenge.py` covers duplicate original/variant records in both orders, missing and unexpected IDs, combined errors, clean reports, and CLI output/exit codes.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **19 passed, 1 deselected**. The existing dataset-builder test is excluded because it reads `references.json`, which this task forbids. Combined with Fix A's relevant tests: **185 passed, 1 deselected**. No network or API calls.
+
+## PR #12 / Follow-up A: Preserve operator scope and token boundaries in skeletons (2026-10-24)
+
+Keep signed implicit factors grouped and treat each complete superscript run as one exponent. Canonicalize `\pm` to a distinct `±` token and `\div`/`÷` to division. Strip only known formatting commands, retaining unknown commands and their boundaries. Compare token sequences before removing parentheses so separate operands cannot manufacture numbers, commands, or root functions. No formula-specific or score-specific rules.
+
+Regressions cover signed products (including fractions, sums, roots, and powers), compound exponents, plus/minus versus addition of a negative, division, unknown commands, and split function names, checking collisions, equivalence, and idempotence.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_skeleton_semantics.py harness_v2/tests/test_p5_preprocess_skeleton.py harness_v2/tests/test_recognition.py` — **236 passed**. No network/API calls or excluded-file reads.
+
+## PR #12 / Follow-up B: Require a nonempty challenge plan and unique planned IDs (2026-10-24)
+
+Require an explicit nonempty job list and report absent, empty, or incorrectly typed plans in `reasons`. Count planned request IDs before forming a set and report duplicate planned IDs. Cells with ambiguous planned IDs are incomplete, preventing one run from supplying scores or agreement for multiple jobs. Plan errors set `comparable: false` and CLI exit code 2. Unambiguous pairs remain diagnostic only. Scores are never filled in and grading status names are unchanged.
+
+Regressions cover duplicate planned IDs across original/variant jobs, sources, and repetitions; plan order; zero/one/two recorded runs; mixed ambiguous and valid pairs; absent/empty/malformed plans; and CLI JSON/exit codes.
+Validation: `/workspace/venv_clean/bin/python -m pytest -q -p no:cacheprovider harness_v2/tests/test_p5_challenge.py -k 'not builder'` — **47 passed, 1 deselected**. Combined with the three skeleton-related test files: **283 passed, 1 deselected**. Only the existing builder test is excluded because it reads forbidden `references.json`. No network/API calls or excluded-file reads.
+
+
+## PR #12 / Fix 1: Preserve root indices
+
+Parse optional root indices separately; Unicode cube/fourth roots share `root(index,radicand)`. Square roots retain `sqrt(...)`. Collision, equivalence, nested-root and idempotence regressions: 375 related tests passed.
+
+
+## PR #12 / Fix 2: Retain subscript operators
+
+Keep `_` with the same grouping rules as `^`; distinguish subscripts from baseline characters and factors. Correct the old fraction expectation. Collision, equivalence and idempotence regressions included; 379 related tests passed.
+
+
+## PR #12 / Fix 3: Separate postfix factorial from relations
+
+Give postfix `!` highest precedence and tokenize `!=`, `<=`, `>=` atomically. Group removal cannot manufacture inequality from factorial followed by equality. Collision, equivalence and idempotence regressions: 383 related tests passed.
+
+
+## PR #12 / Fix 4: Preserve bracket kinds and comma scope
+
+Retain square/literal curly brackets and half-open intervals. Commas are separators that retain their enclosing parentheses; nested coordinates remain distinct from bare lists. Collision, equivalence and idempotence regressions: 389 related tests passed.
+
+
+## PR #12 / Fix 5: Separate lexical boundaries from parentheses
+
+Use U+2063 for command/whitespace token boundaries instead of synthetic parentheses. Retain real parentheses after commands so function argument and power scope remain distinct. Collision, equivalence and idempotence regressions: 393 related tests passed.
+
+
+## PR #12 / Fix 6: Preserve rows, columns, spans and matrix identity
+
+Canonicalize top-level newlines, LaTeX row breaks and math-span boundaries to `;`, columns to `¦`. Retain pmatrix/bmatrix/vmatrix/Vmatrix/matrix/array/cases names and dimensions. Correct old tests that expected merged expressions. Collision, equivalence and idempotence regressions: 398 related tests passed.
+
+
+## PR #12 / Fix 7: Protect Unicode scripts and enclosed numbers
+
+Map complete Unicode `<super>`/`<sub>` runs to `^`/`_` before NFKC, including letters, Greek characters and operators. Preserve enclosed numerals as distinct characters rather than folding them into baseline digits. Collision, equivalence and idempotence regressions: 414 related tests passed.
+
+
+## PR #12 / Fix 8: Retain meaningful decorations and text
+
+Preserve overline, bar, vec, hat, dot, tilde, mathbf and text as distinct calls; normalize combining accents consistently. Text word boundaries use `␠`. Only root vincula are removed. Collision, equivalence and idempotence regressions: 425 related tests passed.
+
+
+## PR #12 / Fix 9: Consume pure LaTeX layout arguments
+
+Strip balanced array column specs, environment positions, row spacing, hspace/vspace, tags, numbering controls, hline, sizing prefixes, invisible delimiters and `~`. Preserve structural separators and content brackets. Collision, equivalence and idempotence regressions: 441 related tests passed.
+
+
+## PR #12 / Fix 10: Make command radicands and incomplete input idempotent
+
+Read whole command arguments and validate nested bracket pairing. Boundary-marked incomplete commands remain opaque; orphan combining marks become explicit tokens; collapse separators after layout removal. Add command-root collision/equivalence/idempotence regressions and a deterministic 4,000-input fuzz test. 445 related tests passed; an additional 20,000 generated inputs were idempotent.
+
+
+## PR #12 / Fix 11: Distinguish ÷ and bind implicit multiplication tighter
+
+Keep `\div`/`÷` as a distinct operator and give implicit multiplication higher precedence than explicit multiplication/division under the Japanese school convention. Retain whole-fraction grouping before adjacent factors; correct old division and fraction expectations. Collision, equivalence and idempotence regressions: 448 related tests passed.
+
+
+## PR #12 / Fix 12: Unify equivalent notation and retain function parentheses
+
+Unify degree exponents, numeric script boundaries, vulgar fractions, `\mp`, slanted relations (including Unicode ⩽/⩾) and bracket commands. Preserve direct function parentheses, including indexed and primed identifiers. Interaction regressions also protect mixed nested scripts, literal text parentheses, comma-bearing root arguments and factorial-equality token boundaries. No expression-specific or score-specific exceptions. `gate_a1`/`cer` APIs, grading status names and score handling are unchanged.
+
+Validation: the four related files passed **491 tests** using `/workspace/venv_h2/bin/python -m pytest -q -p no:cacheprovider`, including deterministic 4,000-input fuzz. Supplemental original/expanded token sets each passed 20,000 idempotence checks. Read-only review follow-up, syntax compilation and `git diff --check` succeeded.
+
+The complete suite was also attempted with a temporary audit hook blocking connections and forbidden file reads: **1,197 passed, 269 failed, 24 errors, 1 deselected**. All failures/errors were constrained operations: 277 blocked references.json reads, 2 blocked network operations and 14 socket permission errors. Only `test_builder_writes_label_free_private_dataset` was deselected. Reads of references.json fixtures generated by existing tests were also blocked pending explicit permission; this is not a green full-suite claim. The audit hook lives only in `/tmp`; no raw execution logs were created or committed.
+
+## PR #12 / Challenge fix 1: Invalidate duplicate planned slots
+
+Distinct planned request IDs that share a source, variant, and repetition no longer overwrite one another. The report is not comparable, names `duplicate planned slot`, and does not use either job's scores. A merged two-config plan where only one config agrees stays non-comparable in either order. The CLI exits 2. The report file is 0600, a new directory is 0700, and input permissions stay unchanged.
+
+## PR #12 / Challenge fix 2: Check run provenance against the plan
+
+Each run's `outputs.experiment_case` must match the planned case ID, repetition, and problem ID and carry an experiment identity. Missing provenance is a reason. Compared runs must share one experiment identity. Mismatched runs contribute no scores. The report is not comparable and the CLI exits 2. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge fix 3: Reject empty and None request IDs
+
+Only non-empty strings are request IDs. None, blank strings, and other hashable non-strings do not match each other and make the report non-comparable with `invalid request_id`. The CLI exits 2. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge fix 4: A slot without its original or variant is not comparable
+
+A planned source and repetition that has no original (O) job, or no variant job, is non-comparable. The reason is `missing planned original` or `missing planned variant`, not only an unpaired counter. The CLI exits 2. Scores are not filled in. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge fix 5: Malformed input invalidates instead of crashing
+
+A results object that is not an object, a `runs` value that is not a list, a run that is not a record, a planned job missing its request ID, case ID, or repetition, and an unhashable request ID each produce an explicit reason. The report is not comparable and the CLI exits 2. Those values are not pairing keys, so they cannot overwrite another slot. Scores are not filled in. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Challenge re-review fix 1: Compare every planned provenance field
+
+Each run's `experiment_case` must match every field on its planned job, including `request_id`, `input_version`, `input_sha256`, and `rubric_sha256`. When the results declare an experiment `identity`, every compared run must carry that identity. A mismatch is non-comparable, the CLI exits 2, and the scores are not used. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Skeleton re-review fix 2: Keep content brackets inside roots
+
+Square brackets that belong to the radicand stay in the skeleton, including after a root index. `√[x]` matches `\sqrt{[x]}` and stays distinct from `√x`. Parentheses and curly braces still delimit a radicand. Existing root, grouping, and idempotence behavior is unchanged.
+
+## PR #12 / Skeleton re-review fix 3: Keep an explicit bar inside a root
+
+A bar that wraps a radicand is removed only when it is an overline, the form produced by the root's own vinculum. An explicit `\bar` stays a decoration, so `\sqrt{\bar{z}}` is `sqrt(bar(z))` and does not match `\sqrt{z}`. A vinculum overline around that bar is still removed.
+
+## PR #12 / Skeleton re-review fix 4: Keep Unicode mathematical bold
+
+Mathematical bold letters, Greek letters, and digits are mapped to `mathbf(...)` before NFKC. They match `\mathbf{...}` and stay distinct from the plain character. Other mathematical styles are unchanged.
+
+## PR #12 / Skeleton re-review fix 6: Fold compatibility spacing marks
+
+Spacing macron, fullwidth macron, overline, and spacing tilde are attached as combining marks before the skeleton is returned. `x` plus U+00AF is `overline(x)` on the first pass and stays that way. The seeded fuzz alphabet includes these characters. The second attachment pass does not decompose characters that are already folded.
+
+## PR #12 / Skeleton re-review fix 7: An explicit square-root index is sqrt
+
+An index whose canonical form is `2`, including `\sqrt[2]{...}` and `root(2,...)`, uses `sqrt(...)`. Other indexes stay `root(n,...)`. Content brackets inside that radicand are unchanged.
+
+## PR #12 / Sol r5 fix 1: Keep an explicit overline inside a root
+
+A stroke removed as the root's own vinculum is only the marker produced from combining marks. An explicit `\overline` stays, so `\sqrt{\overline{z}}` is `sqrt(overline(z))` and does not match `\sqrt{z}`. Unicode root strokes such as `√13̅` and `√A̅B̅` still match the plain root. Tests that treated the explicit overline as the same form were updated.
+
+## PR #12 / Sol r5 fix 2: Keep the closing bracket of an interval inside a root
+
+A square-bracket radicand keeps the delimiter that closed it. `√[0,1)` is `sqrt([0,1))` and does not match `√[0,1]`. The same holds after a root index. The braced LaTeX form uses that same skeleton. Parentheses still delimit a radicand.
+
+## PR #12 / Sol r5 fix 3: Keep every bold mathematical alphanumeric style
+
+Bold mathematical letters, digits, and Greek letters are mapped from the style words in the Unicode name, not from a per-character list. Bold italic is `mathbfit` and sans-serif bold is `mathsfbf`; each matches the LaTeX command of that name and stays distinct from the plain character. Styles without bold still fold. Adjacent glyphs stay one command each.
+
+## PR #12 / Sol r5 deferred: minors 4–10 (not fixed)
+
+Not fixed. Sol r5 minors 4 through 10 are recorded in `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md`. Nested malformed grade items, huge integer scores, a grouped square-root index, bold glyphs joining the previous command, bold plus a spacing mark, further compatibility accents, and bold spans versus one command per glyph remain open.
+
+## PR #12 / Challenge re-review fix 5: Nested malformed fields invalidate
+
+A planned `problem_id` that is not text, a repetition that is not a positive integer, a grading value that is not a record, and a grading status that is not text each produce an explicit reason. The report is not comparable and the CLI exits 2. Scores from those records are not used. Output stays 0600 and input permissions are unchanged.
+
+## PR #12 / Sol r6: Math I/A scope, skeleton findings recorded and not fixed
+
+`harness_v2/recognition/skeleton.py` is unchanged. The skeleton measures Japanese high-school Math I/A notation: square roots, fractions, exponents, absolute values, inequalities, plus-minus, set notation including complement written with an overline, nPr and nCr, factorial, trigonometric functions, degrees, pi, and angle, triangle, parallel, and perpendicular symbols.
+
+Cube roots, fourth roots, indexed roots, exotic Unicode math styles, and contrived edge cases are out of scope. Skeleton review findings outside that list are recorded in `docs/harness_v2/DEFERRED_REVIEW_ITEMS.md` and not fixed. Sol r6 major: `√[x]y̅` and `√[x]y` both become `sqrt([x])y`; `∛[x]y̅` and `∛[x]y` both become `root(3,[x])y`; `∜` likewise becomes `root(4,[x])y`. Sol r6 minor: `√(x̅)` and `sqrt(x̅)` become `sqrt(overline(x))`, while `√x̅` and `\sqrt{x̅}` become `sqrt(x)`. Sol r5 skeleton minors 6–10 are reclassified under the same scope. Challenge minors 4 and 5 stay open.

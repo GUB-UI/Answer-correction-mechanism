@@ -68,6 +68,8 @@ def _check(value: Any, schema: dict[str, Any], path: str) -> list[str]:
             return [f"{path} must be a string"]
         if schema.get("minLength") and len(value) < schema["minLength"]:
             return [f"{path} is empty"]
+        if "enum" in schema and value not in schema["enum"]:
+            return [f"{path} must be one of {schema['enum']}"]
         return errors
     if "enum" in schema:
         if value not in schema["enum"]:
