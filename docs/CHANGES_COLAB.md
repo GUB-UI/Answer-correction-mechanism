@@ -1027,3 +1027,10 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - 小問は採点項目ひとつ。模範解答と基準の文は description に入れ、`acceptable_expression` は空のまま。配点の合計はその問題の `full_marks` と一致しなければならない。
 - holdout の書き起こしは `ocr_gpu_v1/holdout_sealed/` から読む。1枚の画像を二つの answer id が共有する場合は `ocr_gpu_v1/transcript_map.json`（`transcript_map_v1`。`by_answer_id` が answer id を、別の answer id かその分割ディレクトリ内のファイル名へ対応づける）で指定する。推測はしない。
 - 書き起こしの欠落・空ファイル、id の重複・不足・対象外は変換を失敗させる。出力ファイルは 0600、ディレクトリは 0700。入力も出力も、読むだけでは権限を変えない。
+
+## dataset_v2: 採点結果を参照得点と比べる
+
+- `evaluate` は、保存済みの採点結果と比べるときだけ `reference/scores_v1.json` を読む。`sol_draft` は開かない。
+- 指標は答案ごとの合計 MAE、合計の完全一致率、小問 MAE、問題ごとの誤差表。
+- `excluded_low_confidence` の答案は集計から外す。欠けた合計や小問の得点は 0 にせず、欠けたままにする。参照行の `max` は得点として使わない。
+- 参照または結果の id が重複・不足・対象外なら評価は失敗する。

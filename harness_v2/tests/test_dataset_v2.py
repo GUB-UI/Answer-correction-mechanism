@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from harness_v2.evaluation.dataset import load_dataset
-from harness_v2.evaluation.dataset_v2 import DatasetV2Error, convert, rubric_source
+from harness_v2.evaluation.dataset_v2 import DatasetV2Error, convert, evaluate, rubric_source
 from harness_v2.evaluation.independent import prepare_independent_input
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import build_prompt
@@ -381,3 +381,244 @@ def test_convert_is_deterministic(tmp_path):
     second = convert(root, "dev", tmp_path / "b")
     assert first.read_bytes() == second.read_bytes()
     assert _tree_text(tmp_path / "a") == _tree_text(tmp_path / "b")
+
+
+def _write_results(path: Path, rows, *, pending=0, failed=0, stopped=""):
+    expected, runs = [], []
+    for index, row in enumerate(rows):
+        request_id = row.get("request_id", f"req-{index}")
+        expected.append({
+            "request_id": request_id,
+            "case_id": row["answer_id"],
+            "repetition": row.get("repetition", 1),
+            "problem_id": row["problem"],
+        })
+        runs.append({
+            "request_id": request_id,
+            "outputs": {
+                "grading": {
+                    "status": row.get("status", "validated"),
+                    "total_score": row.get("total", None),
+                    "items": row.get("items", []),
+                },
+                "experiment_case": {
+                    "case_id": row["answer_id"],
+                    "repetition": row.get("repetition", 1),
+                },
+            },
+        })
+    path.write_text(json.dumps({
+        "summary": {"pending": pending, "failed": failed, "stopped_reason": stopped},
+        "expected_runs": expected,
+        "runs": runs,
+    }), encoding="utf-8")
+    return path
+
+
+def _dev_grade(**changes):
+    row = {
+        "answer_id": "9-Z_C_XXXX",
+        "problem": "9-Z",
+        "total": 4,
+        "items": [{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 1}],
+    }
+    row.update(changes)
+    return row
+
+
+def test_metrics_compare_totals_and_subquestions_without_filling_gaps(tmp_path):
+    root = build_tree(tmp_path / "data")
+    results = _write_results(tmp_path / "results.json", [_dev_grade()])
+    import harness_v2.evaluation.dataset_v2 as module
+    original = module._load_json
+
+    def guarded(path):
+        if "sol_draft" in Path(path).parts:
+            raise AssertionError(path)
+        return original(path)
+
+    module._load_json = guarded
+    try:
+        metrics = evaluate(root, "dev", results)
+    finally:
+        module._load_json = original
+    assert metrics["n_graded"] == 1 and metrics["n_evaluated"] == 1 and metrics["n_excluded"] == 0
+    assert metrics["total_mae"] == 0
+    assert metrics["exact_match_count"] == 1
+    assert metrics["exact_match_rate"] == 1
+    assert metrics["subquestion_mae"] == 0
+    assert metrics["subquestion_mae_count"] == 2
+    assert metrics["per_problem"] == [{
+        "problem": "9-Z", "n_evaluated": 1, "total_mae": 0, "total_mae_count": 1,
+        "exact_match_count": 1, "exact_match_denominator": 1, "exact_match_rate": 1,
+        "subquestion_mae": 0, "subquestion_mae_count": 2,
+    }]
+    assert metrics["n_evaluated"] == 1
+    assert SENTINEL not in json.dumps(metrics)
+
+
+def test_excluded_answers_are_graded_elsewhere_and_omitted_here(tmp_path):
+    root = build_tree(
+        tmp_path / "data",
+        dev_ids=["9-Z_C_XXXX", "9-Z_C_LOW"],
+        transcripts={"dev": {"9-Z_C_XXXX": "x<2\n", "9-Z_C_LOW": "x<2\n"},
+                     "holdout": {"9-Z_A_HHHH": "x\n"}},
+    )
+    results = _write_results(tmp_path / "results.json", [
+        _dev_grade(),
+        _dev_grade(answer_id="9-Z_C_LOW", total=99, items=[{"item_id": "(1)", "score": 99}]),
+    ])
+    metrics = evaluate(root, "dev", results)
+    assert metrics["n_graded"] == 2 and metrics["n_excluded"] == 1
+    assert metrics["excluded_low_confidence"] == ["9-Z_C_LOW"]
+    assert metrics["total_mae"] == 0 and metrics["n_evaluated"] == 1
+    assert [row["answer_id"] for row in metrics["per_answer"]] == ["9-Z_C_XXXX"]
+
+
+def test_missing_scores_stay_missing_and_max_is_not_a_score(tmp_path):
+    root = build_tree(tmp_path / "data")
+    scores = _scores()
+    scores["full_marks_per_problem"] = 10
+    del scores["answers"][0]["total"]
+    scores["answers"][0]["scores"][1]["score"] = None
+    scores["answers"][0]["scores"][1]["max"] = 4
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    results = _write_results(tmp_path / "results.json", [_dev_grade(
+        total=4, items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 0}],
+    )])
+    metrics = evaluate(root, "dev", results)
+    assert metrics["exact_match_denominator"] == 0
+    assert metrics["exact_match_rate"] is None
+    assert metrics["total_mae"] is None
+    assert metrics["subquestion_mae_count"] == 1
+    assert metrics["subquestion_mae"] == 0
+    assert metrics["per_answer"][0]["subquestions"][1]["abs_error"] is None
+
+    scores["answers"][0]["total"] = 4
+    scores["answers"][0]["scores"][0]["score"] = 0
+    scores["answers"][0]["scores"][0]["max"] = 6
+    scores["answers"][0]["scores"][1]["score"] = 1
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    zero = _write_results(tmp_path / "zero.json", [_dev_grade(
+        total=1, items=[{"item_id": "(1)", "score": 0}, {"item_id": "(2)", "score": 1}],
+    )])
+    matched = evaluate(root, "dev", zero)
+    assert matched["total_mae"] == 3
+    assert matched["subquestion_mae"] == 0
+
+
+def test_mae_exact_match_and_per_problem_table(tmp_path):
+    second = _problem("10-A", full=5, subquestions=[
+        {"id": "(全体)", "points": 5, "model_answer": "n=4",
+         "criteria": [{"desc": "count", "points": 5}]},
+    ])
+    root = build_tree(
+        tmp_path / "data",
+        problems={"9-Z": _problem(), "10-A": second},
+        dev_ids=["10-A_C_ONE", "9-Z_C_XXXX", "9-Z_C_YYYY"],
+        transcripts={
+            "dev": {"10-A_C_ONE": "n=4\n", "9-Z_C_XXXX": "x\n", "9-Z_C_YYYY": "y\n"},
+            "holdout": {"9-Z_A_HHHH": "h\n"},
+        },
+    )
+    scores = _scores()
+    scores["count"] = 4
+    scores["answers"].extend([
+        {"answer_id": "9-Z_C_YYYY", "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 4, "max": 4}],
+         "total": 7},
+        {"answer_id": "10-A_C_ONE", "problem": "10-A", "writer": "C",
+         "scores": [{"sub": "(全体)", "score": 5, "max": 5}], "total": 5},
+    ])
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    results = _write_results(tmp_path / "results.json", [
+        _dev_grade(total=6, items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 3}]),
+        _dev_grade(answer_id="9-Z_C_YYYY", total=7, status="review_required",
+                   items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 4}]),
+        _dev_grade(answer_id="10-A_C_ONE", problem="10-A", total=5,
+                   items=[{"item_id": "(全体)", "score": 5}]),
+    ])
+    metrics = evaluate(root, "dev", results)
+    assert metrics["n_evaluated"] == 3
+    assert metrics["total_mae"] == pytest.approx(2 / 3)
+    assert metrics["exact_match_count"] == 2
+    assert metrics["exact_match_denominator"] == 3
+    assert metrics["exact_match_rate"] == pytest.approx(2 / 3)
+    assert metrics["subquestion_mae"] == pytest.approx(2 / 5)
+    table = {row["problem"]: row for row in metrics["per_problem"]}
+    assert table["9-Z"]["total_mae"] == 1
+    assert table["9-Z"]["exact_match_rate"] == 0.5
+    assert table["10-A"]["total_mae"] == 0
+    assert table["10-A"]["n_evaluated"] == 1
+    flagged = metrics["per_answer"][1]
+    assert flagged["answer_id"] == "9-Z_C_XXXX"
+    assert flagged["exact_total"] is False
+    assert flagged["abs_error"] == 2
+
+
+def test_null_prediction_is_not_an_exact_match_or_a_zero(tmp_path):
+    root = build_tree(tmp_path / "data")
+    results = _write_results(tmp_path / "results.json", [_dev_grade(
+        total=None, items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": None}],
+    )])
+    metrics = evaluate(root, "dev", results)
+    assert metrics["exact_match_denominator"] == 1
+    assert metrics["exact_match_count"] == 0
+    assert metrics["exact_match_rate"] == 0
+    assert metrics["total_mae"] is None
+    assert metrics["subquestion_mae_count"] == 1
+    assert metrics["subquestion_mae"] == 0
+
+
+def test_reference_and_result_ids_must_match_the_split(tmp_path):
+    root = build_tree(tmp_path / "data")
+    missing = json.loads((root / "reference" / "scores_v1.json").read_text(encoding="utf-8"))
+    missing["answers"] = [row for row in missing["answers"] if row["answer_id"] != "9-Z_C_XXXX"]
+    missing["count"] = 1
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(missing), encoding="utf-8")
+    results = _write_results(tmp_path / "missing.json", [_dev_grade()])
+    with pytest.raises(DatasetV2Error, match="missing reference: 9-Z_C_XXXX"):
+        evaluate(root, "dev", results)
+
+    duplicate = _scores()
+    duplicate["answers"].append(dict(duplicate["answers"][0]))
+    duplicate["count"] = 3
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(duplicate), encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="duplicate reference: 9-Z_C_XXXX"):
+        evaluate(root, "dev", results)
+
+    unexpected = _scores()
+    unexpected["answers"].append({
+        "answer_id": "8-Q_C_ZZZZ", "problem": "8-Q", "writer": "C", "scores": [], "total": 1,
+    })
+    unexpected["count"] = 3
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(unexpected), encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="unexpected reference: 8-Q_C_ZZZZ"):
+        evaluate(root, "dev", results)
+
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(_scores()), encoding="utf-8")
+    extra = _write_results(tmp_path / "extra.json", [
+        _dev_grade(),
+        _dev_grade(answer_id="9-Z_C_OTHER", total=1, items=[]),
+    ])
+    with pytest.raises(DatasetV2Error, match="unexpected result: 9-Z_C_OTHER"):
+        evaluate(root, "dev", extra)
+    absent = _write_results(tmp_path / "absent.json", [])
+    with pytest.raises(DatasetV2Error, match="missing result: 9-Z_C_XXXX"):
+        evaluate(root, "dev", absent)
+    pending = _write_results(tmp_path / "pending.json", [_dev_grade()], pending=1)
+    with pytest.raises(DatasetV2Error, match="grading did not finish: pending"):
+        evaluate(root, "dev", pending)
+    stopped = _write_results(tmp_path / "stopped.json", [_dev_grade()], stopped="quota")
+    with pytest.raises(DatasetV2Error, match="grading did not finish: quota"):
+        evaluate(root, "dev", stopped)
+
+
+def test_invalid_score_is_not_coerced(tmp_path):
+    root = build_tree(tmp_path / "data")
+    scores = _scores()
+    scores["answers"][0]["scores"][0]["score"] = "6"
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    results = _write_results(tmp_path / "results.json", [_dev_grade()])
+    with pytest.raises(DatasetV2Error, match="invalid score: 9-Z_C_XXXX \\(1\\)"):
+        evaluate(root, "dev", results)

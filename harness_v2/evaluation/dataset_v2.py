@@ -1,9 +1,10 @@
-"""Build a private dataset_v2 split into harness inputs.
+"""Build and score a private dataset_v2 split.
 
 The dataset directory stays on the caller's machine. Conversion reads
 ``problem``, ``problem_summary``, and ``rubric`` from ``sol_draft`` and the
 OCR transcripts for one split. It does not read ``answers`` or
-``reference/scores_v1.json``.
+``reference/scores_v1.json``. Evaluation reads that score file only while
+comparing grader output, and it does not fill in a missing score.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from harness_v2.evaluation.dataset import write_dataset
+from harness_v2.evaluation.reference import optional_score
 
 DATASET_ID = "dataset_v2"
 RUBRIC_VERSION = "dataset_v2"
@@ -140,6 +142,17 @@ def convert(dataset_dir: Path, split: str, out: Path, *,
         reference_scores={},
         reference_items={},
     )
+
+
+def evaluate(dataset_dir: Path, split: str, results_path: Path) -> dict[str, Any]:
+    """Compare saved grader output to reference scores. This does not grade."""
+    if split not in SPLITS:
+        raise DatasetV2Error(f"unknown split: {split}")
+    root = Path(dataset_dir)
+    loaded = _load_split(root)
+    reference = _load_reference(root / "reference" / "scores_v1.json", loaded)
+    observations = _observations(Path(results_path), loaded[split], reference)
+    return _metrics(split, observations, reference["excluded"])
 
 
 def _load_problem(root: Path, problem: str) -> dict:
@@ -349,3 +362,277 @@ def _load_json(path: Path) -> Any:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise DatasetV2Error(f"invalid JSON: {path.name}") from exc
+
+
+def _load_reference(path: Path, loaded: dict) -> dict[str, Any]:
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        raise DatasetV2Error("reference scores must be an object")
+    excluded = _string_set(payload.get("excluded_low_confidence", []), "excluded_low_confidence")
+    answers = payload.get("answers")
+    if not isinstance(answers, list):
+        raise DatasetV2Error("reference answers must be a list")
+    if "count" in payload and not _count_matches(payload.get("count"), len(answers)):
+        raise DatasetV2Error("reference count does not match answers")
+    rows: dict[str, dict] = {}
+    for row in answers:
+        if not isinstance(row, dict):
+            raise DatasetV2Error("reference answer must be an object")
+        answer_id = row.get("answer_id")
+        if not isinstance(answer_id, str) or not answer_id.strip():
+            raise DatasetV2Error("invalid reference answer id")
+        if answer_id in rows:
+            raise DatasetV2Error(f"duplicate reference: {answer_id}")
+        problem = row.get("problem")
+        if not isinstance(problem, str) or not answer_id.startswith(problem + "_"):
+            raise DatasetV2Error(f"reference problem does not match answer id: {answer_id}")
+        writer, _image = _writer_and_image(answer_id, problem)
+        if row.get("writer") != writer:
+            raise DatasetV2Error(f"reference writer does not match answer id: {answer_id}")
+        rows[answer_id] = {
+            "problem": problem,
+            "writer": writer,
+            "total": _optional_number(row, "total", answer_id),
+            "subs": _reference_subs(row.get("scores", []), answer_id),
+        }
+    known = set(loaded["dev"]["ids"]) | set(loaded["holdout"]["ids"]) | excluded
+    unexpected = sorted(set(rows) - known)
+    if unexpected:
+        raise DatasetV2Error(f"unexpected reference: {unexpected[0]}")
+    return {"excluded": excluded, "rows": rows}
+
+
+def _reference_subs(values: Any, answer_id: str) -> list[dict]:
+    if not isinstance(values, list):
+        raise DatasetV2Error(f"invalid reference subquestion: {answer_id}")
+    subs = []
+    seen: set[str] = set()
+    for row in values:
+        if not isinstance(row, dict) or not isinstance(row.get("sub"), str) or not row["sub"].strip():
+            raise DatasetV2Error(f"invalid reference subquestion: {answer_id}")
+        sub = row["sub"]
+        if sub in seen:
+            raise DatasetV2Error(f"duplicate reference subquestion: {answer_id} {sub}")
+        seen.add(sub)
+        subs.append({"sub": sub, "score": _optional_number(row, "score", f"{answer_id} {sub}")})
+    return subs
+
+
+def _optional_number(row: dict, key: str, label: str) -> float | None:
+    if key not in row or row[key] is None:
+        return None
+    number = optional_score(row[key])
+    if number is None:
+        raise DatasetV2Error(f"invalid score: {label}")
+    return number
+
+
+def _string_set(values: Any, label: str) -> set[str]:
+    if not isinstance(values, list):
+        raise DatasetV2Error(f"invalid {label}")
+    found: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise DatasetV2Error(f"invalid {label}")
+        if value in found:
+            raise DatasetV2Error(f"duplicate {label}: {value}")
+        found.append(value)
+    return set(found)
+
+
+def _observations(results_path: Path, side: dict, reference: dict) -> list[dict]:
+    results = _load_json(results_path)
+    if not isinstance(results, dict):
+        raise DatasetV2Error("grading results must be an object")
+    summary = results.get("summary")
+    if not isinstance(summary, dict):
+        raise DatasetV2Error("grading did not finish: missing summary")
+    for name in ("pending", "failed"):
+        if not _count_matches(summary.get(name), 0):
+            raise DatasetV2Error(f"grading did not finish: {name}")
+    if summary.get("stopped_reason"):
+        raise DatasetV2Error(f"grading did not finish: {summary.get('stopped_reason')}")
+    expected = results.get("expected_runs")
+    runs = results.get("runs")
+    if not isinstance(expected, list) or not isinstance(runs, list):
+        raise DatasetV2Error("grading results are incomplete")
+    by_request: dict[str, dict] = {}
+    for run in runs:
+        if not isinstance(run, dict) or not isinstance(run.get("request_id"), str):
+            raise DatasetV2Error("invalid result id")
+        request_id = run["request_id"]
+        if request_id in by_request:
+            raise DatasetV2Error(f"duplicate result: {request_id}")
+        by_request[request_id] = run
+    observations = []
+    seen_pairs: set[tuple[str, int]] = set()
+    seen_ids: set[str] = set()
+    expected_ids: set[str] = set()
+    for job in expected:
+        if not isinstance(job, dict):
+            raise DatasetV2Error("invalid result id")
+        case_id = job.get("case_id")
+        request_id = job.get("request_id")
+        problem_id = job.get("problem_id")
+        repetition = job.get("repetition")
+        if not isinstance(case_id, str) or not isinstance(request_id, str) or not isinstance(problem_id, str):
+            raise DatasetV2Error("invalid result id")
+        if isinstance(repetition, bool) or not isinstance(repetition, int) or repetition < 1:
+            raise DatasetV2Error(f"invalid result repetition: {case_id}")
+        if (case_id, repetition) in seen_pairs:
+            raise DatasetV2Error(f"duplicate result: {case_id}")
+        seen_pairs.add((case_id, repetition))
+        if request_id in expected_ids:
+            raise DatasetV2Error(f"duplicate result: {request_id}")
+        expected_ids.add(request_id)
+        if request_id not in by_request:
+            raise DatasetV2Error(f"missing result: {case_id}")
+        if not case_id.startswith(problem_id + "_"):
+            raise DatasetV2Error(f"result problem does not match answer id: {case_id}")
+        writer, _image = _writer_and_image(case_id, problem_id)
+        if writer not in side["writers"]:
+            raise DatasetV2Error(f"writer is not in the split: {case_id}")
+        if side["problems"] is not None and problem_id not in side["problems"]:
+            raise DatasetV2Error(f"problem is not in the split: {case_id}")
+        run = by_request[request_id]
+        provenance = run.get("outputs", {}).get("experiment_case") if isinstance(run.get("outputs"), dict) else None
+        if isinstance(provenance, dict) and (
+            provenance.get("case_id") != case_id or provenance.get("repetition") != repetition
+        ):
+            raise DatasetV2Error(f"result does not match its case: {case_id}")
+        grade = run.get("outputs", {}).get("grading") if isinstance(run.get("outputs"), dict) else None
+        if not isinstance(grade, dict) or grade.get("status") not in {"validated", "review_required"}:
+            raise DatasetV2Error(f"grading did not finish: {case_id}")
+        excluded = case_id in reference["excluded"]
+        row = reference["rows"].get(case_id)
+        if row is not None and row["problem"] != problem_id:
+            raise DatasetV2Error(f"reference problem does not match answer id: {case_id}")
+        seen_ids.add(case_id)
+        observations.append({
+            "answer_id": case_id,
+            "problem": problem_id,
+            "repetition": repetition,
+            "excluded": excluded,
+            "predicted_total": _optional_number(grade, "total_score", case_id),
+            "predicted_subs": _predicted_subs(grade.get("items", []), case_id),
+            "reference_total": None if row is None else row["total"],
+            "reference_subs": [] if row is None else row["subs"],
+        })
+    extra_requests = sorted(set(by_request) - expected_ids)
+    if extra_requests:
+        raise DatasetV2Error(f"unexpected result: {extra_requests[0]}")
+    missing_ids = sorted(set(side["ids"]) - seen_ids)
+    extra_ids = sorted(seen_ids - set(side["ids"]))
+    if missing_ids:
+        raise DatasetV2Error(f"missing result: {missing_ids[0]}")
+    if extra_ids:
+        raise DatasetV2Error(f"unexpected result: {extra_ids[0]}")
+    for row in observations:
+        if not row["excluded"] and row["reference_total"] is None and row["answer_id"] not in reference["rows"]:
+            raise DatasetV2Error(f"missing reference: {row['answer_id']}")
+    return observations
+
+
+def _predicted_subs(values: Any, answer_id: str) -> dict[str, float | None]:
+    if not isinstance(values, list):
+        raise DatasetV2Error(f"invalid graded item: {answer_id}")
+    found: dict[str, float | None] = {}
+    for row in values:
+        if not isinstance(row, dict) or not isinstance(row.get("item_id"), str) or not row["item_id"].strip():
+            raise DatasetV2Error(f"invalid graded item: {answer_id}")
+        item_id = row["item_id"]
+        if item_id in found:
+            raise DatasetV2Error(f"duplicate graded item: {answer_id} {item_id}")
+        found[item_id] = _optional_number(row, "score", f"{answer_id} {item_id}")
+    return found
+
+
+def _metrics(split: str, observations: list[dict], excluded: set[str]) -> dict[str, Any]:
+    evaluated = [row for row in observations if not row["excluded"]]
+    per_answer = [_answer_row(row) for row in sorted(evaluated, key=lambda item: (item["answer_id"], item["repetition"]))]
+    by_problem: dict[str, list[dict]] = {}
+    for row in per_answer:
+        by_problem.setdefault(row["problem"], []).append(row)
+    return {
+        "schema_version": 1,
+        "dataset_id": DATASET_ID,
+        "split": split,
+        "excluded_low_confidence": sorted(excluded & {row["answer_id"] for row in observations}),
+        "n_graded": len(observations),
+        "n_evaluated": len(evaluated),
+        "n_excluded": len(observations) - len(evaluated),
+        **_aggregate(per_answer),
+        "per_problem": [
+            {"problem": problem, "n_evaluated": len(rows), **_aggregate(rows)}
+            for problem, rows in sorted(by_problem.items())
+        ],
+        "per_answer": per_answer,
+    }
+
+
+def _answer_row(row: dict) -> dict[str, Any]:
+    predicted = row["predicted_subs"]
+    subs = []
+    seen: set[str] = set()
+    for item in row["reference_subs"]:
+        seen.add(item["sub"])
+        subs.append({
+            "sub": item["sub"],
+            "predicted": predicted.get(item["sub"]),
+            "reference": item["score"],
+            "abs_error": _abs(predicted.get(item["sub"]), item["score"]),
+        })
+    for item_id in sorted(set(predicted) - seen):
+        subs.append({
+            "sub": item_id,
+            "predicted": predicted[item_id],
+            "reference": None,
+            "abs_error": None,
+        })
+    return {
+        "answer_id": row["answer_id"],
+        "problem": row["problem"],
+        "repetition": row["repetition"],
+        "predicted_total": row["predicted_total"],
+        "reference_total": row["reference_total"],
+        "abs_error": _abs(row["predicted_total"], row["reference_total"]),
+        "exact_total": _same(row["predicted_total"], row["reference_total"]),
+        "subquestions": subs,
+    }
+
+
+def _aggregate(rows: list[dict]) -> dict[str, Any]:
+    total_errors = [row["abs_error"] for row in rows if row["abs_error"] is not None]
+    exact_rows = [row for row in rows if row["reference_total"] is not None]
+    exact_count = sum(row["exact_total"] for row in exact_rows)
+    sub_errors = [
+        item["abs_error"]
+        for row in rows
+        for item in row["subquestions"]
+        if item["abs_error"] is not None
+    ]
+    return {
+        "total_mae": _mean(total_errors),
+        "total_mae_count": len(total_errors),
+        "exact_match_count": exact_count,
+        "exact_match_denominator": len(exact_rows),
+        "exact_match_rate": _mean([1.0 if row["exact_total"] else 0.0 for row in exact_rows]),
+        "subquestion_mae": _mean(sub_errors),
+        "subquestion_mae_count": len(sub_errors),
+    }
+
+
+def _abs(predicted: float | None, reference: float | None) -> float | None:
+    if predicted is None or reference is None:
+        return None
+    return abs(predicted - reference)
+
+
+def _same(predicted: float | None, reference: float | None) -> bool:
+    return predicted is not None and reference is not None and abs(predicted - reference) <= 1e-6
+
+
+def _mean(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return sum(values) / len(values)
