@@ -952,6 +952,30 @@ def test_gemma_baseline_uses_the_existing_model_and_stays_offline(tmp_path, monk
     assert len(calls) == 1
 
 
+def test_timeout_policy_is_recorded_and_does_not_block_reuse(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    common = [
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+        "--fast-backoff-min-s", "30", "--fast-backoff-max-s", "120",
+        "--deadline-growth", "2", "--request-timeout-cap-s", "1800",
+    ]
+    assert main([*common, "--request-timeout-s", "600", "--max-attempts", "6"]) == 0
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["request_timeout_s"] == 600
+    assert config["max_attempts"] == 6
+    assert config["fast_backoff_min_s"] == 30
+    assert config["fast_backoff_max_s"] == 120
+    assert "max_output_tokens" not in config["generation_settings"]
+    assert main([*common, "--request-timeout-s", "900", "--max-attempts", "4"]) == 0
+    second = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert second["skipped"] == 1
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["request_timeout_s"] == 900
+
+
 def test_baseline_output_is_private_and_reading_does_not_change_modes(tmp_path):
     previous = os.umask(0)
     try:

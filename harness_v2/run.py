@@ -18,7 +18,18 @@ from harness_v2.core.pipeline import Pipeline
 from harness_v2.evaluation.dataset import Dataset, load_dataset
 from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.providers.fixture import FixtureProvider
-from harness_v2.providers.gemma_ai_studio import GemmaAIStudio, QuotaExceeded
+from harness_v2.providers.gemma_ai_studio import (
+    DEADLINE_GROWTH,
+    DEADLINE_RETRY_PAUSE_S,
+    FAST_BACKOFF_MAX_S,
+    FAST_BACKOFF_MIN_S,
+    MAX_ATTEMPTS,
+    REQUEST_TIMEOUT_CAP_S,
+    REQUEST_TIMEOUT_S,
+    TRANSPORT_CONFIG_KEYS,
+    GemmaAIStudio,
+    QuotaExceeded,
+)
 from harness_v2.storage.artifacts import ArtifactStore
 from harness_v2.storage.permissions import private_directory, private_write_text
 from harness_v2.storage.secrets import redact
@@ -76,19 +87,67 @@ def load_config(path: Path) -> dict:
         if name != 'seed' and value < 0:
             raise ValueError(f'{name} must be nonnegative')
     config = {**config, 'generation_settings': {'temperature': 0, **settings}}
+    config = _with_transport_defaults(config)
     canonical(config)
     return config
+
+
+def reusable_config(config: dict) -> dict:
+    """Config that changes what the model is asked to generate.
+
+    Timeout and retry policy does not change the prompt, model, or sampling.
+    A successful grade stays reusable when only that policy changes.
+    """
+    return {key: value for key, value in config.items() if key not in TRANSPORT_CONFIG_KEYS}
+
+
+def _with_transport_defaults(config: dict) -> dict:
+    defaults = {
+        'request_timeout_s': REQUEST_TIMEOUT_S,
+        'request_timeout_cap_s': REQUEST_TIMEOUT_CAP_S,
+        'deadline_growth': DEADLINE_GROWTH,
+        'deadline_retry_pause_s': DEADLINE_RETRY_PAUSE_S,
+        'max_attempts': MAX_ATTEMPTS,
+        'fast_backoff_min_s': FAST_BACKOFF_MIN_S,
+        'fast_backoff_max_s': FAST_BACKOFF_MAX_S,
+    }
+    merged = {**defaults, **config}
+    # Validate by constructing the numeric policy. The provider applies the same rules.
+    GemmaAIStudio(
+        model_id='gemma-transport-check',
+        request_timeout_s=merged['request_timeout_s'],
+        request_timeout_cap_s=merged['request_timeout_cap_s'],
+        deadline_growth=merged['deadline_growth'],
+        deadline_retry_pause_s=merged['deadline_retry_pause_s'],
+        max_attempts=merged['max_attempts'],
+        fast_backoff_min_s=merged['fast_backoff_min_s'],
+        fast_backoff_max_s=merged['fast_backoff_max_s'],
+    )
+    for key in defaults:
+        value = merged[key]
+        if isinstance(value, float) and value.is_integer():
+            merged[key] = int(value)
+    return merged
 
 
 def request_id_for(dataset: Dataset, case: dict, config: dict, repetition: int) -> str:
     return 'h2-' + identity([dataset.manifest['dataset_id'], dataset.manifest['version'],
         case['case_id'], case['input_sha256'], case['rubric_sha256'],
-        identity(config), repetition])
+        identity(reusable_config(config)), repetition])
 
 
 def default_provider(config: dict, case: dict, repetition: int):
     if config['provider'] == 'gemma':
-        return GemmaAIStudio(model_id=config['model'])
+        return GemmaAIStudio(
+            model_id=config['model'],
+            request_timeout_s=config['request_timeout_s'],
+            request_timeout_cap_s=config['request_timeout_cap_s'],
+            deadline_growth=config['deadline_growth'],
+            deadline_retry_pause_s=config['deadline_retry_pause_s'],
+            max_attempts=config['max_attempts'],
+            fast_backoff_min_s=config['fast_backoff_min_s'],
+            fast_backoff_max_s=config['fast_backoff_max_s'],
+        )
     completion = config.get('fixture_completions', {}).get(case['case_id'], config.get('fixture_completion'))
     if isinstance(completion, list):
         completion = completion[repetition - 1]
@@ -145,7 +204,7 @@ def validate_durable_identity(db_path: Path, *, commit: str, experiment_identity
                 raise ValueError('durable row experiment identity cannot be established: invalid case/repetition')
             expected = {'request_id': request_id_for(dataset, case, config, rep),
                         'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
-                        'config_id': identity(config), 'problem_id': case['problem_id'],
+                        'config_id': identity(reusable_config(config)), 'problem_id': case['problem_id'],
                         'input_version': case['input_version'], 'input_sha256': case['input_sha256'],
                         'rubric_sha256': case['rubric_sha256']}
             if request_id != expected['request_id'] or any(provenance.get(k) != v for k, v in expected.items()):
@@ -181,7 +240,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
     if any(case['rubric_version'] != config['rubric_version'] for case in dataset.cases):
         raise ValueError('config rubric_version differs from dataset rubric_version')
     out = private_directory(Path(out), managed=True)
-    experiment_identity = identity({'config': config, 'dataset': dataset.manifest, 'commit': commit})
+    experiment_identity = identity({'config': reusable_config(config), 'dataset': dataset.manifest, 'commit': commit})
     experiment_path = out / 'experiment.json'
     metadata = {'schema_version': 1, 'identity': experiment_identity, 'config': config,
                 'dataset': dataset.manifest, 'dataset_path': str(dataset.path), 'commit': commit}
@@ -211,7 +270,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
     provenance = {job['request_id']: {**job,
         'experiment_identity': experiment_identity,
         'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
-        'config_id': identity(config)} for job in expected}
+        'config_id': identity(reusable_config(config))} for job in expected}
     cases_by_request = {rid: case for case, _, rid in jobs}
 
     def save_failure(row, case):

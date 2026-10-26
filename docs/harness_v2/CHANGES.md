@@ -825,3 +825,7 @@ Resolved paths are not enough. Each target file in dev and holdout is also compa
 ## dataset_v2: a missing transcript in the other split is not an alias
 
 A dev run no longer fails when a holdout answer has no transcript file. A file that is absent from the split not being converted is skipped, because a missing file cannot alias another target. A missing transcript in the split being converted still fails. Every file that does exist in either split is still checked for a symlink, a shared real path, and a shared inode. The other split's file contents are not read.
+
+## dataset_v2: longer generation deadline and separate retry for fast server errors
+
+The Gemma client deadline is 600 seconds on the first attempt (`--request-timeout-s`, default 600). A 504 or read timeout is retried with a longer deadline (`--deadline-growth`, default 2, capped by `--request-timeout-cap-s`, default 1800) after `--deadline-retry-pause-s` (default 1). A fast 500, 502, or 503 waits with exponential backoff and jitter from `--fast-backoff-min-s` (default 30) up to `--fast-backoff-max-s` (default 120), for up to `--max-attempts` tries (default 6). The same keys can be set in the run config. Each attempt records `elapsed_s`, `timeout_s`, and `thoughts_token_count` when the response includes it. This policy does not change the prompt, model, or sampling, and it does not set `max_output_tokens`, so it is excluded from the reuse identity: a successful grade is reused when only the timeout or retry settings change.

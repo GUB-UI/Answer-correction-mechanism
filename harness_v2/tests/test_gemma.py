@@ -110,14 +110,16 @@ def test_transient_errors_retry_then_stop() -> None:
         raise ServerError("unavailable")
 
     client, models = _client(behavior)
-    exchange = GemmaAIStudio(free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append, max_attempts=3).generate(
+    exchange = GemmaAIStudio(
+        free_tier_project=True, client_factory=lambda **_kwargs: client, sleep=slept.append,
+        rng=lambda: 0, max_attempts=3).generate(
         "prompt",
         request_id="r4",
     )
     assert exchange.status == "error"
     assert exchange.attempt_count == 3
     assert len(models.calls) == 3
-    assert slept == [0.5, 1.0]
+    assert slept == [30.0, 30.0]
 
 
 def test_transient_error_then_success() -> None:
@@ -135,7 +137,7 @@ def test_transient_error_then_success() -> None:
     assert exchange.status == "ok"
     assert exchange.raw_response == "{}"
     assert exchange.attempt_count == 2
-    assert slept == [0.5]
+    assert slept == [1.0]
 
 
 def test_sdk_missing_does_not_switch_provider(monkeypatch) -> None:
@@ -182,7 +184,7 @@ def test_client_is_constructed_for_the_gemini_api(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "google", google)
     monkeypatch.setitem(sys.modules, "google.genai", genai)
     exchange = GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-off")
-    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 180000}}]
+    assert captured == [{"vertexai": False, "api_key": "gemini-test-key", "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 600000}}]
     assert "project" not in captured[0]
     assert "location" not in captured[0]
     assert exchange.status == "ok"
@@ -194,3 +196,75 @@ def test_vertex_env_is_rejected(monkeypatch) -> None:
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
     with pytest.raises(ProviderSetupError, match="Vertex"):
         GemmaAIStudio(free_tier_project=True).generate("prompt", request_id="vertex-on")
+
+
+def test_deadline_retry_uses_a_longer_timeout_and_records_thoughts() -> None:
+    slept: list[float] = []
+    built: list[int] = []
+    state = {"n": 0}
+
+    class Deadline(Exception):
+        code = 504
+
+    def behavior(_kwargs):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise Deadline("504 DEADLINE_EXCEEDED")
+        return SimpleNamespace(
+            text="{}",
+            model_version=MODEL_ID,
+            response_id="ok",
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=3, candidates_token_count=4, thoughts_token_count=11),
+        )
+
+    def factory(**kwargs):
+        built.append(kwargs["http_options"]["timeout"])
+        client, _models = _client(behavior)
+        return client
+
+    now = {"t": 0.0}
+
+    def monotonic():
+        return now["t"]
+
+    def sleep(seconds):
+        slept.append(seconds)
+        now["t"] += seconds
+
+    exchange = GemmaAIStudio(
+        client_factory=factory, sleep=sleep, monotonic=monotonic, rng=lambda: 0,
+        max_attempts=3, request_timeout_s=600, request_timeout_cap_s=1800, deadline_growth=2,
+    ).generate("prompt", request_id="deadline")
+    assert built == [600_000, 1_200_000]
+    assert slept == [1.0]
+    assert exchange.status == "ok"
+    assert exchange.attempt_count == 2
+    assert exchange.attempts[0]["timeout_s"] == 600
+    assert exchange.attempts[1]["timeout_s"] == 1200
+    assert exchange.attempts[1]["timeout_s"] > exchange.attempts[0]["timeout_s"]
+    assert exchange.attempts[0]["thoughts_token_count"] is None
+    assert exchange.attempts[1]["thoughts_token_count"] == 11
+    assert exchange.attempts[1]["elapsed_s"] == pytest.approx(0)
+    assert "max_output_tokens" not in exchange.settings
+
+
+def test_fast_server_errors_backoff_with_jitter_up_to_six_attempts() -> None:
+    slept: list[float] = []
+
+    class ServerError(Exception):
+        status_code = 500
+
+    def behavior(_kwargs):
+        raise ServerError("internal")
+
+    client, models = _client(behavior)
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: client, sleep=slept.append, rng=lambda: 1,
+    ).generate("prompt", request_id="fast")
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 6
+    assert len(models.calls) == 6
+    assert slept == [30.0, 60.0, 120.0, 120.0, 120.0]
+    assert all(row["timeout_s"] == 600 for row in exchange.attempts)
+    assert all("elapsed_s" in row for row in exchange.attempts)

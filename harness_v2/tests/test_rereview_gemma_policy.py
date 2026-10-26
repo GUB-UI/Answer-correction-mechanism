@@ -33,7 +33,7 @@ def test_attestation_is_optional_and_recorded_as_absent(monkeypatch):
     built, calls = fake_sdk(monkeypatch)
     exchange = GemmaAIStudio().generate("grade", request_id="r")
     assert built == [{"vertexai": False, "api_key": "test-key",
-                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 180000}}]
+                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 600000}}]
     policy = exchange.settings["provider_policy"]
     assert policy["free_tier_project"] is None and policy["attestation_source"] == "none"
     assert policy["vertexai"] is False and len(calls) == 1
@@ -60,11 +60,14 @@ def test_endpoint_and_attestation_are_enforced_and_recorded(monkeypatch, quota):
     else:
         exchange = provider.generate("grade", request_id="r")
     assert built == [{"vertexai": False, "api_key": "test-key",
-                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 180000}}]
+                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 600000}}]
     assert exchange.settings["provider_policy"] == {
         "free_tier_project": True, "vertexai": False,
         "base_url": "https://generativelanguage.googleapis.com",
         "attestation_source": "caller_config",
+        "request_timeout_s": 600, "request_timeout_cap_s": 1800,
+        "deadline_growth": 2, "deadline_retry_pause_s": 1, "max_attempts": 6,
+        "fast_backoff_min_s": 30, "fast_backoff_max_s": 120,
     }
     assert "provider_policy" not in calls[0]["config"]
     assert len(calls) == 1
@@ -91,4 +94,5 @@ def test_sdk_client_gets_bounded_request_timeout(monkeypatch):
     built, _ = fake_sdk(monkeypatch)
     GemmaAIStudio().generate("grade", request_id="r")
     timeout = built[0]["http_options"]["timeout"]
-    assert timeout == g.REQUEST_TIMEOUT_MS and 0 < timeout <= 300_000
+    assert timeout == g.REQUEST_TIMEOUT_MS == 600_000
+    assert timeout < g.REQUEST_TIMEOUT_CAP_S * 1000

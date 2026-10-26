@@ -29,14 +29,14 @@ def test_total_latency_and_history_include_all_attempts(tmp_path, monkeypatch, l
         now[0] += seconds
     provider = GemmaAIStudio(client_factory=lambda **kwargs: SimpleNamespace(
         models=SimpleNamespace(generate_content=generate_content)),
-        monotonic=lambda: now[0], sleep=sleep, max_attempts=2)
+        monotonic=lambda: now[0], sleep=sleep, rng=lambda: 0, max_attempts=2)
     store = store_at(tmp_path)
     try:
         rec = Pipeline(store, provider).run(_case('r', _valid()), experiment_id='e', commit='c')
     except QuotaExceeded as exc:
         assert last == 'quota'
         rec = exc.record
-    assert rec.latency_ms == pytest.approx(550)
+    assert rec.latency_ms == pytest.approx(30050)
     attempts = rec.outputs['attempts']
     assert rec.outputs['attempt_count'] == len(attempts) == 2
     assert [a['latency_ms'] for a in attempts] == pytest.approx([20, 30])
