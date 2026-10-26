@@ -1121,3 +1121,9 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - `\boxed{x=1}`、`\begin{aligned}`、`\bar{A}`、`\beta`、`\frac` は、理由の文にも引用した根拠にも、書いた形のまま残る。根拠の引用は書き起こしと照合できる。
 - `\n` `\t` `\r` は、これまでどおり数学 I/A の決まったコマンドのときだけバックスラッシュとして残す。`\times` `\theta` `\tan` `\to` `\triangle` `\text` `\tfrac` `\right` `\rangle` `\rho` を含む。`n` で始まるコマンドは改行のまま、`parse_ambiguous` と `review_required`。
 - JSON のエスケープでないバックスラッシュ（`\le` や `\left`）は二重にする。`completion_parser_version` は `json_latex_escapes_v3`。`json_latex_escapes_v2` で解析した採点は再利用しない。
+
+## dataset_v2: 通信が切れたときは再試行する
+
+- `RemoteProtocolError`（`Server disconnected`）、`ReadError`、`ConnectError` は再試行する。包んだ例外の原因がそれらでも再試行する。
+- その試行が 60 秒以上なら、504 と同じく待ち時間を延ばして再試行する。それより短い切断は、速い 500 / 502 / 503 と同じバックオフで待つ。
+- 試行回数は `--max-attempts` まで。この方針はプロンプト、モデル、サンプリングを変えない。再利用の識別子には入らない。

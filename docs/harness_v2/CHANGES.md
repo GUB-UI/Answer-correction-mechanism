@@ -841,3 +841,7 @@ A JSON `\n`, `\t`, `\r`, `\b`, or `\f` stays that control character unless the f
 ## dataset_v2: keep every backslash-b and backslash-f command
 
 Backspace and form feed do not occur in grading prose. Inside a JSON string, `\b` or `\f` followed by an ASCII letter is always kept as a backslash plus that letter, whether or not the name is on a list. `\boxed{x=1}`, `\begin{aligned}`, `\bar{A}`, `\beta`, and `\frac` stay written that way in `math_reason` and in an evidence quote, so the quote can still match the transcript. `\n`, `\t`, and `\r` still use the fixed Math I/A list (`\times`, `\theta`, `\tan`, `\to`, `\triangle`, `\text`, `\tfrac`, `\right`, `\rangle`, `\rho`, and the other names in that list). A command that starts with `n` is still left as a newline with `parse_ambiguous` and `review_required`. A backslash that is not a JSON escape, such as `\le` and `\left`, is still doubled. `completion_parser_version` is `json_latex_escapes_v3`, so a grade parsed by `json_latex_escapes_v2` is not reused.
+
+## dataset_v2: retry a transport disconnect
+
+`RemoteProtocolError` (`Server disconnected`), `ReadError`, and `ConnectError` are retried, including when a wrapper's cause is one of those errors. A disconnect whose attempt lasted at least 60 seconds is retried with a longer deadline, the same growth and pause as a 504. A faster disconnect uses the fast 500/502/503 backoff. Retries stop at `--max-attempts`. This is retry policy. It does not change the prompt, model, or sampling, and it is not part of the reuse identity.

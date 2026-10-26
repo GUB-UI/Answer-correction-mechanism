@@ -23,6 +23,9 @@ DEADLINE_GROWTH = 2
 DEADLINE_RETRY_PAUSE_S = 1
 FAST_BACKOFF_MIN_S = 30
 FAST_BACKOFF_MAX_S = 120
+# A transport drop after this long is a lost generation, same as a deadline.
+# A drop in a few seconds uses the fast 5xx backoff. Not a generation setting.
+DISCONNECT_DEADLINE_AFTER_S = 60
 REQUEST_TIMEOUT_MS = REQUEST_TIMEOUT_S * 1000
 TRANSPORT_CONFIG_KEYS = (
     "request_timeout_s",
@@ -35,6 +38,18 @@ TRANSPORT_CONFIG_KEYS = (
 )
 _FAST_HTTP = {500, 502, 503}
 _DEADLINE_HTTP = {408, 504}
+# httpx transport drops. Matched by class name so a test double and a wrapped
+# cause are recognized without importing httpx.
+_DISCONNECT_NAMES = frozenset({
+    "remoteprotocolerror",
+    "localprotocolerror",
+    "protocolerror",
+    "readerror",
+    "writeerror",
+    "connecterror",
+    "networkerror",
+    "closeerror",
+})
 _VERTEX_ENV = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_VERTEX_AI")
 _SETTINGS_KEYS = ("temperature", "max_output_tokens", "top_p", "top_k", "seed")
 
@@ -107,10 +122,30 @@ def _is_deadline(exc: BaseException, code: int | None) -> bool:
 
 
 def _is_connection(exc: BaseException) -> bool:
+    """Transport disconnect, including httpx RemoteProtocolError and ReadError.
+
+    Timeouts stay on the deadline path. A name containing "timeout" is not a
+    disconnect here.
+    """
+    if isinstance(exc, TimeoutError):
+        return False
+    name = type(exc).__name__.lower()
+    if "timeout" in name:
+        return False
     if isinstance(exc, ConnectionError):
         return True
-    name = type(exc).__name__.lower()
+    if name in _DISCONNECT_NAMES or "protocolerror" in name or name.endswith("readerror"):
+        return True
+    if "server disconnected" in str(exc).lower():
+        return True
     return "connection" in name or "connect" in name
+
+
+def _is_transport_disconnect(exc: BaseException) -> bool:
+    for item in (exc, exc.__cause__, exc.__context__):
+        if isinstance(item, BaseException) and _is_connection(item):
+            return True
+    return False
 
 
 def _raw_from_exception(exc: BaseException) -> str:
@@ -191,7 +226,9 @@ class GemmaAIStudio:
     it is not required (the project has no billing configured).
 
     429 stops immediately. A 504 or read timeout is retried with a longer
-    deadline. A fast 500/502/503 waits on exponential backoff with jitter.
+    deadline. A transport disconnect after DISCONNECT_DEADLINE_AFTER_S seconds
+    is retried the same way. A faster disconnect, or a fast 500/502/503, waits
+    on exponential backoff with jitter.
     The model id is fixed. No second project, key, or API. client_factory
     is a test seam; it receives the same pinned SDK options. Timeout and
     retry settings are transport policy: they are not generation settings.
@@ -363,7 +400,14 @@ class GemmaAIStudio:
                 last_error = exchange.error
                 if attempt >= self.max_attempts:
                     return exchange
-                if code in _FAST_HTTP or _is_connection(exc):
+                if _is_transport_disconnect(exc):
+                    if elapsed_s >= DISCONNECT_DEADLINE_AFTER_S:
+                        timeout_s = self._next_timeout_s(timeout_s)
+                        self._sleep(float(self.deadline_retry_pause_s))
+                    else:
+                        self._sleep(self._fast_backoff_s(attempt))
+                    continue
+                if code in _FAST_HTTP:
                     self._sleep(self._fast_backoff_s(attempt))
                     continue
                 if _is_deadline(exc, code):

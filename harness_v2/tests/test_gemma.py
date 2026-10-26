@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from harness_v2.providers.gemma_ai_studio import (
+    DISCONNECT_DEADLINE_AFTER_S,
     MODEL_ID,
     GemmaAIStudio,
     MissingAPIKey,
@@ -268,3 +269,136 @@ def test_fast_server_errors_backoff_with_jitter_up_to_six_attempts() -> None:
     assert slept == [30.0, 60.0, 120.0, 120.0, 120.0]
     assert all(row["timeout_s"] == 600 for row in exchange.attempts)
     assert all("elapsed_s" in row for row in exchange.attempts)
+
+
+def _run_clocked(behavior, *, rng, max_attempts, advance_on_call: float):
+    slept: list[float] = []
+    built: list[int] = []
+    clock = {"t": 0.0}
+
+    def timed(kwargs):
+        clock["t"] += advance_on_call
+        return behavior(kwargs)
+
+    def factory(**kwargs):
+        built.append(kwargs["http_options"]["timeout"])
+        client, _models = _client(timed)
+        return client
+
+    def sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+
+    provider = GemmaAIStudio(
+        client_factory=factory, sleep=sleep, monotonic=lambda: clock["t"], rng=rng,
+        max_attempts=max_attempts,
+    )
+    return provider.generate("prompt", request_id="disconnect"), slept, built
+
+
+def test_long_transport_disconnect_grows_the_deadline_and_stops_at_max_attempts() -> None:
+    class RemoteProtocolError(Exception):
+        pass
+
+    class ReadError(Exception):
+        pass
+
+    class ConnectError(Exception):
+        pass
+
+    class ClientError(Exception):
+        pass
+
+    def one_failure(exc):
+        state = {"n": 0}
+
+        def behavior(_kwargs):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise exc
+            return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok")
+
+        return behavior
+
+    wrapped = ClientError("request failed")
+    wrapped.__cause__ = RemoteProtocolError("Server disconnected")
+    failures = [
+        RemoteProtocolError("Server disconnected"),
+        ReadError("connection dropped"),
+        ConnectError("connection reset"),
+        wrapped,
+    ]
+    for exc in failures:
+        exchange, slept, built = _run_clocked(
+            one_failure(exc), rng=lambda: 0, max_attempts=3, advance_on_call=300)
+        assert built == [600_000, 1_200_000], type(exc).__name__
+        assert slept == [1.0], type(exc).__name__
+        assert exchange.status == "ok"
+        assert exchange.attempt_count == 2
+        assert exchange.attempts[0]["elapsed_s"] == pytest.approx(300)
+        assert exchange.attempts[0]["elapsed_s"] >= DISCONNECT_DEADLINE_AFTER_S
+        assert exchange.attempts[1]["timeout_s"] == 1200
+        assert "max_output_tokens" not in exchange.settings
+
+    def always(_kwargs):
+        raise RemoteProtocolError("Server disconnected")
+
+    stopped, slept, built = _run_clocked(always, rng=lambda: 0, max_attempts=2, advance_on_call=400)
+    assert stopped.status == "error"
+    assert stopped.attempt_count == 2
+    assert built == [600_000, 1_200_000]
+    assert slept == [1.0]
+    assert [row["error_class"] for row in stopped.attempts] == [
+        "RemoteProtocolError", "RemoteProtocolError"]
+
+
+def test_fast_transport_disconnect_uses_fast_backoff() -> None:
+    class RemoteProtocolError(Exception):
+        pass
+
+    class ReadError(Exception):
+        pass
+
+    class ConnectError(Exception):
+        pass
+
+    class APIError(Exception):
+        pass
+
+    for exc_type, message in (
+        (RemoteProtocolError, "Server disconnected"),
+        (ReadError, "read failed"),
+        (ConnectError, "connect failed"),
+        (APIError, "Server disconnected"),
+    ):
+        def behavior(_kwargs, exc_type=exc_type, message=message):
+            raise exc_type(message)
+
+        client, models = _client(behavior)
+        slept: list[float] = []
+        exchange = GemmaAIStudio(
+            client_factory=lambda **_kwargs: client, sleep=slept.append, rng=lambda: 0,
+            max_attempts=3,
+        ).generate("prompt", request_id="fast-disconnect")
+        assert exchange.status == "error", exc_type.__name__
+        assert exchange.attempt_count == 3
+        assert len(models.calls) == 3
+        assert slept == [30.0, 30.0]
+        assert all(row["timeout_s"] == 600 for row in exchange.attempts)
+        assert all(row["elapsed_s"] < DISCONNECT_DEADLINE_AFTER_S for row in exchange.attempts)
+
+
+def test_unrelated_provider_error_is_not_retried() -> None:
+    slept: list[float] = []
+
+    def behavior(_kwargs):
+        raise ValueError("bad prompt")
+
+    client, models = _client(behavior)
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: client, sleep=slept.append,
+    ).generate("prompt", request_id="not-transport")
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 1
+    assert len(models.calls) == 1
+    assert slept == []
