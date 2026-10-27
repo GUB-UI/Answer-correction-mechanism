@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v5"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v6"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -155,18 +155,55 @@ def repair_json_string_escapes(text: str) -> tuple[str, bool]:
 
 # A stray brace, bracket, or comma is leftover JSON, not prose.
 _JSON_STRUCTURAL = re.compile(r"[{}\[\],]")
-_SCORE_MENTION = re.compile(
-    r'(?<![A-Za-z_])"?(?:total_score|score)"?\s*[:=]'
+# A full numeric token, so 4e-1 is 0.4 and is not also read as 4.
+_NUMBER_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])"
 )
+_SCORE_WORD = re.compile(
+    r"(?<![A-Za-z_])(?:total_score|score|revised|total)(?![A-Za-z_])|合計|訂正|点",
+    re.IGNORECASE,
+)
+_SCORE_WINDOW = 16
+
+
+def _number_tokens(text: str) -> list[float]:
+    found: list[float] = []
+    for match in _NUMBER_TOKEN.finditer(text):
+        try:
+            value = float(match.group(0))
+        except ValueError:
+            continue
+        if math.isfinite(value):
+            found.append(value)
+    return found
+
+
+def _parsed_total(loaded: dict) -> float | None:
+    """The object's total only. An item score is not a total."""
+    if "total_score" in loaded:
+        return _number(loaded.get("total_score"))
+    if "score" in loaded:
+        return _number(loaded.get("score"))
+    return None
+
+
+def _score_mention_differs(rest: str, loaded: dict) -> bool:
+    total = _parsed_total(loaded)
+    for match in _SCORE_WORD.finditer(rest):
+        start = max(0, match.start() - _SCORE_WINDOW)
+        end = min(len(rest), match.end() + _SCORE_WINDOW)
+        numbers = _number_tokens(rest[start:end])
+        if not numbers:
+            continue
+        if total is None or any(abs(value - total) > 1e-6 for value in numbers):
+            return True
+    return False
 
 
 def _trailing_is_ambiguous(rest: str, loaded: dict) -> bool:
-    del loaded
     if _JSON_STRUCTURAL.search(rest):
         return True
-    if _SCORE_MENTION.search(rest):
-        return True
-    return False
+    return _score_mention_differs(rest, loaded)
 
 
 def _prefix_object(text: str) -> tuple[dict[str, Any] | None, bool]:

@@ -5,6 +5,8 @@ is not rewritten; the grade is marked ambiguous.
 """
 import json
 
+import pytest
+
 from harness_v2.core.contracts import RubricItem
 from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION, items_from_completion
 
@@ -374,7 +376,7 @@ def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
     second_object = body + "\n" + body
     rubric = [RubricItem("R1", 4, "work")]
     for raw, expect_ambiguous in (
-        (same_score, True),
+        (same_score, False),
         (different_score, True),
         (second_object, True),
     ):
@@ -384,7 +386,12 @@ def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
         assert ambiguous is expect_ambiguous
         assert marker == "trailing_text"
     store = store_at(tmp_path)
-    for name, raw in (("same", same_score), ("other", different_score), ("again", second_object)):
+    agreed = Pipeline(store, FixtureProvider(same_score)).run(
+        _case("same", same_score), experiment_id="e", commit="c")
+    assert agreed.outputs["grading"]["status"] == "validated"
+    assert agreed.outputs["grading"]["parse_ambiguous"] is False
+    assert agreed.outputs["grading"]["total_score"] == 4
+    for name, raw in (("other", different_score), ("again", second_object)):
         record = Pipeline(store, FixtureProvider(raw)).run(
             _case(name, raw), experiment_id="e", commit="c")
         grade = record.outputs["grading"]
@@ -396,6 +403,43 @@ def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
             check["name"] == "parse_ambiguous" and check["detail"] == "trailing_text"
             for check in grade["checks"]
         )
+
+
+def test_a_trailing_total_is_not_confused_with_an_item_score():
+    body = (
+        '{"items":[{"item_id":"R1","score":7,"evidence_spans":[{"text":"x"}],'
+        '"math_reason":"row","uncertainty":0,"review_reason":""}],'
+        '"total_score":4}'
+    )
+    rubric = [RubricItem("R1", 7, "work")]
+    matching_exponent = (
+        '{"items":[{"item_id":"R1","score":7,"evidence_spans":[{"text":"x"}],'
+        '"math_reason":"row","uncertainty":0,"review_reason":""}],'
+        '"total_score":0.4}\nscore: 4e-1'
+    )
+    samples = {
+        body + "\nscore: 7": (True, 4),
+        body + "\nrevised 0": (True, 4),
+        body + "\n合計は0点": (True, 4),
+        body + "\n訂正: 1": (True, 4),
+        body + "\n合計は4点": (False, 4),
+        body + "\nscore: 4e-1": (True, 4),
+        matching_exponent: (False, 0.4),
+    }
+    for raw, (expect_ambiguous, expect_total) in samples.items():
+        _items, total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+        assert repaired is True
+        assert ambiguous is expect_ambiguous
+        assert marker == "trailing_text"
+        assert total == pytest.approx(expect_total)
+
+
+def test_scientific_notation_is_one_number():
+    from harness_v2.grading.scorer import _number_tokens
+
+    assert _number_tokens("4e-1") == pytest.approx([0.4])
+    assert _number_tokens("score 4e-1") == pytest.approx([0.4])
+    assert _number_tokens("plain 4") == [4.0]
 
 
 def test_truncated_text_and_a_non_object_prefix_still_fail():
@@ -447,18 +491,18 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v5"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v6"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION
     dataset = load_dataset(make_dataset(tmp_path))
     case = dataset.cases[0]
     current = request_id_for(dataset, case, loaded, 1)
-    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v4"}
+    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v5"}
     assert request_id_for(dataset, case, stale, 1) != current
     assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
         identity({"config": reusable_config(stale), "dataset": dataset.manifest, "commit": "c"}))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["completion_parser_version"] = "json_latex_escapes_v4"
+    payload["completion_parser_version"] = "json_latex_escapes_v5"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert load_config(path)["completion_parser_version"] == COMPLETION_PARSER_VERSION

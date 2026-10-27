@@ -881,3 +881,7 @@ Token counts read from a streamed error are stored under their own names. They n
 ## dataset_v2: JSON leftovers after one object are not validated
 
 Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
+
+## dataset_v2: a trailing total is compared with the total
+
+A number next to a total or score word is compared with the parsed total, not with an item score. English words include `total`, `score`, and `revised`. Japanese words include `合計`, `点`, and `訂正`. A different number is `parse_ambiguous` and the grade is `review_required`. The same total is not. `4e-1` is one number, 0.4, and is not read as 4. The completion parser is `json_latex_escapes_v6`.
