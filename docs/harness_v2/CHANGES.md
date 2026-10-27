@@ -869,3 +869,7 @@ If chunks already carried `STOP` and usage metadata, and the connection then dro
 ## dataset_v2: the same thinking and output-token defaults on every path
 
 `load_config` fills `thinking_level=minimal` and `max_output_tokens=8192` when a run config omits them. A direct `GemmaAIStudio.generate` call fills the same two values before it builds the request, and it records those values. An explicit `high`, `unset`, or another token cap replaces the default on that path. `--thinking-level high --max-output-tokens 16384 --wall-clock-limit-s 900` is accepted together.
+
+## dataset_v2: one JSON object with trailing text is parsed
+
+A completion that is one complete top-level JSON object, then only trailing text, is that object. The parser uses `json.JSONDecoder.raw_decode` after the LaTeX-escape repair. The grade is `parse_repaired` and `parse_marker` is `trailing_text`. Validation still runs, so a sound grade can stay `validated`. Trailing whitespace alone is ordinary JSON and does not set the marker. Trailing text that contains another JSON object, or a score that is not on the first object, is `parse_ambiguous` and the grade is `review_required`. The marker is then `trailing_text`, or `newline_or_latex,trailing_text` when a newline command was also left undecided. The completion parser is `json_latex_escapes_v4`, so a grade from `json_latex_escapes_v3` is not reused.

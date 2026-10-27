@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v3"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v4"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -153,27 +153,105 @@ def repair_json_string_escapes(text: str) -> tuple[str, bool]:
     return "".join(out), ambiguous
 
 
-def _load_repaired_json(text: str) -> tuple[Any, bool, bool]:
-    repaired, ambiguous = repair_json_string_escapes(text)
-    return json.loads(repaired), repaired != text, ambiguous
+_SCORE_MENTION = re.compile(
+    r'(?<![A-Za-z_])"?(?:total_score|score)"?\s*[:=]\s*(-?\d+(?:\.\d+)?)'
+)
 
 
-def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool]:
-    """Return the object, fence removal, escape repair, and newline ambiguity.
+def _contains_json_object(text: str) -> bool:
+    decoder = json.JSONDecoder()
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index] != "{":
+            index += 1
+            continue
+        try:
+            value, _end = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            index += 1
+            continue
+        if isinstance(value, dict):
+            return True
+        index += 1
+    return False
+
+
+def _known_scores(loaded: dict) -> list[float]:
+    found: list[float] = []
+    for key in ("total_score", "score"):
+        if key in loaded:
+            number = _number(loaded.get(key))
+            if number is not None:
+                found.append(number)
+    rows = loaded.get("items")
+    if rows is None:
+        rows = loaded.get("rubric_scores")
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and "score" in row:
+                number = _number(row.get("score"))
+                if number is not None:
+                    found.append(number)
+    return found
+
+
+def _trailing_is_ambiguous(rest: str, loaded: dict) -> bool:
+    if _contains_json_object(rest):
+        return True
+    known = _known_scores(loaded)
+    for match in _SCORE_MENTION.finditer(rest):
+        value = float(match.group(1))
+        if not any(abs(value - item) <= 1e-6 for item in known):
+            return True
+    return False
+
+
+def _prefix_object(text: str) -> tuple[dict[str, Any] | None, bool]:
+    """One complete object with trailing text, or None when that is not the shape."""
+    try:
+        loaded, end = json.JSONDecoder().raw_decode(text)
+    except json.JSONDecodeError:
+        return None, False
+    if not isinstance(loaded, dict):
+        return None, False
+    rest = text[end:]
+    if not rest.strip():
+        return None, False
+    return loaded, _trailing_is_ambiguous(rest, loaded)
+
+
+def _load_repaired_json(text: str) -> tuple[Any, bool, bool, str]:
+    repaired_text, escape_ambiguous = repair_json_string_escapes(text)
+    escape_repaired = repaired_text != text
+    try:
+        return json.loads(repaired_text), escape_repaired, escape_ambiguous, ""
+    except json.JSONDecodeError as exc:
+        loaded, trailing_ambiguous = _prefix_object(repaired_text)
+        if loaded is None:
+            raise exc
+        labels = ["newline_or_latex"] if escape_ambiguous else []
+        labels.append("trailing_text")
+        return loaded, True, escape_ambiguous or trailing_ambiguous, ",".join(labels)
+
+
+def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
+    """Return the object, fence removal, repair, newline ambiguity, and marker.
 
     Repair runs even when ``json.loads`` would succeed, so ``\\frac`` and
     ``\\boxed`` are not stored as a form feed or a backspace. A newline that
-    also spells a known command is not rewritten.
+    also spells a known command is not rewritten. One complete object followed
+    only by non-JSON text is that object, with marker ``trailing_text``.
     """
     try:
-        loaded, repaired, ambiguous = _load_repaired_json(raw)
+        loaded, repaired, ambiguous, marker = _load_repaired_json(raw)
         fence = False
     except json.JSONDecodeError as first_error:
         body = strip_one_outer_fence(raw)
         if body is None:
             raise ScoringParseError(f"json_parse_failed: {first_error}", raw=raw) from first_error
         try:
-            loaded, repaired, ambiguous = _load_repaired_json(body)
+            loaded, repaired, ambiguous, marker = _load_repaired_json(body)
         except json.JSONDecodeError as second_error:
             raise ScoringParseError(
                 f"json_parse_failed_after_fence: {second_error}",
@@ -183,7 +261,7 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool]:
         fence = True
     if not isinstance(loaded, dict):
         raise ScoringParseError("json object expected", raw=raw, fence_stripped=fence)
-    return loaded, fence, repaired, ambiguous
+    return loaded, fence, repaired, ambiguous, marker
 
 
 def _number(value: Any) -> float | None:
@@ -220,8 +298,8 @@ def _spans(value: Any) -> list[EvidenceSpan]:
 
 def items_from_completion(
     raw: str, rubric: list[RubricItem]
-) -> tuple[list[ItemResult], float | None, bool, bool, bool]:
-    payload, fence, repaired, ambiguous = parse_completion(raw)
+) -> tuple[list[ItemResult], float | None, bool, bool, bool, str]:
+    payload, fence, repaired, ambiguous, marker = parse_completion(raw)
     maxima = {item.item_id: item.max_points for item in rubric}
     rows = payload.get("items")
     if rows is None:
@@ -270,7 +348,7 @@ def items_from_completion(
             )
         )
     total = payload.get("total_score", payload.get("score"))
-    return items, _number(total) if total is not None else None, fence, repaired, ambiguous
+    return items, _number(total) if total is not None else None, fence, repaired, ambiguous, marker
 
 
 AMBIGUITY_AWARE_V1 = (

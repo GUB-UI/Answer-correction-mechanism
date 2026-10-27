@@ -18,7 +18,7 @@ def _raw(reason: str, evidence: str = "x") -> str:
 
 
 def _parsed(reason: str, evidence: str = "x"):
-    items, _total, fence, repaired, ambiguous = items_from_completion(
+    items, _total, fence, repaired, ambiguous, _marker = items_from_completion(
         _raw(reason, evidence), [RubricItem("R1", 1, "work")])
     return items[0], fence, repaired, ambiguous
 
@@ -140,7 +140,7 @@ def test_genuine_newlines_tabs_escaped_backslash_and_unicode_are_not_rewritten()
 
 def test_fenced_latex_is_repaired_after_the_fence_is_removed():
     raw = "```json\n" + _raw(r"\leq 2") + "\n```"
-    items, _total, fence, repaired, ambiguous = items_from_completion(
+    items, _total, fence, repaired, ambiguous, _marker = items_from_completion(
         raw, [RubricItem("R1", 1, "work")])
     assert fence is True
     assert repaired is True
@@ -177,6 +177,7 @@ def test_pipeline_keeps_a_multiline_quote_validated(tmp_path):
     assert grade["failure_reason"] == ""
     assert grade["parse_repaired"] is False
     assert grade["parse_ambiguous"] is False
+    assert grade["parse_marker"] == ""
     quote = grade["items"][0]["evidence_spans"][0]["text"]
     assert quote == answer
     assert "\n" in quote and "\\" not in quote
@@ -216,6 +217,7 @@ def test_backslash_and_formfeed_commands_stay_in_reason_and_evidence(tmp_path):
     assert grade["failure_reason"] == ""
     assert grade["parse_repaired"] is True
     assert grade["parse_ambiguous"] is False
+    assert grade["parse_marker"] == ""
     assert grade["items"][0]["math_reason"] == quote
     assert grade["items"][0]["evidence_spans"][0]["text"] == quote
     assert "\b" not in grade["items"][0]["math_reason"]
@@ -241,6 +243,7 @@ def test_pipeline_records_parse_repaired(tmp_path):
         _case("r", raw), experiment_id="e", commit="c")
     assert record.outputs["grading"]["parse_repaired"] is True
     assert record.outputs["grading"]["parse_ambiguous"] is False
+    assert record.outputs["grading"]["parse_marker"] == ""
     assert record.outputs["grading"]["items"][0]["math_reason"] == r"\frac{1}{2}"
     assert "\f" not in record.outputs["grading"]["items"][0]["math_reason"]
 
@@ -273,9 +276,149 @@ def test_ambiguous_newline_command_is_review_required(tmp_path):
     assert grade["failure_reason"] == "parse_ambiguous"
     assert grade["parse_ambiguous"] is True
     assert grade["parse_repaired"] is False
+    assert grade["parse_marker"] == ""
+    assert any(
+        check["name"] == "parse_ambiguous" and check["detail"] == "newline_or_latex"
+        for check in grade["checks"]
+    )
     assert grade["items"][0]["math_reason"] == "\neq"
     assert "\\" not in grade["items"][0]["math_reason"]
     assert grade["items"][0]["evidence_spans"][0]["text"] == "x"
+
+
+def _valid_body() -> str:
+    return (
+        '{"items":[{"item_id":"R1","score":4,"evidence_spans":[{"text":"x+1"}],'
+        '"math_reason":"matches","uncertainty":0.2,"review_reason":""}],'
+        '"total_score":4}'
+    )
+
+
+def test_one_object_with_trailing_prose_stays_validated(tmp_path):
+    from harness_v2.core.pipeline import Pipeline
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.tests.test_p3_setup import store_at
+    from harness_v2.tests.test_pipeline import _case
+
+    raw = _valid_body() + "\nI checked the arithmetic once more."
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as exc:
+        assert exc.msg == "Extra data"
+    else:
+        raise AssertionError("trailing prose must not be strict JSON")
+    items, total, fence, repaired, ambiguous, marker = items_from_completion(
+        raw, [RubricItem("R1", 4, "work")])
+    assert fence is False
+    assert repaired is True
+    assert ambiguous is False
+    assert marker == "trailing_text"
+    assert total == 4
+    assert items[0].score == 4
+    record = Pipeline(store_at(tmp_path), FixtureProvider(raw)).run(
+        _case("trail", raw), experiment_id="e", commit="c")
+    grade = record.outputs["grading"]
+    assert grade["status"] == "validated"
+    assert grade["failure_reason"] == ""
+    assert grade["parse_repaired"] is True
+    assert grade["parse_ambiguous"] is False
+    assert grade["parse_marker"] == "trailing_text"
+    assert not any(check["name"] == "parse_ambiguous" for check in grade["checks"])
+
+
+def test_whitespace_after_one_object_sets_no_trailing_marker():
+    raw = _valid_body() + " \n\t "
+    _items, total, fence, repaired, ambiguous, marker = items_from_completion(
+        raw, [RubricItem("R1", 4, "work")])
+    assert json.loads(raw)["total_score"] == 4
+    assert total == 4
+    assert fence is False
+    assert repaired is False
+    assert ambiguous is False
+    assert marker == ""
+
+
+def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
+    from harness_v2.core.pipeline import Pipeline
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.tests.test_p3_setup import store_at
+    from harness_v2.tests.test_pipeline import _case
+
+    body = _valid_body()
+    same_score = body + "\nconfirmed total_score: 4"
+    different_score = body + "\nrevised total_score: 0"
+    second_object = body + "\n" + body
+    rubric = [RubricItem("R1", 4, "work")]
+    for raw, expect_ambiguous in (
+        (same_score, False),
+        (different_score, True),
+        (second_object, True),
+    ):
+        _items, _total, fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+        assert fence is False
+        assert repaired is True
+        assert ambiguous is expect_ambiguous
+        assert marker == "trailing_text"
+    store = store_at(tmp_path)
+    agreed = Pipeline(store, FixtureProvider(same_score)).run(
+        _case("same", same_score), experiment_id="e", commit="c")
+    assert agreed.outputs["grading"]["status"] == "validated"
+    assert agreed.outputs["grading"]["parse_marker"] == "trailing_text"
+    for name, raw in (("other", different_score), ("again", second_object)):
+        record = Pipeline(store, FixtureProvider(raw)).run(
+            _case(name, raw), experiment_id="e", commit="c")
+        grade = record.outputs["grading"]
+        assert grade["status"] == "review_required"
+        assert grade["failure_reason"] == "parse_ambiguous"
+        assert grade["parse_ambiguous"] is True
+        assert grade["parse_marker"] == "trailing_text"
+        assert any(
+            check["name"] == "parse_ambiguous" and check["detail"] == "trailing_text"
+            for check in grade["checks"]
+        )
+
+
+def test_truncated_text_and_a_non_object_prefix_still_fail():
+    import pytest
+
+    from harness_v2.grading.scorer import ScoringParseError, parse_completion
+
+    for raw in ('{"items":[', "[1, 2] more", 'note {"total_score": 1}'):
+        with pytest.raises(ScoringParseError):
+            parse_completion(raw)
+
+
+def test_latex_repair_runs_before_the_trailing_object_is_read():
+    raw = _raw(r"\frac{1}{2}") + "\nextra note"
+    items, _total, fence, repaired, ambiguous, marker = items_from_completion(
+        raw, [RubricItem("R1", 1, "work")])
+    assert fence is False
+    assert repaired is True
+    assert ambiguous is False
+    assert marker == "trailing_text"
+    assert items[0].math_reason == r"\frac{1}{2}"
+    assert "\f" not in items[0].math_reason
+
+    mixed = _raw(r"\neq") + "\nsee note"
+    rows, _total, fence, repaired, ambiguous, marker = items_from_completion(
+        mixed, [RubricItem("R1", 1, "work")])
+    assert fence is False
+    assert repaired is True
+    assert ambiguous is True
+    assert marker == "newline_or_latex,trailing_text"
+    assert rows[0].math_reason == "\neq"
+    assert "\\" not in rows[0].math_reason
+
+
+def test_fenced_object_with_text_before_the_closing_fence_is_repaired():
+    raw = "```json\n" + _valid_body() + "\nthanks\n```"
+    _items, total, fence, repaired, ambiguous, marker = items_from_completion(
+        raw, [RubricItem("R1", 4, "work")])
+    assert total == 4
+    assert fence is True
+    assert repaired is True
+    assert ambiguous is False
+    assert marker == "trailing_text"
 
 
 def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_path):
@@ -284,18 +427,18 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v3"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v4"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION
     dataset = load_dataset(make_dataset(tmp_path))
     case = dataset.cases[0]
     current = request_id_for(dataset, case, loaded, 1)
-    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v2"}
+    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v3"}
     assert request_id_for(dataset, case, stale, 1) != current
     assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
         identity({"config": reusable_config(stale), "dataset": dataset.manifest, "commit": "c"}))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["completion_parser_version"] = "json_latex_escapes_v2"
+    payload["completion_parser_version"] = "json_latex_escapes_v3"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert load_config(path)["completion_parser_version"] == COMPLETION_PARSER_VERSION

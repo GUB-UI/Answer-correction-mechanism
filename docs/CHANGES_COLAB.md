@@ -1158,3 +1158,10 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - `load_config` は、実行設定に無いとき `thinking_level=minimal` と `max_output_tokens=8192` を入れる。
 - `GemmaAIStudio.generate` を直接呼んだときも、リクエストを作る前に同じ二つを入れ、記録にも残す。明示した `high`、`unset`、別のトークン上限は、その経路の既定を置き換える。
 - `--thinking-level high --max-output-tokens 16384 --wall-clock-limit-s 900` は同時に指定できる。
+
+## dataset_v2: 末尾に文がある JSON オブジェクトも読む
+
+- 完結したトップレベルの JSON オブジェクトが一つだけあり、その後ろが JSON でない文のとき、そのオブジェクトを採点に使う。LaTeX のエスケープ修復のあとで `json.JSONDecoder.raw_decode` する。
+- このときは `parse_repaired` になり、`parse_marker` は `trailing_text` である。検証の残りはそのまま進むので、妥当な採点は `validated` のままになり得る。空白だけの末尾は通常の JSON で、マーカーは付かない。
+- 末尾に別の JSON オブジェクトがある、または先頭のオブジェクトに無い点数が書いてあるときは `parse_ambiguous` になり、採点は `review_required` になる。マーカーは `trailing_text`、改行コマンドも未決定なら `newline_or_latex,trailing_text` である。
+- 完了パーサは `json_latex_escapes_v4` である。`json_latex_escapes_v3` の採点は再利用しない。
