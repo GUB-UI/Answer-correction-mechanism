@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v4"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v5"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -153,57 +153,19 @@ def repair_json_string_escapes(text: str) -> tuple[str, bool]:
     return "".join(out), ambiguous
 
 
+# A stray brace, bracket, or comma is leftover JSON, not prose.
+_JSON_STRUCTURAL = re.compile(r"[{}\[\],]")
 _SCORE_MENTION = re.compile(
-    r'(?<![A-Za-z_])"?(?:total_score|score)"?\s*[:=]\s*(-?\d+(?:\.\d+)?)'
+    r'(?<![A-Za-z_])"?(?:total_score|score)"?\s*[:=]'
 )
 
 
-def _contains_json_object(text: str) -> bool:
-    decoder = json.JSONDecoder()
-    index = 0
-    length = len(text)
-    while index < length:
-        if text[index] != "{":
-            index += 1
-            continue
-        try:
-            value, _end = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            index += 1
-            continue
-        if isinstance(value, dict):
-            return True
-        index += 1
-    return False
-
-
-def _known_scores(loaded: dict) -> list[float]:
-    found: list[float] = []
-    for key in ("total_score", "score"):
-        if key in loaded:
-            number = _number(loaded.get(key))
-            if number is not None:
-                found.append(number)
-    rows = loaded.get("items")
-    if rows is None:
-        rows = loaded.get("rubric_scores")
-    if isinstance(rows, list):
-        for row in rows:
-            if isinstance(row, dict) and "score" in row:
-                number = _number(row.get("score"))
-                if number is not None:
-                    found.append(number)
-    return found
-
-
 def _trailing_is_ambiguous(rest: str, loaded: dict) -> bool:
-    if _contains_json_object(rest):
+    del loaded
+    if _JSON_STRUCTURAL.search(rest):
         return True
-    known = _known_scores(loaded)
-    for match in _SCORE_MENTION.finditer(rest):
-        value = float(match.group(1))
-        if not any(abs(value - item) <= 1e-6 for item in known):
-            return True
+    if _SCORE_MENTION.search(rest):
+        return True
     return False
 
 
@@ -241,7 +203,8 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
     Repair runs even when ``json.loads`` would succeed, so ``\\frac`` and
     ``\\boxed`` are not stored as a form feed or a backspace. A newline that
     also spells a known command is not rewritten. One complete object followed
-    only by non-JSON text is that object, with marker ``trailing_text``.
+    only by prose is that object, with marker ``trailing_text``. A brace,
+    bracket, comma, or score statement after it is ``parse_ambiguous``.
     """
     try:
         loaded, repaired, ambiguous, marker = _load_repaired_json(raw)

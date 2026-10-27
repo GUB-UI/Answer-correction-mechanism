@@ -338,6 +338,30 @@ def test_whitespace_after_one_object_sets_no_trailing_marker():
     assert marker == ""
 
 
+def test_json_leftovers_after_one_object_are_not_validated(tmp_path):
+    from harness_v2.core.pipeline import Pipeline
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.tests.test_p3_setup import store_at
+    from harness_v2.tests.test_pipeline import _case
+
+    body = _valid_body()
+    rubric = [RubricItem("R1", 4, "work")]
+    leftovers = (body + "}", body + ",", body + '\n{"total_score":', body + "[0]", body + "\nthanks, done")
+    for raw in leftovers:
+        _items, _total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+        assert repaired is True
+        assert ambiguous is True
+        assert marker == "trailing_text"
+    store = store_at(tmp_path)
+    record = Pipeline(store, FixtureProvider(leftovers[0])).run(
+        _case("brace", leftovers[0]), experiment_id="e", commit="c")
+    grade = record.outputs["grading"]
+    assert grade["status"] == "review_required"
+    assert grade["total_score"] == 4
+    assert grade["failure_reason"] == "parse_ambiguous"
+    assert grade["parse_ambiguous"] is True
+
+
 def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
     from harness_v2.core.pipeline import Pipeline
     from harness_v2.providers.fixture import FixtureProvider
@@ -350,7 +374,7 @@ def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
     second_object = body + "\n" + body
     rubric = [RubricItem("R1", 4, "work")]
     for raw, expect_ambiguous in (
-        (same_score, False),
+        (same_score, True),
         (different_score, True),
         (second_object, True),
     ):
@@ -360,11 +384,7 @@ def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
         assert ambiguous is expect_ambiguous
         assert marker == "trailing_text"
     store = store_at(tmp_path)
-    agreed = Pipeline(store, FixtureProvider(same_score)).run(
-        _case("same", same_score), experiment_id="e", commit="c")
-    assert agreed.outputs["grading"]["status"] == "validated"
-    assert agreed.outputs["grading"]["parse_marker"] == "trailing_text"
-    for name, raw in (("other", different_score), ("again", second_object)):
+    for name, raw in (("same", same_score), ("other", different_score), ("again", second_object)):
         record = Pipeline(store, FixtureProvider(raw)).run(
             _case(name, raw), experiment_id="e", commit="c")
         grade = record.outputs["grading"]
@@ -427,18 +447,18 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v4"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v5"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION
     dataset = load_dataset(make_dataset(tmp_path))
     case = dataset.cases[0]
     current = request_id_for(dataset, case, loaded, 1)
-    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v3"}
+    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v4"}
     assert request_id_for(dataset, case, stale, 1) != current
     assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
         identity({"config": reusable_config(stale), "dataset": dataset.manifest, "commit": "c"}))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["completion_parser_version"] = "json_latex_escapes_v3"
+    payload["completion_parser_version"] = "json_latex_escapes_v4"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert load_config(path)["completion_parser_version"] == COMPLETION_PARSER_VERSION

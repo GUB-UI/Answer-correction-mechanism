@@ -877,3 +877,7 @@ A completion that is one complete top-level JSON object, then only trailing text
 ## dataset_v2: a retry sends the same prompt
 
 Token counts read from a streamed error are stored under their own names. They no longer replace the prompt. The next attempt sends that same prompt text again.
+
+## dataset_v2: JSON leftovers after one object are not validated
+
+Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
