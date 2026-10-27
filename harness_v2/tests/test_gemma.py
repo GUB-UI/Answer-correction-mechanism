@@ -741,6 +741,36 @@ def test_safety_finish_is_not_validated(tmp_path, monkeypatch) -> None:
     assert "SAFETY" in grade["failure_reason"]
 
 
+def test_retry_resends_the_identical_prompt() -> None:
+    class RemoteProtocolError(Exception):
+        pass
+
+    sent: list[object] = []
+
+    def generate_content_stream(**kwargs):
+        sent.append(kwargs["contents"])
+        if len(sent) == 1:
+            yield SimpleNamespace(
+                text="partial",
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=12, candidates_token_count=3, thoughts_token_count=1),
+            )
+            raise RemoteProtocolError("Server disconnected")
+        yield SimpleNamespace(text="{}", finish_reason="STOP")
+
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: SimpleNamespace(
+            models=SimpleNamespace(generate_content_stream=generate_content_stream)),
+        sleep=lambda _seconds: None, rng=lambda: 0, max_attempts=3,
+    ).generate("grade this sheet", request_id="retry-prompt")
+    assert sent == ["grade this sheet", "grade this sheet"]
+    assert all(isinstance(item, str) for item in sent)
+    assert exchange.status == "ok"
+    assert exchange.attempt_count == 2
+    assert exchange.attempts[0]["prompt_token_count"] == 12
+    assert exchange.raw_response == "{}"
+
+
 def test_disconnect_after_stop_keeps_finish_reason_and_usage() -> None:
     class RemoteProtocolError(Exception):
         pass

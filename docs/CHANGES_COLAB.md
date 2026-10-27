@@ -1165,3 +1165,8 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - このときは `parse_repaired` になり、`parse_marker` は `trailing_text` である。検証の残りはそのまま進むので、妥当な採点は `validated` のままになり得る。空白だけの末尾は通常の JSON で、マーカーは付かない。
 - 末尾に別の JSON オブジェクトがある、または先頭のオブジェクトに無い点数が書いてあるときは `parse_ambiguous` になり、採点は `review_required` になる。マーカーは `trailing_text`、改行コマンドも未決定なら `newline_or_latex,trailing_text` である。
 - 完了パーサは `json_latex_escapes_v4` である。`json_latex_escapes_v3` の採点は再利用しない。
+
+## dataset_v2: 再試行は同じプロンプトを送る
+
+- ストリームのエラーから読んだトークン数は、プロンプトとは別の名前に入れる。プロンプト本文は置き換わらない。
+- 次の試行は、その同じプロンプト文字列を再送する。

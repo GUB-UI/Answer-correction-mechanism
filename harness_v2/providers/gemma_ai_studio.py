@@ -510,11 +510,11 @@ class GemmaAIStudio:
                 reason = _finish_reason(chunk)
                 if reason:
                     finish = reason
-                prompt, output, thoughts = _usage(chunk)
+                prompt_tokens, output_tokens, thought_tokens = _usage(chunk)
                 usage = (
-                    prompt if prompt is not None else usage[0],
-                    output if output is not None else usage[1],
-                    thoughts if thoughts is not None else usage[2],
+                    prompt_tokens if prompt_tokens is not None else usage[0],
+                    output_tokens if output_tokens is not None else usage[1],
+                    thought_tokens if thought_tokens is not None else usage[2],
                 )
                 found_model = _model_returned(chunk)
                 if found_model:
@@ -600,11 +600,11 @@ class GemmaAIStudio:
                 cause = partial.cause if partial is not None else exc
                 code = _status_code(cause)
                 if partial is not None:
-                    prompt, output, thoughts = partial.usage
+                    prompt_tokens, output_tokens, thought_tokens = partial.usage
                     fallback = _usage_from_exception(cause)
-                    input_tokens = prompt if prompt is not None else fallback[0]
-                    output_tokens = output if output is not None else fallback[1]
-                    thoughts = thoughts if thoughts is not None else fallback[2]
+                    input_tokens = prompt_tokens if prompt_tokens is not None else fallback[0]
+                    output_tokens = output_tokens if output_tokens is not None else fallback[1]
+                    thoughts = thought_tokens if thought_tokens is not None else fallback[2]
                     finish_seen = partial.finish
                     raw = partial.visible or _raw_from_exception(cause)
                     model_seen = partial.model
