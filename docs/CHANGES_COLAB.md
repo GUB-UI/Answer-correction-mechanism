@@ -1313,3 +1313,27 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 - `I checked "x=2".` は文である。`"total_score":` と、閉じない引用符は断片のままである。
 - `グラフは3点を通ります。` は点数ではない。`Thanks, (all checks passed).` は文である。`0,0` と `true,false` は曖昧なままである。
 - 完了パーサは `json_latex_escapes_v12` である。
+
+## dataset_v2: OCR の不確実さ v4 と部分点 v5
+
+- `harness_v2_ocr_uncertainty_v4` は `harness_v2_ambiguity_aware_v1` に、OCR の行を書かれたとおりに採点する案内を足したものである。誤読に見える行は `review_reason` に挙げ、確信度は 0.5 以上にする。採点はレビューへ回る。点数に疑いの利益は与えない。
+- 別の読みを使うのは、周りの行がその一つの読みを確かにしているときだけである。転写に無い手順には点を与えない。
+- `harness_v2_ocr_uncertainty_v2` と `harness_v2_partial_credit_v3` は変えない。`harness_v2_partial_credit_v5` は v4 に v3 の部分点の節を足したものである。`--prompt-version` で選べ、版は再利用の識別に入る。
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_ocr_uncertainty_v4 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V4"
+```
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_partial_credit_v5 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V5"
+```

@@ -979,3 +979,25 @@ Replay grades from the dataset snapshot saved beside the run and from the saved 
 ## dataset_v2: a score word stays inside its sentence
 
 A score word is compared only with numbers in the same sentence or clause. `Total is 4. I checked 2 equations.` is not `parse_ambiguous`. `I checked "x=2".` is prose. `"total_score":` is still a fragment, and a lone quote is still a fragment. `グラフは3点を通ります。` is not a score. `Thanks, (all checks passed).` is prose. `0,0` and `true,false` stay ambiguous. The completion parser is `json_latex_escapes_v12`.
+
+## dataset_v2: OCR-uncertainty prompt v4 and partial-credit prompt v5
+
+`harness_v2_ocr_uncertainty_v4` is `harness_v2_ambiguity_aware_v1` plus guidance that grades an OCR line as written. A line that looks like a misread must be named in `review_reason` with uncertainty at least 0.5, so the grade goes to review. The score does not get the benefit of the doubt. Another reading is allowed only when the surrounding lines make that one reading certain. Points are not awarded for a step that is not in the transcript. `harness_v2_ocr_uncertainty_v2` and `harness_v2_partial_credit_v3` are unchanged. `harness_v2_partial_credit_v5` is v4 plus the v3 partial-credit section. `--prompt-version` selects them, and each version is part of the reuse identity.
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_ocr_uncertainty_v4 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V4"
+```
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_partial_credit_v5 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V5"
+```

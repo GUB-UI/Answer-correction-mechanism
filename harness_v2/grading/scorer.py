@@ -525,6 +525,21 @@ _PARTIAL_CREDIT = (
 
 PARTIAL_CREDIT_V3 = OCR_UNCERTAINTY_V2 + _PARTIAL_CREDIT
 
+# v2 told the model not to deduct for a line that might be a misread. That
+# raised scores on real calculation errors. v4 grades the line as written.
+_OCR_UNCERTAINTY_V4 = (
+    " The answer text is an OCR transcript and may contain misreads. "
+    "Grade each line as written. Do not give the score the benefit of the doubt. "
+    "When a line looks like an OCR misread, name it in review_reason and set uncertainty to at least 0.5. "
+    "Do not replace that line with a corrected reading. "
+    "Use another reading only when the surrounding lines make that one reading certain. "
+    "Never award points for a step that is not present in the transcript."
+)
+
+OCR_UNCERTAINTY_V4 = AMBIGUITY_AWARE_V1 + _OCR_UNCERTAINTY_V4
+
+PARTIAL_CREDIT_V5 = OCR_UNCERTAINTY_V4 + _PARTIAL_CREDIT
+
 # Registered instruction variants. "v0" and "harness_v2_default" render the historical prompt byte for
 # byte. Every other name is rejected, so a typo cannot silently run the default prompt.
 PROMPT_VERSIONS = {
@@ -533,6 +548,8 @@ PROMPT_VERSIONS = {
     "harness_v2_ambiguity_aware_v1": AMBIGUITY_AWARE_V1,
     "harness_v2_ocr_uncertainty_v2": OCR_UNCERTAINTY_V2,
     "harness_v2_partial_credit_v3": PARTIAL_CREDIT_V3,
+    "harness_v2_ocr_uncertainty_v4": OCR_UNCERTAINTY_V4,
+    "harness_v2_partial_credit_v5": PARTIAL_CREDIT_V5,
 }
 
 

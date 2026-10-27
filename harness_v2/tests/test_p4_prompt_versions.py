@@ -129,6 +129,118 @@ def test_partial_credit_v3_changes_reuse_identity(tmp_path):
     assert load_config(path)["prompt_version"] == "harness_v2_partial_credit_v3"
 
 
+def test_ocr_uncertainty_v4_grades_a_misread_as_written_and_keeps_v2():
+    from harness_v2.grading.scorer import AMBIGUITY_AWARE_V1, OCR_UNCERTAINTY_V2, OCR_UNCERTAINTY_V4
+
+    v2 = OCR_UNCERTAINTY_V2
+    assert PROMPT_VERSIONS["harness_v2_ocr_uncertainty_v2"] == v2
+    assert PROMPT_VERSIONS["harness_v2_ambiguity_aware_v1"] == AMBIGUITY_AWARE_V1
+    v4 = PROMPT_VERSIONS["harness_v2_ocr_uncertainty_v4"]
+    assert v4 == OCR_UNCERTAINTY_V4
+    assert v4.startswith(AMBIGUITY_AWARE_V1)
+    assert v4 != v2
+    extra = v4[len(AMBIGUITY_AWARE_V1):]
+    assert "OCR transcript" in extra
+    assert "Grade each line as written" in extra
+    assert "benefit of the doubt" in extra
+    assert "review_reason" in extra
+    assert "at least 0.5" in extra
+    assert "surrounding lines" in extra
+    assert "one reading certain" in extra
+    assert "not present" in extra
+    assert "instead of deducting" not in extra
+    assert "do not treat it as a student error by default" not in extra
+    for banned in ("1-A", "2-B", "3-A", "circ", "或", "pi", "reference"):
+        assert banned not in extra
+    assert not any(char.isdigit() and char not in "05" for char in extra)
+    base = json.loads(_default())
+    prompted = json.loads(build_prompt("problem", "x+1", RUBRIC, "harness_v2_ocr_uncertainty_v4"))
+    assert {key: value for key, value in prompted.items() if key != "instructions"} == {
+        key: value for key, value in base.items() if key != "instructions"
+    }
+    assert v2 not in prompted["instructions"]
+    assert extra in prompted["instructions"]
+    assert hashlib.sha256(_default().encode()).hexdigest() == PINNED
+
+
+def test_ocr_uncertainty_v4_changes_reuse_identity(tmp_path):
+    from harness_v2.evaluation.dataset import load_dataset
+    from harness_v2.run import identity, load_config, request_id_for, reusable_config
+    from harness_v2.tests.test_p3_dataset import make_dataset
+    from harness_v2.tests.test_p3_runner import config_at
+
+    path = config_at(tmp_path)
+    loaded = load_config(path)
+    dataset = load_dataset(make_dataset(tmp_path))
+    case = dataset.cases[0]
+    v2 = {**loaded, "prompt_version": "harness_v2_ocr_uncertainty_v2"}
+    v4 = {**loaded, "prompt_version": "harness_v2_ocr_uncertainty_v4"}
+    assert request_id_for(dataset, case, v4, 1) != request_id_for(dataset, case, v2, 1)
+    assert request_id_for(dataset, case, v4, 1) != request_id_for(dataset, case, loaded, 1)
+    assert identity({"config": reusable_config(v4), "dataset": dataset.manifest, "commit": "c"}) != (
+        identity({"config": reusable_config(v2), "dataset": dataset.manifest, "commit": "c"}))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["prompt_version"] = "harness_v2_ocr_uncertainty_v4"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_config(path)["prompt_version"] == "harness_v2_ocr_uncertainty_v4"
+
+
+def test_partial_credit_v5_extends_v4_with_the_v3_section():
+    from harness_v2.grading.scorer import (
+        AMBIGUITY_AWARE_V1,
+        OCR_UNCERTAINTY_V2,
+        OCR_UNCERTAINTY_V4,
+        PARTIAL_CREDIT_V3,
+        PARTIAL_CREDIT_V5,
+    )
+
+    v2 = OCR_UNCERTAINTY_V2
+    v3 = PARTIAL_CREDIT_V3
+    v4 = OCR_UNCERTAINTY_V4
+    v5 = PROMPT_VERSIONS["harness_v2_partial_credit_v5"]
+    assert PROMPT_VERSIONS["harness_v2_partial_credit_v3"] == v3
+    assert PROMPT_VERSIONS["harness_v2_ocr_uncertainty_v2"] == v2
+    assert PROMPT_VERSIONS["harness_v2_ambiguity_aware_v1"] == AMBIGUITY_AWARE_V1
+    assert v5 == PARTIAL_CREDIT_V5
+    assert v5.startswith(v4)
+    assert v5[len(v4):] == v3[len(v2):]
+    assert "For each rubric criterion" in v5[len(v4):]
+    assert "Never award points outside the rubric" in v5[len(v4):]
+    assert "benefit of the doubt" in v5
+    assert "instead of deducting" not in v5
+    base = json.loads(_default())
+    prompted = json.loads(build_prompt("problem", "x+1", RUBRIC, "harness_v2_partial_credit_v5"))
+    assert {key: value for key, value in prompted.items() if key != "instructions"} == {
+        key: value for key, value in base.items() if key != "instructions"
+    }
+    assert v4 in prompted["instructions"]
+    assert v3[len(v2):] in prompted["instructions"]
+    assert hashlib.sha256(_default().encode()).hexdigest() == PINNED
+
+
+def test_partial_credit_v5_changes_reuse_identity(tmp_path):
+    from harness_v2.evaluation.dataset import load_dataset
+    from harness_v2.run import identity, load_config, request_id_for, reusable_config
+    from harness_v2.tests.test_p3_dataset import make_dataset
+    from harness_v2.tests.test_p3_runner import config_at
+
+    path = config_at(tmp_path)
+    loaded = load_config(path)
+    dataset = load_dataset(make_dataset(tmp_path))
+    case = dataset.cases[0]
+    v3 = {**loaded, "prompt_version": "harness_v2_partial_credit_v3"}
+    v4 = {**loaded, "prompt_version": "harness_v2_ocr_uncertainty_v4"}
+    v5 = {**loaded, "prompt_version": "harness_v2_partial_credit_v5"}
+    assert request_id_for(dataset, case, v5, 1) != request_id_for(dataset, case, v4, 1)
+    assert request_id_for(dataset, case, v5, 1) != request_id_for(dataset, case, v3, 1)
+    assert identity({"config": reusable_config(v5), "dataset": dataset.manifest, "commit": "c"}) != (
+        identity({"config": reusable_config(v3), "dataset": dataset.manifest, "commit": "c"}))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["prompt_version"] = "harness_v2_partial_credit_v5"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_config(path)["prompt_version"] == "harness_v2_partial_credit_v5"
+
+
 def test_suffix_names_no_problem_formula_or_score():
     text = PROMPT_VERSIONS['harness_v2_ambiguity_aware_v1']
     for banned in ('1-A', '2-B', '3-A', 'circ', '或', 'pi', 'reference'):
