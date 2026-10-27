@@ -31,6 +31,54 @@ def test_transcription_aware_adds_only_instruction_suffix():
     assert 'transcription errors' in new['instructions'] and 'do not reconstruct' in new['instructions'] and 'at least 0.5' in new['instructions']
 
 
+def test_ocr_uncertainty_v2_extends_v1_and_keeps_the_json_shape():
+    from harness_v2.grading.scorer import AMBIGUITY_AWARE_V1
+
+    v1 = AMBIGUITY_AWARE_V1
+    v2 = PROMPT_VERSIONS["harness_v2_ocr_uncertainty_v2"]
+    assert PROMPT_VERSIONS["harness_v2_ambiguity_aware_v1"] == v1
+    assert v2.startswith(v1)
+    extra = v2[len(v1):]
+    assert "OCR transcript" in extra
+    assert "misreads" in extra
+    assert "do not treat it as a student error by default" in extra
+    assert "Never invent or fill in a correct value" in extra
+    assert "character misread" in extra
+    for banned in ("1-A", "2-B", "3-A", "circ", "或", "pi", "reference"):
+        assert banned not in extra
+    assert not any(char.isdigit() for char in extra)
+    base = json.loads(_default())
+    prompted = json.loads(build_prompt("problem", "x+1", RUBRIC, "harness_v2_ocr_uncertainty_v2"))
+    assert {key: value for key, value in prompted.items() if key != "instructions"} == {
+        key: value for key, value in base.items() if key != "instructions"
+    }
+    assert prompted["instructions"].startswith(base["instructions"])
+    assert v1 in prompted["instructions"]
+    assert extra in prompted["instructions"]
+    assert hashlib.sha256(_default().encode()).hexdigest() == PINNED
+
+
+def test_ocr_uncertainty_v2_changes_reuse_identity(tmp_path):
+    from harness_v2.evaluation.dataset import load_dataset
+    from harness_v2.run import identity, load_config, request_id_for, reusable_config
+    from harness_v2.tests.test_p3_dataset import make_dataset
+    from harness_v2.tests.test_p3_runner import config_at
+
+    path = config_at(tmp_path)
+    loaded = load_config(path)
+    dataset = load_dataset(make_dataset(tmp_path))
+    case = dataset.cases[0]
+    current = request_id_for(dataset, case, loaded, 1)
+    newer = {**loaded, "prompt_version": "harness_v2_ocr_uncertainty_v2"}
+    assert request_id_for(dataset, case, newer, 1) != current
+    assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
+        identity({"config": reusable_config(newer), "dataset": dataset.manifest, "commit": "c"}))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["prompt_version"] = "harness_v2_ocr_uncertainty_v2"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_config(path)["prompt_version"] == "harness_v2_ocr_uncertainty_v2"
+
+
 def test_suffix_names_no_problem_formula_or_score():
     text = PROMPT_VERSIONS['harness_v2_ambiguity_aware_v1']
     for banned in ('1-A', '2-B', '3-A', 'circ', '或', 'pi', 'reference'):

@@ -446,12 +446,25 @@ AMBIGUITY_AWARE_V1 = (
     "Do not raise uncertainty for clear work, including clear mistakes."
 )
 
+_OCR_UNCERTAINTY = (
+    " The answer text is an OCR transcript that may contain misreads. "
+    "When a line contradicts neighbouring lines or the student's own later correct work, "
+    "or contains implausible symbols, do not treat it as a student error by default. "
+    "State the plausible reading and the uncertainty, and lower confidence or mark it for review "
+    "instead of deducting. Never invent or fill in a correct value the transcript does not support. "
+    "Deduct only where the error is clearly the student's, for example when it is consistent with how "
+    "the work continues and is not explainable as a character misread."
+)
+
+OCR_UNCERTAINTY_V2 = AMBIGUITY_AWARE_V1 + _OCR_UNCERTAINTY
+
 # Registered instruction variants. "v0" and "harness_v2_default" render the historical prompt byte for
 # byte. Every other name is rejected, so a typo cannot silently run the default prompt.
 PROMPT_VERSIONS = {
     "v0": "",
     "harness_v2_default": "",
     "harness_v2_ambiguity_aware_v1": AMBIGUITY_AWARE_V1,
+    "harness_v2_ocr_uncertainty_v2": OCR_UNCERTAINTY_V2,
 }
 
 
