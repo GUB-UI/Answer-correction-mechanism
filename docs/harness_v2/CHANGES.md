@@ -925,3 +925,13 @@ A total or score word is no longer limited to 16 characters on either side. Each
 ## dataset_v2: prose commas, non-score 点, fenced confidence, and short probes
 
 A comma between words, such as `thanks, done`, is prose and can stay `validated`. A comma that is not between words is still leftover JSON. `以下の3点を確認` is not a score. `点` counts when it is a score phrase such as `4点` or `得点は4点`, and `合計`, `得点`, `total`, and `score` still mark a score statement. The completion parser is `json_latex_escapes_v9`. The transcript gate reads model confidence through that parser, so a fenced object with confidence at most 0.5 still counts. The two chunk probes wait at most 20 ms and at most the time still left on the case. Each attempt and each chunk wait uses that remaining budget.
+
+## dataset_v2: replay a saved run offline
+
+`replay` reads a baseline output directory, or its `run` directory, and applies the current completion parser and transcript gate to the saved raw completions and transcripts. It does not call a model. A provider failure stays failed, and its score stays missing. The gate defaults to on. The command writes `results.json` and, when every replayed grade finished, `metrics.json`.
+
+```
+python -m harness_v2.evaluation.dataset_v2 replay \
+    --dataset-dir "$DATASET_DIR" --split dev \
+    --run-dir "$SAVED_RUN" --out "$REPLAY_OUT"
+```

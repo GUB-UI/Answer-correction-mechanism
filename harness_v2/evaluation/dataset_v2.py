@@ -13,6 +13,13 @@ and max output tokens are generation settings. The wall-clock limit is not::
         --dataset-dir "$DATASET_DIR" --split dev --provider gemma \\
         --model gemma-4-31b-it --thinking-level minimal \\
         --max-output-tokens 8192 --wall-clock-limit-s 900 --out "$OUT"
+
+Re-apply the current parser and transcript gate to a saved run, with no
+model call::
+
+    python -m harness_v2.evaluation.dataset_v2 replay \\
+        --dataset-dir "$DATASET_DIR" --split dev \\
+        --run-dir "$SAVED_RUN" --out "$REPLAY_OUT"
 """
 from __future__ import annotations
 
@@ -24,8 +31,13 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from harness_v2.core.contracts import Check, GradingResult
 from harness_v2.evaluation.dataset import write_dataset
 from harness_v2.evaluation.reference import optional_score
+from harness_v2.grading.rubric import rubric_from_data
+from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION, ScoringParseError, items_from_completion
+from harness_v2.grading.transcript_quality import apply_transcript_gate
+from harness_v2.grading.validator import validate
 from harness_v2.providers.gemma_ai_studio import (
     DEFAULT_MAX_OUTPUT_TOKENS,
     FAST_BACKOFF_MAX_S,
@@ -234,6 +246,201 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
     private_write_text(metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     result["metrics_path"] = str(metrics_path)
     return result
+
+
+def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
+           transcript_quality_gate: str = "on") -> dict[str, Any]:
+    """Re-parse saved completions and re-apply the transcript gate. No model call.
+
+    ``run_dir`` is a baseline output directory (``run/results.json``) or that
+    ``run`` directory itself. Raw completions and transcripts are read from
+    the saved artifacts. A provider failure is left as a failure, so a score
+    is not filled in from leftover text. The gate defaults to on.
+    """
+    if transcript_quality_gate not in {"on", "off"}:
+        raise ValueError("transcript_quality_gate must be on or off")
+    if split not in SPLITS:
+        raise DatasetV2Error(f"unknown split: {split}")
+    results_path, artifacts = _saved_run(Path(run_dir))
+    saved = _load_json(results_path)
+    if not isinstance(saved, dict) or not isinstance(saved.get("runs"), list):
+        raise DatasetV2Error("saved run has no runs")
+    expected = saved.get("expected_runs")
+    if not isinstance(expected, list):
+        raise DatasetV2Error("saved run has no expected_runs")
+    by_request = {}
+    for job in expected:
+        if isinstance(job, dict) and isinstance(job.get("request_id"), str):
+            by_request[job["request_id"]] = job
+    prepared = _replay_inputs(Path(dataset_dir), split)
+    runs = [
+        _replay_one(run, by_request, prepared, artifacts, transcript_quality_gate)
+        for run in saved["runs"]
+    ]
+    failed = sum(
+        1 for run in runs
+        if isinstance(run.get("outputs"), dict)
+        and isinstance(run["outputs"].get("grading"), dict)
+        and run["outputs"]["grading"].get("status") == "failed"
+    )
+    summary = dict(saved.get("summary") or {})
+    summary.update({
+        "completed": len(runs) - failed,
+        "failed": failed,
+        "pending": 0,
+        "stopped_reason": "",
+    })
+    payload = {
+        **saved,
+        "summary": summary,
+        "runs": runs,
+        "replay": {
+            "completion_parser_version": COMPLETION_PARSER_VERSION,
+            "transcript_quality_gate": transcript_quality_gate,
+            "source_results": str(results_path),
+        },
+    }
+    out = private_directory(Path(out), managed=True)
+    written = out / "results.json"
+    private_write_text(written, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    metrics_path = None
+    if failed == 0:
+        metrics = evaluate(dataset_dir, split, written)
+        metrics_path = out / "metrics.json"
+        private_write_text(
+            metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    return {
+        "results_path": str(written),
+        "metrics_path": None if metrics_path is None else str(metrics_path),
+        "runs": len(runs),
+        "failed": failed,
+    }
+
+
+def _saved_run(run_dir: Path) -> tuple[Path, Path]:
+    if (run_dir / "run" / "results.json").is_file():
+        return run_dir / "run" / "results.json", run_dir / "run" / "artifacts"
+    if (run_dir / "results.json").is_file():
+        return run_dir / "results.json", run_dir / "artifacts"
+    raise DatasetV2Error("saved run has no results.json")
+
+
+def _replay_inputs(root: Path, split: str) -> dict[str, dict[str, Any]]:
+    loaded = _load_split(root)
+    side = loaded[split]
+    stems = _problem_stems(root / "sol_draft")
+    transcripts = _transcripts(root, split, side["ids"], loaded["dev"]["ids"], loaded["holdout"]["ids"])
+    sources: dict[str, dict] = {}
+    prepared: dict[str, dict[str, Any]] = {}
+    for answer_id in side["ids"]:
+        problem = _problem_for(answer_id, stems)
+        if problem not in sources:
+            sources[problem] = _load_problem(root, problem)
+        raw, _filename = transcripts[answer_id]
+        prepared[answer_id] = {
+            "rubric": harness_items(sources[problem]),
+            "transcript": raw.decode("utf-8"),
+        }
+    return prepared
+
+
+def _replay_one(run: Any, by_request: dict[str, dict], prepared: dict[str, dict[str, Any]],
+                artifacts: Path, gate: str) -> dict[str, Any]:
+    if not isinstance(run, dict):
+        raise DatasetV2Error("invalid saved run")
+    copied = copy.deepcopy(run)
+    outputs = copied.get("outputs")
+    if not isinstance(outputs, dict):
+        raise DatasetV2Error("saved run has no outputs")
+    case_id = _replay_case_id(copied, by_request)
+    if case_id not in prepared:
+        raise DatasetV2Error(f"saved run is not in the split: {case_id}")
+    grade = outputs.get("grading")
+    if not isinstance(grade, dict):
+        raise DatasetV2Error(f"saved run has no grade: {case_id}")
+    # A provider failure has no grade to re-parse. Leave its scores untouched.
+    if grade.get("status") == "failed":
+        outputs["replay"] = {
+            "completion_parser_version": COMPLETION_PARSER_VERSION,
+            "transcript_quality_gate": gate,
+            "reparsed": False,
+        }
+        return copied
+    raw = _artifact_text(artifacts, outputs.get("raw_response_artifact"))
+    if raw is None:
+        stored = grade.get("raw_response")
+        raw = stored if isinstance(stored, str) else ""
+    transcript = _artifact_text(artifacts, outputs.get("grading_input_artifact"))
+    if transcript is None:
+        transcript = _artifact_text(artifacts, outputs.get("ocr_artifact"))
+    if transcript is None:
+        transcript = prepared[case_id]["transcript"]
+    request_id = copied.get("request_id")
+    request_id = request_id if isinstance(request_id, str) else case_id
+    outputs["grading"] = _regrade_saved(
+        raw, transcript, prepared[case_id]["rubric"], request_id,
+        provider=str(grade.get("provider") or ""),
+        model_id=str(grade.get("model_id") or ""),
+        gate=gate,
+    )
+    outputs["replay"] = {
+        "completion_parser_version": COMPLETION_PARSER_VERSION,
+        "transcript_quality_gate": gate,
+        "reparsed": True,
+    }
+    return copied
+
+
+def _replay_case_id(run: dict, by_request: dict[str, dict]) -> str:
+    experiment = run.get("outputs", {}).get("experiment_case")
+    if isinstance(experiment, dict) and isinstance(experiment.get("case_id"), str):
+        return experiment["case_id"]
+    job = by_request.get(run.get("request_id"))
+    case_id = job.get("case_id") if isinstance(job, dict) else None
+    if isinstance(case_id, str):
+        return case_id
+    raise DatasetV2Error("saved run has no case id")
+
+
+def _artifact_text(root: Path, name: Any) -> str | None:
+    if not isinstance(name, str) or not name or name.startswith(("/", "\\")) or ".." in Path(name).parts:
+        return None
+    path = root / name
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _regrade_saved(raw: str, transcript: str, rubric_data: list, request_id: str, *,
+                   provider: str, model_id: str, gate: str) -> dict[str, Any]:
+    """Current parser, then the gate. Scores come only from the parsed object."""
+    rubric = rubric_from_data(rubric_data)
+    try:
+        items, total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+    except ScoringParseError as exc:
+        result = GradingResult(
+            status="failed", items=[], total_score=None,
+            max_points=sum(item.max_points for item in rubric) if rubric else None,
+            failure_reason=str(exc), request_id=request_id, provider=provider,
+            model_id=model_id, raw_response=raw,
+        )
+        return result.to_dict()
+    result = validate(
+        rubric, items, total, transcript, request_id=request_id, provider=provider,
+        model_id=model_id, raw_response=raw,
+    )
+    result.parse_repaired = repaired
+    result.parse_ambiguous = ambiguous
+    result.parse_marker = marker
+    if ambiguous and result.status != "failed":
+        result.status = "review_required"
+        parts = [part for part in result.failure_reason.split(",") if part]
+        if "parse_ambiguous" not in parts:
+            parts.append("parse_ambiguous")
+        result.failure_reason = ",".join(parts)
+        result.checks.append(Check("parse_ambiguous", False, marker or "newline_or_latex"))
+    apply_transcript_gate(result, transcript, enabled=gate == "on")
+    return result.to_dict()
 
 
 def evaluate(dataset_dir: Path, split: str, results_path: Path) -> dict[str, Any]:
@@ -921,6 +1128,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     command = sub.add_parser("baseline", help="grade one split and write metrics")
+    replay_command = sub.add_parser("replay", help="reapply the parser and transcript gate offline")
     command.add_argument("--dataset-dir", type=Path, required=True)
     command.add_argument("--split", required=True)
     command.add_argument("--provider", required=True, choices=["gemma", "fixture"])
@@ -948,7 +1156,29 @@ def main(argv: list[str] | None = None) -> int:
                          help="maximum wait after a fast 500/502/503 or disconnect (default 30)")
     command.add_argument("--transcript-quality-gate", choices=["on", "off"], default="off",
                          help="route a garbled or inconsistent transcript to review (default off)")
+    replay_command.add_argument("--dataset-dir", type=Path, required=True)
+    replay_command.add_argument("--split", required=True)
+    replay_command.add_argument("--run-dir", type=Path, required=True,
+                                help="baseline output directory, or its run directory")
+    replay_command.add_argument("--out", type=Path, required=True)
+    replay_command.add_argument("--transcript-quality-gate", choices=["on", "off"], default="on",
+                                help="reapply the transcript gate (default on)")
     args = parser.parse_args(argv)
+    if args.command == "replay":
+        try:
+            result = replay(
+                args.dataset_dir, args.split, args.run_dir, args.out,
+                transcript_quality_gate=args.transcript_quality_gate,
+            )
+        except (DatasetV2Error, ValueError, OSError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({
+            "results_path": result["results_path"],
+            "metrics_path": result["metrics_path"],
+            "runs": result["runs"],
+            "failed": result["failed"],
+        }, ensure_ascii=False))
+        return 0 if result["metrics_path"] else 1
     settings: dict[str, Any] = {
         "temperature": args.temperature,
         "max_output_tokens": args.max_output_tokens,

@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from harness_v2.evaluation.dataset import load_dataset
-from harness_v2.evaluation.dataset_v2 import DatasetV2Error, baseline, convert, evaluate, main, rubric_source
+from harness_v2.evaluation.dataset_v2 import (
+    DatasetV2Error, baseline, convert, evaluate, main, replay, rubric_source,
+)
 from harness_v2.evaluation.independent import prepare_independent_input
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import build_prompt
@@ -1286,6 +1288,133 @@ def test_cli_commit_is_recorded_and_the_default_stays_the_resolver(tmp_path, cap
     assert runs["runs"][0]["commit"] == "pinned-commit-6497"
     assert "pinned-commit-6497" not in (pinned_out / "config.json").read_text(encoding="utf-8")
     capsys.readouterr()
+
+
+def _saved_run(root: Path, raw: str, transcript: str, *, status="validated", total=0,
+              failure_reason="", run_dir: Path | None = None) -> Path:
+    saved = run_dir or (root.parent / "saved")
+    artifacts = saved / "run" / "artifacts"
+    (artifacts / "raw").mkdir(parents=True)
+    (artifacts / "grading").mkdir()
+    (artifacts / "raw" / "case.txt").write_text(raw, encoding="utf-8")
+    (artifacts / "grading" / "case.txt").write_text(transcript, encoding="utf-8")
+    payload = {
+        "summary": {"pending": 0, "failed": 0, "stopped_reason": "", "completed": 1},
+        "expected_runs": [{
+            "request_id": "req-1",
+            "case_id": "9-Z_C_XXXX",
+            "repetition": 1,
+            "problem_id": "9-Z",
+        }],
+        "runs": [{
+            "request_id": "req-1",
+            "outputs": {
+                "grading": {
+                    "status": status,
+                    "total_score": total,
+                    "items": [],
+                    "raw_response": "stale raw",
+                    "failure_reason": failure_reason,
+                },
+                "raw_response_artifact": "raw/case.txt",
+                "grading_input_artifact": "grading/case.txt",
+                "experiment_case": {"case_id": "9-Z_C_XXXX", "repetition": 1},
+            },
+        }],
+    }
+    (saved / "run").mkdir(parents=True, exist_ok=True)
+    (saved / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    return saved
+
+
+def _replay_completion(transcript: str, trailer: str = "\nnoted") -> str:
+    body = json.dumps({
+        "items": [
+            {"item_id": "(1)", "score": 3, "evidence_spans": [{"text": transcript.split("\n")[0]}],
+             "math_reason": "shown", "uncertainty": 0.1, "review_reason": ""},
+            {"item_id": "(2)", "score": 1, "evidence_spans": [{"text": "shown"}],
+             "math_reason": "shown", "uncertainty": 0.1, "review_reason": ""},
+        ],
+        "total_score": 4,
+    }, ensure_ascii=False)
+    return body + trailer
+
+
+def test_replay_reapplies_the_gate_and_parser_without_a_model(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("replay called the model")
+
+    monkeypatch.setattr("harness_v2.providers.gemma_ai_studio.GemmaAIStudio.generate", boom)
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(root, _replay_completion(transcript), transcript, total=0)
+    out = tmp_path / "replay"
+    result = replay(root, "dev", saved, out)
+    assert result["failed"] == 0
+    assert result["metrics_path"]
+    written = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))
+    grade = written["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "validated"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 3
+    assert grade["failure_reason"] == ""
+    assert written["runs"][0]["outputs"]["replay"]["reparsed"] is True
+    metrics = json.loads(Path(result["metrics_path"]).read_text(encoding="utf-8"))
+    assert metrics["exact_match_count"] == 1
+    assert metrics["total_mae"] == 0
+    nested = tmp_path / "from-run-dir"
+    again = replay(root, "dev", saved / "run", nested)
+    assert json.loads(Path(again["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]["total_score"] == 4
+
+
+def test_replay_routes_a_garbled_transcript_without_changing_the_score(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "x + # = 2\nshown"
+    saved = _saved_run(root, _replay_completion(transcript), transcript, total=9)
+    result = replay(root, "dev", saved, tmp_path / "replay")
+    grade = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "review_required"
+    assert grade["failure_reason"] == "transcript_garbled"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 3
+    quiet = replay(root, "dev", saved, tmp_path / "off", transcript_quality_gate="off")
+    off = json.loads(Path(quiet["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert off["status"] == "validated"
+    assert off["total_score"] == 4
+
+
+def test_replay_keeps_a_provider_failure_unfilled(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(
+        root, _replay_completion(transcript), transcript, status="failed", total=None,
+        failure_reason="finish_reason=SAFETY",
+    )
+    result = replay(root, "dev", saved, tmp_path / "replay")
+    assert result["metrics_path"] is None
+    assert result["failed"] == 1
+    grade = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "failed"
+    assert grade["total_score"] is None
+    assert grade["items"] == []
+    assert grade["failure_reason"] == "finish_reason=SAFETY"
+
+
+def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(root, _replay_completion(transcript) + "\n:0", transcript, total=0)
+    out = tmp_path / "replay"
+    assert main([
+        "replay", "--dataset-dir", str(root), "--split", "dev",
+        "--run-dir", str(saved), "--out", str(out),
+    ]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["metrics_path"] == str(out / "metrics.json")
+    grade = json.loads((out / "results.json").read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "review_required"
+    assert "parse_ambiguous" in grade["failure_reason"]
+    assert grade["total_score"] == 4
 
 
 def test_invalid_score_is_not_coerced(tmp_path):
