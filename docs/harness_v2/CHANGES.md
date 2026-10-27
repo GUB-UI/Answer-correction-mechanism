@@ -913,3 +913,7 @@ The transcript gate no longer treats `$`, `|`, `%`, or `&` as stray symbols. `$.
 ## dataset_v2: an abnormal finish is not retried
 
 `SAFETY`, `MAX_TOKENS`, `RECITATION`, `OTHER`, and any other named finish stay terminal when the socket then drops. The attempt records that finish and is not sent again, so a later `STOP` cannot turn the case into provider status `ok`. `MAX_TOKENS` keeps its existing error text. A stream that ends with no finish reason can still be retried. `STOP` followed by a disconnect is unchanged: the failure keeps that finish and its usage.
+
+## dataset_v2: quote and colon fragments after one object are not validated
+
+Trailing text that still contains a double quote, or a colon introducing a number that is not a score statement, is `parse_ambiguous`. That includes `"`, `:0`, and `"total_score":`. A colon in ordinary prose, such as `Note: see the work`, is not a fragment. A score word immediately before a colon, such as `total_score: 4` when 4 is the parsed total, stays a score comparison. The completion parser is `json_latex_escapes_v7`.

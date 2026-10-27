@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v6"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v7"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -155,6 +155,10 @@ def repair_json_string_escapes(text: str) -> tuple[str, bool]:
 
 # A stray brace, bracket, or comma is leftover JSON, not prose.
 _JSON_STRUCTURAL = re.compile(r"[{}\[\],]")
+# A quote, or a colon introducing a number that is not a score statement.
+_COLON_VALUE = re.compile(
+    r":\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+)
 # A full numeric token, so 4e-1 is 0.4 and is not also read as 4.
 _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9_.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])"
@@ -200,8 +204,29 @@ def _score_mention_differs(rest: str, loaded: dict) -> bool:
     return False
 
 
+def _colon_is_score_statement(rest: str, colon_at: int) -> bool:
+    """True when a score word sits immediately before this colon."""
+    prefix = rest[:colon_at].rstrip()
+    match = None
+    for found in _SCORE_WORD.finditer(prefix):
+        match = found
+    return match is not None and match.end() == len(prefix)
+
+
+def _kv_fragment(rest: str) -> bool:
+    """A quote or a colon-value that is not itself a score statement."""
+    if '"' in rest:
+        return True
+    for match in _COLON_VALUE.finditer(rest):
+        if not _colon_is_score_statement(rest, match.start()):
+            return True
+    return False
+
+
 def _trailing_is_ambiguous(rest: str, loaded: dict) -> bool:
     if _JSON_STRUCTURAL.search(rest):
+        return True
+    if _kv_fragment(rest):
         return True
     return _score_mention_differs(rest, loaded)
 
@@ -241,7 +266,8 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
     ``\\boxed`` are not stored as a form feed or a backspace. A newline that
     also spells a known command is not rewritten. One complete object followed
     only by prose is that object, with marker ``trailing_text``. A brace,
-    bracket, comma, or score statement after it is ``parse_ambiguous``.
+    bracket, comma, quote, colon-value fragment, or score statement after it
+    is ``parse_ambiguous``.
     """
     try:
         loaded, repaired, ambiguous, marker = _load_repaired_json(raw)

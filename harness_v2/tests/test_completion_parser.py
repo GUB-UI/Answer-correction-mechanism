@@ -340,6 +340,35 @@ def test_whitespace_after_one_object_sets_no_trailing_marker():
     assert marker == ""
 
 
+def test_quote_or_colon_fragments_are_not_validated():
+    body = _valid_body()
+    rubric = [RubricItem("R1", 4, "work")]
+    zero = body.replace('"total_score":4', '"total_score":0', 1)
+    fragments = (
+        body + '"',
+        body + "\n:0",
+        body + "\n: 0",
+        body + '\n"total_score":',
+        body + '\n"total_score": 4',
+        zero + "\n:0",
+    )
+    for raw in fragments:
+        _items, _total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+        assert repaired is True, raw
+        assert ambiguous is True, raw
+        assert marker == "trailing_text"
+    prose = body + "\nNote: see the work"
+    _items, _total, _fence, repaired, ambiguous, marker = items_from_completion(prose, rubric)
+    assert repaired is True
+    assert ambiguous is False
+    assert marker == "trailing_text"
+    agreed = body + "\nconfirmed total_score: 4"
+    _items, total, _fence, repaired, ambiguous, marker = items_from_completion(agreed, rubric)
+    assert repaired is True
+    assert ambiguous is False
+    assert total == 4
+
+
 def test_json_leftovers_after_one_object_are_not_validated(tmp_path):
     from harness_v2.core.pipeline import Pipeline
     from harness_v2.providers.fixture import FixtureProvider
@@ -491,18 +520,18 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v6"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v7"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION
     dataset = load_dataset(make_dataset(tmp_path))
     case = dataset.cases[0]
     current = request_id_for(dataset, case, loaded, 1)
-    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v5"}
+    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v6"}
     assert request_id_for(dataset, case, stale, 1) != current
     assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
         identity({"config": reusable_config(stale), "dataset": dataset.manifest, "commit": "c"}))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["completion_parser_version"] = "json_latex_escapes_v5"
+    payload["completion_parser_version"] = "json_latex_escapes_v6"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert load_config(path)["completion_parser_version"] == COMPLETION_PARSER_VERSION
