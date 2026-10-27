@@ -567,6 +567,8 @@ class GemmaAIStudio:
         public = {key: value for key, value in dict(settings or {}).items() if key in _SETTINGS_KEYS}
         recorded_settings = redact(public)
         recorded_settings.setdefault("temperature", 0)
+        recorded_settings.setdefault("max_output_tokens", DEFAULT_MAX_OUTPUT_TOKENS)
+        recorded_settings.setdefault("thinking_level", "minimal")
         api_config = _generation_config(recorded_settings)
         recorded = {**recorded_settings, "provider_policy": self._provider_policy()}
         attempts: list[dict[str, Any]] = []

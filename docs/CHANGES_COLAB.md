@@ -1152,3 +1152,9 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 
 - チャンクで `STOP` と使用量を受け取ったあとで接続が切れても、その試行は失敗のまま再送しない。
 - 失敗の記録には、受け取った `finish_reason`、プロンプト、思考、候補のトークン数、および可視の本文を残す。
+
+## dataset_v2: 思考と出力トークンの既定をどの経路でも揃える
+
+- `load_config` は、実行設定に無いとき `thinking_level=minimal` と `max_output_tokens=8192` を入れる。
+- `GemmaAIStudio.generate` を直接呼んだときも、リクエストを作る前に同じ二つを入れ、記録にも残す。明示した `high`、`unset`、別のトークン上限は、その経路の既定を置き換える。
+- `--thinking-level high --max-output-tokens 16384 --wall-clock-limit-s 900` は同時に指定できる。

@@ -90,7 +90,8 @@ def test_cli_fixture_is_offline_and_applies_settings(tmp_path):
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['completed'] == 1
     runs = json.loads((out / 'results.json').read_text())['runs']
-    assert runs[0]['outputs']['settings'] == {'temperature': 0, 'seed': 7}
+    assert runs[0]['outputs']['settings'] == {
+        'temperature': 0, 'max_output_tokens': 8192, 'thinking_level': 'minimal', 'seed': 7}
 
 
 def test_runner_rejects_changed_resume_identity_and_rubric_version(tmp_path):

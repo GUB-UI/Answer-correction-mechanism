@@ -865,3 +865,7 @@ A provider result is graded only when the final `finish_reason` is `STOP`. `MAX_
 ## dataset_v2: keep finish and usage when the socket drops after STOP
 
 If chunks already carried `STOP` and usage metadata, and the connection then drops, that attempt stays a failure and is not sent again. The failure keeps the received `finish_reason`, prompt, thoughts, and candidates token counts, and the visible text.
+
+## dataset_v2: the same thinking and output-token defaults on every path
+
+`load_config` fills `thinking_level=minimal` and `max_output_tokens=8192` when a run config omits them. A direct `GemmaAIStudio.generate` call fills the same two values before it builds the request, and it records those values. An explicit `high`, `unset`, or another token cap replaces the default on that path. `--thinking-level high --max-output-tokens 16384 --wall-clock-limit-s 900` is accepted together.

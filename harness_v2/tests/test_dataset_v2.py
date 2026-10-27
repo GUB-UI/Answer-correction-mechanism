@@ -979,6 +979,46 @@ def test_timeout_policy_is_recorded_and_does_not_block_reuse(tmp_path, capsys):
     assert json.loads((out / "config.json").read_text(encoding="utf-8"))["wall_clock_limit_s"] == 1200
 
 
+def test_cli_records_high_thinking_and_a_16384_token_cap(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+        "--thinking-level", "high", "--max-output-tokens", "16384", "--wall-clock-limit-s", "900",
+    ]) == 0
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["generation_settings"]["thinking_level"] == "high"
+    assert config["generation_settings"]["max_output_tokens"] == 16384
+    assert config["generation_settings"]["temperature"] == 0
+    assert config["wall_clock_limit_s"] == 900
+    assert json.loads(capsys.readouterr().out)["failed"] == 0
+
+
+def test_runner_defaults_match_a_direct_provider_call(tmp_path):
+    from harness_v2.run import load_config
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "name": "baseline", "provider": "gemma", "model": "gemma-4-31b-it",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {"temperature": 0},
+    }), encoding="utf-8")
+    loaded = load_config(path)
+    assert loaded["generation_settings"] == {
+        "temperature": 0, "max_output_tokens": 8192, "thinking_level": "minimal"}
+    path.write_text(json.dumps({
+        "name": "baseline", "provider": "gemma", "model": "gemma-4-31b-it",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {
+            "temperature": 0, "thinking_level": "high", "max_output_tokens": 16384},
+    }), encoding="utf-8")
+    overridden = load_config(path)
+    assert overridden["generation_settings"]["thinking_level"] == "high"
+    assert overridden["generation_settings"]["max_output_tokens"] == 16384
+
+
 def test_thinking_level_and_max_tokens_change_the_reuse_identity(tmp_path):
     root = build_tree(tmp_path / "data")
     out = tmp_path / "out"

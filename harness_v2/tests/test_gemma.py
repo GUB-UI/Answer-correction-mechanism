@@ -469,8 +469,15 @@ def test_thinking_level_and_max_output_tokens_are_recorded_and_sent() -> None:
     assert "thinking_level" not in models.calls[2]["config"]
     assert unset.settings["thinking_level"] == "unset"
     absent = provider.generate("prompt", request_id="absent", settings={"temperature": 0})
-    assert "thinking_config" not in models.calls[3]["config"]
-    assert "thinking_level" not in absent.settings
+    assert models.calls[3]["config"]["max_output_tokens"] == 8192
+    assert models.calls[3]["config"]["thinking_config"] == {"thinking_level": "MINIMAL"}
+    assert absent.settings["thinking_level"] == "minimal"
+    assert absent.settings["max_output_tokens"] == 8192
+    bare = provider.generate("prompt", request_id="bare")
+    assert models.calls[4]["config"]["thinking_config"] == {"thinking_level": "MINIMAL"}
+    assert models.calls[4]["config"]["max_output_tokens"] == 8192
+    assert bare.settings["thinking_level"] == "minimal"
+    assert bare.settings["max_output_tokens"] == 8192
     with pytest.raises(ValueError, match="thinking_level"):
         provider.generate("prompt", request_id="bad", settings={"thinking_level": "low"})
 

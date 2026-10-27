@@ -19,6 +19,7 @@ from harness_v2.evaluation.dataset import Dataset, load_dataset
 from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.providers.fixture import FixtureProvider
 from harness_v2.providers.gemma_ai_studio import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     FAST_BACKOFF_MAX_S,
     FAST_BACKOFF_MIN_S,
     MAX_ATTEMPTS,
@@ -89,8 +90,12 @@ def load_config(path: Path) -> dict:
             raise ValueError('max_output_tokens must be at least 1')
         if name != 'seed' and value < 0:
             raise ValueError(f'{name} must be nonnegative')
-    config = {**config, 'generation_settings': {'temperature': 0, **settings},
-              'completion_parser_version': COMPLETION_PARSER_VERSION}
+    config = {**config, 'generation_settings': {
+        'temperature': 0,
+        'max_output_tokens': DEFAULT_MAX_OUTPUT_TOKENS,
+        'thinking_level': 'minimal',
+        **settings,
+    }, 'completion_parser_version': COMPLETION_PARSER_VERSION}
     config = _with_transport_defaults(config)
     canonical(config)
     return config
