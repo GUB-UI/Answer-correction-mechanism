@@ -1461,6 +1461,9 @@ def test_replay_rejudges_a_parser_or_gate_failure_and_keeps_abnormal_finishes(tm
         root, _replay_completion(garbled), garbled, status="failed", total=None,
         failure_reason="transcript_garbled", run_dir=tmp_path / "gated-src",
     )
+    gated_payload = json.loads((gated / "run" / "results.json").read_text(encoding="utf-8"))
+    gated_payload["runs"][0]["outputs"]["error_class"] = "RuntimeError"
+    (gated / "run" / "results.json").write_text(json.dumps(gated_payload), encoding="utf-8")
     again = replay(root, "dev", gated, tmp_path / "gated")
     gate_grade = json.loads(Path(again["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
     assert gate_grade["status"] == "review_required"
@@ -1490,6 +1493,80 @@ def test_replay_rejudges_a_parser_or_gate_failure_and_keeps_abnormal_finishes(tm
     stale = json.loads(Path(untouched["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
     assert stale["replay"]["reparsed"] is False
     assert stale["grading"]["total_score"] is None
+
+
+def _write_pipeline_exception(saved: Path, *, error_class: str, message: str,
+                             failure_reason: str | None = None) -> None:
+    """The shape pipeline.run writes when an exception escapes a case."""
+    path = saved / "run" / "results.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    reason = failure_reason if failure_reason is not None else f"{error_class}: {message}"
+    run = payload["runs"][0]
+    run["failure_reason"] = reason
+    run["outputs"]["error_class"] = error_class
+    grade = run["outputs"]["grading"]
+    grade["status"] = "failed"
+    grade["total_score"] = None
+    grade["items"] = []
+    grade["raw_response"] = ""
+    grade["failure_reason"] = reason
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_replay_rejudges_a_pipeline_gate_exception_and_keeps_transport_failures(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    raw = _replay_completion(transcript)
+    saved = _saved_run(root, raw, transcript, status="failed", total=None, failure_reason="stale")
+    _write_pipeline_exception(saved, error_class="ValueError", message="transcript gate failed")
+    result = replay(root, "dev", saved, tmp_path / "gate")
+    row = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]
+    assert row["outputs"]["replay"]["reparsed"] is True
+    assert row["outputs"]["grading"]["status"] == "validated"
+    assert row["outputs"]["grading"]["total_score"] == 4
+    assert row["failure_reason"] == ""
+
+    parsed = _saved_run(
+        root, raw, transcript, status="failed", total=None, failure_reason="stale",
+        run_dir=tmp_path / "parse-src",
+    )
+    _write_pipeline_exception(
+        parsed, error_class="ScoringParseError", message="json_parse_failed: Expecting value")
+    reparsed = replay(root, "dev", parsed, tmp_path / "parse")
+    parse_row = json.loads(Path(reparsed["results_path"]).read_text(encoding="utf-8"))["runs"][0]
+    assert parse_row["outputs"]["replay"]["reparsed"] is True
+    assert parse_row["outputs"]["grading"]["total_score"] == 4
+
+    for error_class, message in (
+        ("TimeoutError", "timed out"),
+        ("RemoteProtocolError", "connection dropped"),
+        ("ProviderSetupError", "provider setup failed"),
+        ("MissingAPIKey", "missing key"),
+    ):
+        kept_src = _saved_run(
+            root, raw, transcript, status="failed", total=None, failure_reason="stale",
+            run_dir=tmp_path / error_class,
+        )
+        _write_pipeline_exception(kept_src, error_class=error_class, message=message)
+        kept = replay(root, "dev", kept_src, tmp_path / f"{error_class}-out")
+        kept_row = json.loads(Path(kept["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+        assert kept_row["replay"]["reparsed"] is False
+        assert kept_row["grading"]["status"] == "failed"
+        assert kept_row["grading"]["total_score"] is None
+        assert kept_row["grading"]["failure_reason"] == f"{error_class}: {message}"
+
+    abnormal = _saved_run(
+        root, raw, transcript, status="failed", total=None, failure_reason="stale",
+        run_dir=tmp_path / "safety-src",
+    )
+    _write_pipeline_exception(
+        abnormal, error_class="SAFETY", message="blocked",
+        failure_reason="finish_reason=SAFETY",
+    )
+    safety = replay(root, "dev", abnormal, tmp_path / "safety-out")
+    safety_row = json.loads(Path(safety["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+    assert safety_row["replay"]["reparsed"] is False
+    assert safety_row["grading"]["failure_reason"] == "finish_reason=SAFETY"
 
 
 def test_replay_refuses_to_overwrite_the_source_run(tmp_path):

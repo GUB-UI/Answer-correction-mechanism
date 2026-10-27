@@ -474,24 +474,25 @@ def _replay_one(run: Any, by_request: dict[str, dict], snapshot: dict[str, dict]
 
 _PARSER_OR_GATE = re.compile(
     r"json_parse_failed|json object expected|items array missing|malformed_item|"
-    r"invalid_item_id|ScoringParseError|parse_ambiguous|transcript_|gate_error",
+    r"invalid_item_id|ScoringParseError|JSONDecodeError|parse_ambiguous|transcript_|gate_error",
     re.IGNORECASE,
 )
+# Pipeline records every escaped exception as error_class. These are transport
+# or provider failures and stay failed. A gate or parser exception is not in
+# this set, so a saved raw completion can be judged again.
+_TRANSPORT_OR_PROVIDER = re.compile(
+    r"\b(?:ProviderSetupError|MissingAPIKey|QuotaExceeded|TimeoutError|"
+    r"RemoteProtocolError|LocalProtocolError|ProtocolError|ReadError|WriteError|"
+    r"ConnectError|NetworkError|CloseError|ServerError|StreamEnded|APIError|"
+    r"ClientError|RateLimit|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout)\b",
+    re.IGNORECASE,
+)
+_ABNORMAL_FINISH = frozenset({"SAFETY", "MAX_TOKENS", "RECITATION", "OTHER"})
 
 
-def _rejudge_failure(grade: dict, outputs: dict, raw: str | None) -> bool:
-    """True when a failed row is a parser or gate failure with saved raw text."""
-    if raw is None:
-        return False
-    if outputs.get("error_class"):
-        return False
-    reason = str(grade.get("failure_reason") or "")
-    if "finish_reason=" in reason or re.search(r"\bquota\b", reason, re.IGNORECASE):
-        return False
-    exchange = outputs.get("exchange")
-    if isinstance(exchange, dict) and str(exchange.get("status") or "ok") not in {"ok", ""}:
-        return False
-    if _PARSER_OR_GATE.search(reason):
+def _parser_or_gate_cause(grade: dict, error_class: str, reason: str) -> bool:
+    blob = f"{error_class}\n{reason}"
+    if _PARSER_OR_GATE.search(blob):
         return True
     checks = grade.get("checks")
     if isinstance(checks, list):
@@ -501,7 +502,31 @@ def _rejudge_failure(grade: dict, outputs: dict, raw: str | None) -> bool:
             name = str(check.get("name") or "")
             if name.startswith(("transcript_", "gate_", "parse_")):
                 return True
-    return False
+    # pipeline.run stores an escaped exception as error_class and
+    # "ClassName: message". That is how an old gate failure was saved.
+    return bool(error_class)
+
+
+def _rejudge_failure(grade: dict, outputs: dict, raw: str | None) -> bool:
+    """True when a failed row is a parser or gate failure with saved raw text.
+
+    ``error_class`` is the pipeline's record of an escaped exception. It does
+    not by itself mean the provider failed.
+    """
+    if raw is None:
+        return False
+    reason = str(grade.get("failure_reason") or "")
+    error_class = str(outputs.get("error_class") or "")
+    if error_class in _ABNORMAL_FINISH or "finish_reason=" in reason:
+        return False
+    if re.search(r"\bquota\b", reason, re.IGNORECASE):
+        return False
+    exchange = outputs.get("exchange")
+    if isinstance(exchange, dict) and str(exchange.get("status") or "ok") not in {"ok", ""}:
+        return False
+    if _TRANSPORT_OR_PROVIDER.search(f"{error_class}\n{reason}"):
+        return False
+    return _parser_or_gate_cause(grade, error_class, reason)
 
 
 def _replay_case_id(run: dict, by_request: dict[str, dict]) -> str:

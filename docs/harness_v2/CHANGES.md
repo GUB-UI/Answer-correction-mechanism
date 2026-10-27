@@ -1001,3 +1001,7 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
     --wall-clock-limit-s 900 --transcript-quality-gate off \
     --concurrency 4 --out "$OUT_V5"
 ```
+
+## dataset_v2: replay rejudges a gate exception saved with error_class
+
+`pipeline` stores an escaped exception as `error_class` and `ClassName: message`. Replay judges that row again when the saved raw completion exists and the cause is the parser or the gate. `TimeoutError`, `RemoteProtocolError`, `ProviderSetupError`, `MissingAPIKey`, quota, and `finish_reason` of `SAFETY`, `MAX_TOKENS`, `RECITATION`, or `OTHER` stay failed.

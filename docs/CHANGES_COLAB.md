@@ -1337,3 +1337,8 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
     --wall-clock-limit-s 900 --transcript-quality-gate off \
     --concurrency 4 --out "$OUT_V5"
 ```
+
+## dataset_v2: error_class 付きのゲート例外も再判定する
+
+- `pipeline` は漏れた例外を `error_class` と `ClassName: message` で保存する。原因がパーサまたはゲートで、生の応答が残っていれば replay はそれを再判定する。
+- `TimeoutError`、`RemoteProtocolError`、`ProviderSetupError`、`MissingAPIKey`、quota、および `finish_reason` が `SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER` のものは失敗のままである。
