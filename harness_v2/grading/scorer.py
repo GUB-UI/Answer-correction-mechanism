@@ -458,6 +458,14 @@ _OCR_UNCERTAINTY = (
 
 OCR_UNCERTAINTY_V2 = AMBIGUITY_AWARE_V1 + _OCR_UNCERTAINTY
 
+_PARTIAL_CREDIT = (
+    " For each rubric criterion, quote the transcript evidence and award its listed points if met, "
+    "even if the final answer is wrong. Never award points outside the rubric. "
+    "The total is the sum of the awarded criterion points."
+)
+
+PARTIAL_CREDIT_V3 = OCR_UNCERTAINTY_V2 + _PARTIAL_CREDIT
+
 # Registered instruction variants. "v0" and "harness_v2_default" render the historical prompt byte for
 # byte. Every other name is rejected, so a typo cannot silently run the default prompt.
 PROMPT_VERSIONS = {
@@ -465,6 +473,7 @@ PROMPT_VERSIONS = {
     "harness_v2_default": "",
     "harness_v2_ambiguity_aware_v1": AMBIGUITY_AWARE_V1,
     "harness_v2_ocr_uncertainty_v2": OCR_UNCERTAINTY_V2,
+    "harness_v2_partial_credit_v3": PARTIAL_CREDIT_V3,
 }
 
 

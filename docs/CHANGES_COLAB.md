@@ -1257,3 +1257,9 @@ python -m harness_v2.evaluation.dataset_v2 replay \
 - `harness_v2_ocr_uncertainty_v2` は `harness_v2_ambiguity_aware_v1` に、解答文が OCR の転写であり誤読を含み得るという一般的な案内を足したものである。
 - 隣の行や、生徒自身の後の正しい作業と矛盾する行、または不自然な記号は、既定では生徒の誤りとして扱わない。あり得る読みと不確実さを述べ、減点する代わりに確信度を下げるかレビューに回す。転写が支えない値は補わない。減点するのは、生徒の誤りと明確なときだけである。
 - JSON の形は変えない。`harness_v2_ambiguity_aware_v1` の本文も変えない。`--prompt-version` で選べ、再利用の識別に入る。
+
+## dataset_v2: 部分点のプロンプト v3
+
+- `harness_v2_partial_credit_v3` は `harness_v2_ocr_uncertainty_v2` に部分点の案内を足したものである。
+- ルーブリックの各基準について、転写の根拠を引用し、満たしていれば最終解答が誤っていても、その基準に書かれた点を与える。ルーブリックの外の点は与えない。合計は与えた基準点の和である。
+- JSON の形は変えない。v1 と v2 の本文も変えない。`--prompt-version` で選べ、再利用の識別に入る。

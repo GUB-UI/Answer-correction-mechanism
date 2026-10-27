@@ -79,6 +79,56 @@ def test_ocr_uncertainty_v2_changes_reuse_identity(tmp_path):
     assert load_config(path)["prompt_version"] == "harness_v2_ocr_uncertainty_v2"
 
 
+def test_partial_credit_v3_extends_v2_and_keeps_earlier_prompts():
+    from harness_v2.grading.scorer import AMBIGUITY_AWARE_V1, OCR_UNCERTAINTY_V2
+
+    v2 = OCR_UNCERTAINTY_V2
+    v3 = PROMPT_VERSIONS["harness_v2_partial_credit_v3"]
+    assert PROMPT_VERSIONS["harness_v2_ambiguity_aware_v1"] == AMBIGUITY_AWARE_V1
+    assert PROMPT_VERSIONS["harness_v2_ocr_uncertainty_v2"] == v2
+    assert v3.startswith(v2)
+    extra = v3[len(v2):]
+    assert "For each rubric criterion" in extra
+    assert "quote the transcript evidence" in extra
+    assert "even if the final answer is wrong" in extra
+    assert "Never award points outside the rubric" in extra
+    assert "The total is the sum of the awarded criterion points" in extra
+    for banned in ("1-A", "2-B", "3-A", "circ", "或", "pi", "reference"):
+        assert banned not in extra
+    assert not any(char.isdigit() for char in extra)
+    base = json.loads(_default())
+    prompted = json.loads(build_prompt("problem", "x+1", RUBRIC, "harness_v2_partial_credit_v3"))
+    assert {key: value for key, value in prompted.items() if key != "instructions"} == {
+        key: value for key, value in base.items() if key != "instructions"
+    }
+    assert prompted["instructions"].startswith(base["instructions"])
+    assert v2 in prompted["instructions"]
+    assert extra in prompted["instructions"]
+    assert hashlib.sha256(_default().encode()).hexdigest() == PINNED
+
+
+def test_partial_credit_v3_changes_reuse_identity(tmp_path):
+    from harness_v2.evaluation.dataset import load_dataset
+    from harness_v2.run import identity, load_config, request_id_for, reusable_config
+    from harness_v2.tests.test_p3_dataset import make_dataset
+    from harness_v2.tests.test_p3_runner import config_at
+
+    path = config_at(tmp_path)
+    loaded = load_config(path)
+    dataset = load_dataset(make_dataset(tmp_path))
+    case = dataset.cases[0]
+    v2 = {**loaded, "prompt_version": "harness_v2_ocr_uncertainty_v2"}
+    v3 = {**loaded, "prompt_version": "harness_v2_partial_credit_v3"}
+    assert request_id_for(dataset, case, v3, 1) != request_id_for(dataset, case, v2, 1)
+    assert request_id_for(dataset, case, v3, 1) != request_id_for(dataset, case, loaded, 1)
+    assert identity({"config": reusable_config(v3), "dataset": dataset.manifest, "commit": "c"}) != (
+        identity({"config": reusable_config(v2), "dataset": dataset.manifest, "commit": "c"}))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["prompt_version"] = "harness_v2_partial_credit_v3"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_config(path)["prompt_version"] == "harness_v2_partial_credit_v3"
+
+
 def test_suffix_names_no_problem_formula_or_score():
     text = PROMPT_VERSIONS['harness_v2_ambiguity_aware_v1']
     for banned in ('1-A', '2-B', '3-A', 'circ', '或', 'pi', 'reference'):

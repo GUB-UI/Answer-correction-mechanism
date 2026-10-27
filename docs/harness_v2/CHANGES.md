@@ -939,3 +939,7 @@ python -m harness_v2.evaluation.dataset_v2 replay \
 ## dataset_v2: OCR-uncertainty prompt v2
 
 `harness_v2_ocr_uncertainty_v2` is `harness_v2_ambiguity_aware_v1` plus general guidance that the answer text is an OCR transcript and may contain misreads. A line that contradicts neighbouring lines or the student's own later correct work, or that contains implausible symbols, is not treated as a student error by default. The grader states the plausible reading and the uncertainty, and lowers confidence or marks the item for review instead of deducting. It does not invent a value the transcript does not support. A deduction is only for an error that is clearly the student's. The JSON object shape is unchanged. `harness_v2_ambiguity_aware_v1` is unchanged. `--prompt-version` selects it, and the version is part of the reuse identity.
+
+## dataset_v2: partial-credit prompt v3
+
+`harness_v2_partial_credit_v3` is `harness_v2_ocr_uncertainty_v2` plus partial-credit guidance. For each rubric criterion, the grader quotes the transcript evidence and awards that criterion's listed points when they are met, even if the final answer is wrong. Points outside the rubric are not awarded. The total is the sum of the awarded criterion points. The JSON object shape is unchanged. The v1 and v2 texts are unchanged. `--prompt-version` selects it, and the version is part of the reuse identity.
