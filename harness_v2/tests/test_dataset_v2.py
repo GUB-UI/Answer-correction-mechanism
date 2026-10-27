@@ -666,6 +666,12 @@ def test_metrics_compare_totals_and_subquestions_without_filling_gaps(tmp_path):
         "problem": "9-Z", "n_evaluated": 1, "total_mae": 0, "total_mae_count": 1,
         "exact_match_count": 1, "exact_match_denominator": 1, "exact_match_rate": 1,
         "subquestion_mae": 0, "subquestion_mae_count": 2,
+        "total_bias": 0, "total_over_score_count": 0, "total_over_score_sum": 0,
+        "total_over_score_max": None, "total_under_score_count": 0,
+        "subquestion_bias": 0, "subquestion_over_score_count": 0, "subquestion_over_score_sum": 0,
+        "subquestion_over_score_max": None, "subquestion_under_score_count": 0,
+        "review_required_count": 0, "review_required_rate": 0,
+        "validated_miss_count": 0, "review_caught_miss_count": 0,
     }]
     assert metrics["n_evaluated"] == 1
     assert SENTINEL not in json.dumps(metrics)
@@ -768,6 +774,54 @@ def test_mae_exact_match_and_per_problem_table(tmp_path):
     assert flagged["answer_id"] == "9-Z_C_XXXX"
     assert flagged["exact_total"] is False
     assert flagged["abs_error"] == 2
+
+
+def test_bias_over_score_and_review_misses(tmp_path):
+    root = build_tree(
+        tmp_path / "data",
+        dev_ids=["9-Z_C_XXXX", "9-Z_C_YYYY", "9-Z_C_NEAR"],
+        transcripts={
+            "dev": {"9-Z_C_XXXX": "x\n", "9-Z_C_YYYY": "y\n", "9-Z_C_NEAR": "z\n"},
+            "holdout": {"9-Z_A_HHHH": "h\n"},
+        },
+    )
+    scores = _scores()
+    scores["count"] = 4
+    scores["answers"].extend([
+        {"answer_id": "9-Z_C_YYYY", "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 4, "max": 4}],
+         "total": 7},
+        {"answer_id": "9-Z_C_NEAR", "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 1, "max": 4}],
+         "total": 4},
+    ])
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    results = _write_results(tmp_path / "results.json", [
+        _dev_grade(total=6, items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 3}]),
+        _dev_grade(answer_id="9-Z_C_YYYY", total=5, status="review_required",
+                   items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 2}]),
+        _dev_grade(answer_id="9-Z_C_NEAR", total=4.5,
+                   items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 1.5}]),
+    ])
+    metrics = evaluate(root, "dev", results)
+    assert metrics["total_bias"] == pytest.approx(0.5 / 3)
+    assert metrics["total_over_score_count"] == 2
+    assert metrics["total_over_score_sum"] == pytest.approx(2.5)
+    assert metrics["total_over_score_max"] == 2
+    assert metrics["total_under_score_count"] == 1
+    assert metrics["subquestion_bias"] == pytest.approx(0.5 / 6)
+    assert metrics["subquestion_over_score_count"] == 2
+    assert metrics["subquestion_over_score_sum"] == pytest.approx(2.5)
+    assert metrics["subquestion_over_score_max"] == 2
+    assert metrics["subquestion_under_score_count"] == 1
+    assert metrics["review_required_count"] == 1
+    assert metrics["review_required_rate"] == pytest.approx(1 / 3)
+    assert metrics["validated_miss_count"] == 1
+    assert metrics["review_caught_miss_count"] == 1
+    assert metrics["per_problem"][0]["validated_miss_count"] == 1
+    near = next(row for row in metrics["per_answer"] if row["answer_id"] == "9-Z_C_NEAR")
+    assert near["abs_error"] == pytest.approx(0.5)
+    assert near["grading_status"] == "validated"
 
 
 def test_null_prediction_is_not_an_exact_match_or_a_zero(tmp_path):

@@ -734,6 +734,7 @@ def _observations(results_path: Path, side: dict, reference: dict) -> list[dict]
             "problem": problem_id,
             "repetition": repetition,
             "excluded": excluded,
+            "grading_status": grade.get("status"),
             "predicted_total": _optional_number(grade, "total_score", case_id),
             "predicted_subs": _predicted_subs(grade.get("items", []), case_id),
             "reference_total": None if row is None else row["total"],
@@ -818,6 +819,7 @@ def _answer_row(row: dict) -> dict[str, Any]:
         "reference_total": row["reference_total"],
         "abs_error": _abs(row["predicted_total"], row["reference_total"]),
         "exact_total": _same(row["predicted_total"], row["reference_total"]),
+        "grading_status": row.get("grading_status"),
         "subquestions": subs,
     }
 
@@ -832,6 +834,18 @@ def _aggregate(rows: list[dict]) -> dict[str, Any]:
         for item in row["subquestions"]
         if item["abs_error"] is not None
     ]
+    total_signed = [
+        delta for delta in (_signed(row["predicted_total"], row["reference_total"]) for row in rows)
+        if delta is not None
+    ]
+    sub_signed = [
+        delta
+        for row in rows
+        for item in row["subquestions"]
+        if (delta := _signed(item["predicted"], item["reference"])) is not None
+    ]
+    review_count = sum(row.get("grading_status") == "review_required" for row in rows)
+    large = [row for row in rows if _large_miss(row["abs_error"])]
     return {
         "total_mae": _mean(total_errors),
         "total_mae_count": len(total_errors),
@@ -840,7 +854,39 @@ def _aggregate(rows: list[dict]) -> dict[str, Any]:
         "exact_match_rate": _mean([1.0 if row["exact_total"] else 0.0 for row in exact_rows]),
         "subquestion_mae": _mean(sub_errors),
         "subquestion_mae_count": len(sub_errors),
+        **_prefixed("total", _direction(total_signed)),
+        **_prefixed("subquestion", _direction(sub_signed)),
+        "review_required_count": review_count,
+        "review_required_rate": None if not rows else review_count / len(rows),
+        "validated_miss_count": sum(row.get("grading_status") != "review_required" for row in large),
+        "review_caught_miss_count": sum(row.get("grading_status") == "review_required" for row in large),
     }
+
+
+def _direction(errors: list[float]) -> dict[str, Any]:
+    over = [value for value in errors if value > 1e-6]
+    under = [value for value in errors if value < -1e-6]
+    return {
+        "bias": _mean(errors),
+        "over_score_count": len(over),
+        "over_score_sum": None if not errors else sum(over),
+        "over_score_max": max(over) if over else None,
+        "under_score_count": len(under),
+    }
+
+
+def _prefixed(prefix: str, stats: dict[str, Any]) -> dict[str, Any]:
+    return {f"{prefix}_{name}": value for name, value in stats.items()}
+
+
+def _signed(predicted: float | None, reference: float | None) -> float | None:
+    if predicted is None or reference is None:
+        return None
+    return predicted - reference
+
+
+def _large_miss(error: float | None) -> bool:
+    return error is not None and error >= 1
 
 
 def _abs(predicted: float | None, reference: float | None) -> float | None:

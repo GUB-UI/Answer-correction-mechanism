@@ -882,6 +882,10 @@ Token counts read from a streamed error are stored under their own names. They n
 
 Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
 
+## dataset_v2: evaluation reports bias and review misses
+
+Metrics add signed bias, over-score count, sum, and max, and under-score count, for totals and for sub-scores that both exist. A missing score stays missing. They also add the `review_required` count and rate, the validated-miss count (`|predicted - reference| >= 1` and not `review_required`), and the count of those misses that `review_required` caught. The same fields are on each problem row.
+
 ## dataset_v2: a short timeout stays on its own case
 
 A reused provider builds a new client when the next case needs a longer socket timeout. The shortened timeout from the previous case is not reused. A backoff that uses the last of the case budget is included in that case's latency.
