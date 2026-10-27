@@ -111,3 +111,38 @@ def test_low_reported_confidence_with_a_fullwidth_mix(tmp_path):
     assert grade["status"] == "review_required"
     assert grade["failure_reason"] == "transcript_garbled"
     assert grade["total_score"] == 4
+
+
+def test_superscripts_are_exponents_and_do_not_fail_the_grade(tmp_path):
+    assert transcript_reasons("x\u00b2 = 4\nx = 2") == []
+    assert transcript_reasons("2\u00b3 = 8\n2\u00b2 = 4") == []
+    assert transcript_reasons("10\u207b\u00b2 = 0.01\ny = 1") == []
+    assert transcript_reasons("x\u00b2 = 4\nx = 3") == ["transcript_inconsistent"]
+    grade, _flag = _run(tmp_path, "x\u00b2 = 4\nx = 2", gate="on")
+    assert grade["status"] == "validated"
+    assert grade["failure_reason"] == ""
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 4
+    disagree = tmp_path / "disagree"
+    disagree.mkdir()
+    flagged, _flag = _run(disagree, "x\u00b2 = 4\nx = 3", gate="on")
+    assert flagged["status"] == "review_required"
+    assert flagged["failure_reason"] == "transcript_inconsistent"
+    assert flagged["total_score"] == 4
+    assert flagged["items"][0]["score"] == 4
+
+
+def test_a_gate_error_records_the_error_and_keeps_the_grade(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("gate blew up")
+
+    monkeypatch.setattr("harness_v2.grading.transcript_quality.transcript_reasons", boom)
+    grade, flag = _run(tmp_path, "x + 1 = 2", gate="on")
+    assert flag == "on"
+    assert grade["status"] == "validated"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 4
+    assert grade["failure_reason"] == ""
+    assert "transcript_garbled" not in grade["failure_reason"]
+    errors = [check for check in grade["checks"] if check["name"] == "gate_error"]
+    assert errors == [{"name": "gate_error", "ok": False, "detail": "RuntimeError"}]

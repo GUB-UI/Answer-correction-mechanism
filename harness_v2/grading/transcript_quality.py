@@ -2,21 +2,24 @@
 
 The checks never change a score and never read a reference score or a problem
 id. They only route a grade to review_required. The gate is off unless the
-run sets transcript_quality_gate to "on".
+run sets transcript_quality_gate to "on". An error inside the gate records
+gate_error and leaves the grade as the model wrote it.
 
 A clear garble is transcript_garbled: a replacement or control character, an
 unbalanced bracket or fraction, a stray symbol on a math line, or a Cyrillic
 letter mixed into another script. A numeric contradiction between two
 consecutive simple equations is transcript_inconsistent. Both sides are
 compared only when a safe arithmetic evaluator, with no eval, can reduce them
-to numbers. A question mark on a math line, or a fullwidth Latin letter mixed
-with an ASCII letter, is a flag. That flag routes to review only together
-with model uncertainty of at least 0.5 or a model confidence of at most 0.5.
+to numbers. Superscript digits are exponents. A question mark on a math line,
+or a fullwidth Latin letter mixed with an ASCII letter, is a flag. That flag
+routes to review only together with model uncertainty of at least 0.5 or a
+model confidence of at most 0.5.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import unicodedata
 from typing import Any
 
@@ -28,6 +31,9 @@ _CONFIDENCE_AT = 0.5
 _STRAY = set("#$@~`|&%§¶†‡•◆■□●○※\ufffd")
 _CLOSERS = {")": "(", "]": "[", "}": "{"}
 _FRAC = ("\\dfrac", "\\tfrac", "\\frac")
+_SUPER_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
+_MAX_ABS_EXPONENT = 8
+_MAX_ABS_POWER = 1e12
 
 
 class _BadExpr(Exception):
@@ -38,7 +44,11 @@ def apply_transcript_gate(result: GradingResult, text: str, *, enabled: bool) ->
     """Route to review when the gate is on. Scores stay as the model wrote them."""
     if not enabled or result.status == "failed":
         return
-    reasons = transcript_reasons(text, low_confidence=_low_confidence(result))
+    try:
+        reasons = transcript_reasons(text, low_confidence=_low_confidence(result))
+    except Exception as exc:
+        result.checks.append(Check("gate_error", False, type(exc).__name__))
+        return
     if not reasons:
         return
     if result.status == "validated":
@@ -253,15 +263,16 @@ def _tokenize(text: str) -> list[str]:
             tokens.append("/")
             index += 1
             continue
-        if char.isdigit() or char == ".":
+        if ("0" <= char <= "9") or char == ".":
             start = index
             index += 1
-            while index < length and (text[index].isdigit() or text[index] == "."):
+            while index < length and (("0" <= text[index] <= "9") or text[index] == "."):
                 index += 1
             token = text[start:index]
-            if token.count(".") > 1 or not any(item.isdigit() for item in token):
+            if token.count(".") > 1 or not any("0" <= item <= "9" for item in token):
                 raise _BadExpr()
             tokens.append(token)
+            index = _attach_power(text, index, tokens)
             continue
         if char.isascii() and char.isalpha():
             start = index
@@ -269,9 +280,29 @@ def _tokenize(text: str) -> list[str]:
             while index < length and text[index].isascii() and (text[index].isalnum() or text[index] == "_"):
                 index += 1
             tokens.append(text[start:index])
+            index = _attach_power(text, index, tokens)
             continue
         raise _BadExpr()
     return tokens
+
+
+def _attach_power(text: str, index: int, tokens: list[str]) -> int:
+    sign = ""
+    if index < len(text) and text[index] in "⁺⁻":
+        if index + 1 >= len(text) or text[index + 1] not in "⁰¹²³⁴⁵⁶⁷⁸⁹":
+            raise _BadExpr()
+        sign = "-" if text[index] == "⁻" else ""
+        index += 1
+    if index >= len(text) or text[index] not in "⁰¹²³⁴⁵⁶⁷⁸⁹":
+        return index
+    start = index
+    while index < len(text) and text[index] in "⁰¹²³⁴⁵⁶⁷⁸⁹":
+        index += 1
+    tokens.append("**")
+    if sign:
+        tokens.append("-")
+    tokens.append(text[start:index].translate(_SUPER_DIGITS))
+    return index
 
 
 class _ExprParser:
@@ -306,10 +337,17 @@ class _ExprParser:
         return node
 
     def factor(self) -> Any:
-        token = self.peek()
-        if token == "-":
+        if self.peek() == "-":
             self.eat()
             return ("neg", self.factor())
+        node = self._atom()
+        if self.peek() == "**":
+            self.eat("**")
+            node = ("bin", "**", node, self.factor())
+        return node
+
+    def _atom(self) -> Any:
+        token = self.peek()
         if token == "(":
             self.eat()
             node = self.expr()
@@ -319,7 +357,10 @@ class _ExprParser:
             raise _BadExpr()
         self.eat()
         if token[0].isdigit() or token[0] == ".":
-            return ("num", float(token))
+            try:
+                return ("num", float(token))
+            except (ValueError, OverflowError):
+                raise _BadExpr() from None
         if token[0].isalpha():
             return ("name", token)
         raise _BadExpr()
@@ -349,4 +390,14 @@ def _eval_arith(node: Any, env: dict[str, float]) -> float | None:
         return left * right
     if op == "/" and right != 0:
         return left / right
+    if op == "**":
+        if abs(right) > _MAX_ABS_EXPONENT or abs(left) > _MAX_ABS_POWER:
+            return None
+        try:
+            value = left ** right
+        except (OverflowError, ValueError, ArithmeticError):
+            return None
+        if isinstance(value, complex) or not math.isfinite(value) or abs(value) > _MAX_ABS_POWER:
+            return None
+        return float(value)
     return None

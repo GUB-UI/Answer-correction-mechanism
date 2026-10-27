@@ -901,3 +901,7 @@ Each chunk wait is limited to the time still left on the case, and to the socket
 ## dataset_v2: a trailing total is compared with the total
 
 A number next to a total or score word is compared with the parsed total, not with an item score. English words include `total`, `score`, and `revised`. Japanese words include `合計`, `点`, and `訂正`. A different number is `parse_ambiguous` and the grade is `review_required`. The same total is not. `4e-1` is one number, 0.4, and is not read as 4. The completion parser is `json_latex_escapes_v6`.
+
+## dataset_v2: a transcript-gate error keeps the grade
+
+An exception inside the transcript gate no longer replaces the grade with `failed` or clears the scores. The gate records a `gate_error` check with the exception type and adds no transcript flag. Superscript digits such as `²` are exponents in the arithmetic check, so `x² = 4` beside `x = 2` is consistent and `x² = 4` beside `x = 3` is `transcript_inconsistent`. The check still does not change a score.
