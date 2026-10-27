@@ -914,6 +914,34 @@ def test_max_tokens_then_disconnect_without_json_stays_terminal() -> None:
     assert exchange.attempts[0]["error_class"] == "MAX_TOKENS"
 
 
+def test_chunk_probe_waits_stay_inside_the_remaining_budget() -> None:
+    import threading
+
+    joins: list[float | None] = []
+    real_join = threading.Thread.join
+
+    def spy(self, timeout=None):
+        if self.name == "gemma-chunk-read":
+            joins.append(timeout)
+        return real_join(self, timeout)
+
+    threading.Thread.join = spy
+    try:
+        def generate_content_stream(**_kwargs):
+            yield SimpleNamespace(text="{}", finish_reason="STOP")
+
+        GemmaAIStudio(
+            client_factory=lambda **_kwargs: SimpleNamespace(
+                models=SimpleNamespace(generate_content_stream=generate_content_stream)),
+            monotonic=lambda: 0.0, sleep=lambda _seconds: None, wall_clock_limit_s=0.01,
+        ).generate("prompt", request_id="short-probe")
+    finally:
+        threading.Thread.join = real_join
+    assert joins
+    assert all(item is not None and item <= 0.01 + 1e-9 for item in joins)
+    assert all(item < 0.02 for item in joins)
+
+
 def test_disconnect_after_stop_keeps_finish_reason_and_usage() -> None:
     class RemoteProtocolError(Exception):
         pass

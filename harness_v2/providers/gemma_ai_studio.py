@@ -19,7 +19,7 @@ API_KEY_ENV = "GEMINI_API_KEY"
 AI_STUDIO_ENDPOINT = "https://generativelanguage.googleapis.com"
 MAX_ATTEMPTS = 3
 # Older configs still name a per-call deadline. generate() does not grow it.
-# The HTTP timeout is the case wall clock, once, for every attempt.
+# Each attempt and each chunk wait uses the time still left on the case.
 REQUEST_TIMEOUT_S = 600
 REQUEST_TIMEOUT_CAP_S = 1800
 DEADLINE_GROWTH = 2
@@ -546,12 +546,12 @@ class GemmaAIStudio:
         started = self._monotonic()
         limit = started + timeout_s
         worker.start()
-        worker.join(0.02)
+        self._join_budget(worker, limit)
         if not worker.is_alive():
             return self._finish_pull(box)
         mono_before = self._monotonic()
         real_before = time.perf_counter()
-        worker.join(0.02)
+        self._join_budget(worker, limit)
         if not worker.is_alive():
             return self._finish_pull(box)
         real_delta = time.perf_counter() - real_before
@@ -575,6 +575,12 @@ class GemmaAIStudio:
             self._drop_client()
             raise TimeoutError("wall-clock limit")
         return self._finish_pull(box)
+
+    def _join_budget(self, worker: threading.Thread, limit: float) -> None:
+        remaining = limit - self._monotonic()
+        if remaining <= 0:
+            return
+        worker.join(min(0.02, remaining))
 
     def _finish_pull(self, box: dict[str, Any]) -> Any:
         if box.get("stop"):

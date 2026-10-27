@@ -16,16 +16,17 @@ ampersands, absolute-value bars, percent signs, half-open intervals, and
 question mark on a math line, or a fullwidth Latin letter mixed with an
 ASCII letter, is a flag. That flag routes to review only together with model
 uncertainty of at least 0.5 or a model confidence of at most 0.5.
+Confidence is read with the completion parser, so a fenced object counts.
 """
 
 from __future__ import annotations
 
-import json
 import math
 import unicodedata
 from typing import Any
 
 from harness_v2.core.contracts import Check, GradingResult
+from harness_v2.grading.scorer import parse_completion
 
 TRANSCRIPT_GARBLED = "transcript_garbled"
 TRANSCRIPT_INCONSISTENT = "transcript_inconsistent"
@@ -91,8 +92,8 @@ def _low_confidence(result: GradingResult) -> bool:
 
 def _object(raw: str) -> dict[str, Any] | None:
     try:
-        loaded = json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
+        loaded, *_ignored = parse_completion(raw)
+    except Exception:
         return None
     return loaded if isinstance(loaded, dict) else None
 

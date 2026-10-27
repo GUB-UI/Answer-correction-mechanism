@@ -377,7 +377,7 @@ def test_json_leftovers_after_one_object_are_not_validated(tmp_path):
 
     body = _valid_body()
     rubric = [RubricItem("R1", 4, "work")]
-    leftovers = (body + "}", body + ",", body + '\n{"total_score":', body + "[0]", body + "\nthanks, done")
+    leftovers = (body + "}", body + ",", body + '\n{"total_score":', body + "[0]")
     for raw in leftovers:
         _items, _total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
         assert repaired is True
@@ -391,6 +391,12 @@ def test_json_leftovers_after_one_object_are_not_validated(tmp_path):
     assert grade["total_score"] == 4
     assert grade["failure_reason"] == "parse_ambiguous"
     assert grade["parse_ambiguous"] is True
+    prose = body + "\nthanks, done"
+    _items, total, _fence, repaired, ambiguous, marker = items_from_completion(prose, rubric)
+    assert repaired is True
+    assert ambiguous is False
+    assert marker == "trailing_text"
+    assert total == 4
 
 
 def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
@@ -463,6 +469,32 @@ def test_a_trailing_total_is_not_confused_with_an_item_score():
         assert total == pytest.approx(expect_total)
 
 
+def test_a_score_statement_is_found_anywhere_in_the_trailing_text():
+    body = _valid_body()
+    rubric = [RubricItem("R1", 4, "work")]
+    gap = " word" * 8
+    assert len(gap) > 16
+    samples = {
+        body + "\ntotal" + gap + " 0": True,
+        body + "\n合計" + ("あ" * 40) + "は4": False,
+        body + "\n合計" + ("あ" * 40) + "は0点": True,
+        body + "\n7点です": True,
+        body + "\n4点です": False,
+        body + "\n0 then" + gap + "total is 4": False,
+        body + "\nThe work uses 12 and 7 before any conclusion.": False,
+        body + "\n以下の3点を確認": False,
+        body + "\n次の3点について": False,
+        body + "\n得点は0点": True,
+        body + "\n得点は4点": False,
+    }
+    for raw, expect_ambiguous in samples.items():
+        _items, total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+        assert repaired is True
+        assert ambiguous is expect_ambiguous, raw[len(body):]
+        assert marker == "trailing_text"
+        assert total == 4
+
+
 def test_scientific_notation_is_one_number():
     from harness_v2.grading.scorer import _number_tokens
 
@@ -520,18 +552,18 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v7"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v9"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION
     dataset = load_dataset(make_dataset(tmp_path))
     case = dataset.cases[0]
     current = request_id_for(dataset, case, loaded, 1)
-    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v6"}
+    stale = {**loaded, "completion_parser_version": "json_latex_escapes_v8"}
     assert request_id_for(dataset, case, stale, 1) != current
     assert identity({"config": reusable_config(loaded), "dataset": dataset.manifest, "commit": "c"}) != (
         identity({"config": reusable_config(stale), "dataset": dataset.manifest, "commit": "c"}))
     payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["completion_parser_version"] = "json_latex_escapes_v6"
+    payload["completion_parser_version"] = "json_latex_escapes_v8"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert load_config(path)["completion_parser_version"] == COMPLETION_PARSER_VERSION

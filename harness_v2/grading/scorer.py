@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v7"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v9"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -153,8 +153,8 @@ def repair_json_string_escapes(text: str) -> tuple[str, bool]:
     return "".join(out), ambiguous
 
 
-# A stray brace, bracket, or comma is leftover JSON, not prose.
-_JSON_STRUCTURAL = re.compile(r"[{}\[\],]")
+# A stray brace or bracket is leftover JSON. A comma between words is prose.
+_JSON_STRUCTURAL = re.compile(r"[{}\[\]]")
 # A quote, or a colon introducing a number that is not a score statement.
 _COLON_VALUE = re.compile(
     r":\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
@@ -164,10 +164,15 @@ _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9_.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])"
 )
 _SCORE_WORD = re.compile(
-    r"(?<![A-Za-z_])(?:total_score|score|revised|total)(?![A-Za-z_])|合計|訂正|点",
+    r"(?<![A-Za-z_])(?:total_score|score|revised|total)(?![A-Za-z_])|合計|得点|訂正",
     re.IGNORECASE,
 )
-_SCORE_WINDOW = 16
+# N点 is a score only as a score phrase. 以下の3点を確認 is not one.
+_SCORE_TEN = re.compile(
+    r"(?<![A-Za-z0-9_.])(?P<number>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*点"
+    r"(?!を確認|について|がある|を挙げ|を述べ|を見る|を説明)"
+)
+_LIST_INTRO = ("以下の", "次の", "この", "その", "あの")
 
 
 def _number_tokens(text: str) -> list[float]:
@@ -191,15 +196,68 @@ def _parsed_total(loaded: dict) -> float | None:
     return None
 
 
+def _number_ending_at(text: str, index: int) -> float | None:
+    """The number token that ends at index, ignoring trailing spaces."""
+    prefix = text[:index].rstrip()
+    for match in _NUMBER_TOKEN.finditer(prefix):
+        if match.end() != len(prefix):
+            continue
+        try:
+            value = float(match.group(0))
+        except ValueError:
+            return None
+        return value if math.isfinite(value) else None
+    return None
+
+
 def _score_mention_differs(rest: str, loaded: dict) -> bool:
+    """Compare each score statement in the whole trailing text with the total."""
     total = _parsed_total(loaded)
-    for match in _SCORE_WORD.finditer(rest):
-        start = max(0, match.start() - _SCORE_WINDOW)
-        end = min(len(rest), match.end() + _SCORE_WINDOW)
-        numbers = _number_tokens(rest[start:end])
+    matches = list(_SCORE_WORD.finditer(rest))
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(rest)
+        numbers = _number_tokens(rest[match.start():end])
+        before = _number_ending_at(rest, match.start())
+        if before is not None:
+            numbers.append(before)
         if not numbers:
             continue
         if total is None or any(abs(value - total) > 1e-6 for value in numbers):
+            return True
+    for match in _SCORE_TEN.finditer(rest):
+        if not _ten_is_score_phrase(rest, match):
+            continue
+        try:
+            value = float(match.group("number"))
+        except ValueError:
+            continue
+        if not math.isfinite(value):
+            continue
+        if total is None or abs(value - total) > 1e-6:
+            return True
+    return False
+
+
+def _ten_is_score_phrase(text: str, match: re.Match[str]) -> bool:
+    window = text[max(0, match.start() - 6):match.start()]
+    return not any(intro in window for intro in _LIST_INTRO)
+
+
+def _prose_comma(text: str, index: int) -> bool:
+    before = text[:index].rstrip()
+    after = text[index + 1:].lstrip()
+    if not before or not after:
+        return False
+    return _wordish(before[-1]) and _wordish(after[0])
+
+
+def _wordish(char: str) -> bool:
+    return char.isalnum() or "\u3040" <= char <= "\u30ff" or "\u4e00" <= char <= "\u9fff"
+
+
+def _structural_comma(rest: str) -> bool:
+    for index, char in enumerate(rest):
+        if char == "," and not _prose_comma(rest, index):
             return True
     return False
 
@@ -225,6 +283,8 @@ def _kv_fragment(rest: str) -> bool:
 
 def _trailing_is_ambiguous(rest: str, loaded: dict) -> bool:
     if _JSON_STRUCTURAL.search(rest):
+        return True
+    if _structural_comma(rest):
         return True
     if _kv_fragment(rest):
         return True
@@ -266,8 +326,9 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
     ``\\boxed`` are not stored as a form feed or a backspace. A newline that
     also spells a known command is not rewritten. One complete object followed
     only by prose is that object, with marker ``trailing_text``. A brace,
-    bracket, comma, quote, colon-value fragment, or score statement after it
-    is ``parse_ambiguous``.
+    bracket, JSON comma, quote, colon-value fragment, or score statement
+    after it is ``parse_ambiguous``. A comma between words is prose. ``点``
+    counts only inside a score phrase.
     """
     try:
         loaded, repaired, ambiguous, marker = _load_repaired_json(raw)

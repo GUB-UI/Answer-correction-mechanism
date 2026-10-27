@@ -917,3 +917,11 @@ The transcript gate no longer treats `$`, `|`, `%`, or `&` as stray symbols. `$.
 ## dataset_v2: quote and colon fragments after one object are not validated
 
 Trailing text that still contains a double quote, or a colon introducing a number that is not a score statement, is `parse_ambiguous`. That includes `"`, `:0`, and `"total_score":`. A colon in ordinary prose, such as `Note: see the work`, is not a fragment. A score word immediately before a colon, such as `total_score: 4` when 4 is the parsed total, stays a score comparison. The completion parser is `json_latex_escapes_v7`.
+
+## dataset_v2: a score statement is read across the whole trailing text
+
+A total or score word is no longer limited to 16 characters on either side. Each statement runs from that word to the next score word, or to the end of the trailing text, and a number that ends immediately before the word counts too, as in `7点`. Those numbers are compared with the parsed total. A different number is `parse_ambiguous`. The same total is not. A number with no score word is not a score. The completion parser is `json_latex_escapes_v8`.
+
+## dataset_v2: prose commas, non-score 点, fenced confidence, and short probes
+
+A comma between words, such as `thanks, done`, is prose and can stay `validated`. A comma that is not between words is still leftover JSON. `以下の3点を確認` is not a score. `点` counts when it is a score phrase such as `4点` or `得点は4点`, and `合計`, `得点`, `total`, and `score` still mark a score statement. The completion parser is `json_latex_escapes_v9`. The transcript gate reads model confidence through that parser, so a fenced object with confidence at most 0.5 still counts. The two chunk probes wait at most 20 ms and at most the time still left on the case. Each attempt and each chunk wait uses that remaining budget.

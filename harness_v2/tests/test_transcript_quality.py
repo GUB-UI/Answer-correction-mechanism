@@ -104,6 +104,33 @@ def test_uncertainty_with_a_soft_flag_routes_to_review(tmp_path):
     assert clean["items"][0]["score"] == 4
 
 
+def test_fenced_confidence_is_read_by_the_gate(tmp_path):
+    mixed = "A\uff21 = 1"
+    fenced = "```json\n" + _raw(mixed, uncertainty=0.0, confidence=0.2) + "\n```"
+    case = _case("fence", fenced)
+    case["answer_text"] = mixed
+    case["transcript_quality_gate"] = "on"
+    case["rubric"] = [{"item_id": "R1", "max_points": 4, "description": "work"}]
+    record = Pipeline(store_at(tmp_path), FixtureProvider(fenced)).run(
+        case, experiment_id="e", commit="c")
+    grade = record.outputs["grading"]
+    assert grade["status"] == "review_required"
+    assert grade["failure_reason"] == "transcript_garbled"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 4
+    high = tmp_path / "high"
+    high.mkdir()
+    sure = "```json\n" + _raw(mixed, uncertainty=0.0, confidence=0.9) + "\n```"
+    case = _case("sure", sure)
+    case["answer_text"] = mixed
+    case["transcript_quality_gate"] = "on"
+    case["rubric"] = [{"item_id": "R1", "max_points": 4, "description": "work"}]
+    record = Pipeline(store_at(high), FixtureProvider(sure)).run(
+        case, experiment_id="e", commit="c")
+    assert record.outputs["grading"]["status"] == "validated"
+    assert record.outputs["grading"]["total_score"] == 4
+
+
 def test_low_reported_confidence_with_a_fullwidth_mix(tmp_path):
     mixed = "A\uff21 = 1"
     assert transcript_reasons(mixed) == []
