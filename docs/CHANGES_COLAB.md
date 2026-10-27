@@ -1278,3 +1278,8 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
     --max-output-tokens 16384 --wall-clock-limit-s 900 \
     --transcript-quality-gate off --concurrency 4 --out "$OUT"
 ```
+
+## dataset_v2: 日本語の点数訂正を読む
+
+- `点数`、`採点`、`得点`、`合計` は点数の語である。合計と違う `点数は0です。` や `採点は0とします。` は `parse_ambiguous` になる。合計と同じ文はそうならない。
+- `点` だけでは点数の語にしない。完了パーサは `json_latex_escapes_v10` である。

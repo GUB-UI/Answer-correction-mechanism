@@ -486,6 +486,11 @@ def test_a_score_statement_is_found_anywhere_in_the_trailing_text():
         body + "\n次の3点について": False,
         body + "\n得点は0点": True,
         body + "\n得点は4点": False,
+        body + "\n点数は0です。": True,
+        body + "\n採点は0とします。": True,
+        body + "\n点数は4です。": False,
+        body + "\n採点は4とします。": False,
+        body + "\n合計は0です。": True,
     }
     for raw, expect_ambiguous in samples.items():
         _items, total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
@@ -552,7 +557,7 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v9"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v10"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION

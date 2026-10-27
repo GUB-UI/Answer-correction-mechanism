@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v9"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v10"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -163,8 +163,9 @@ _COLON_VALUE = re.compile(
 _NUMBER_TOKEN = re.compile(
     r"(?<![A-Za-z0-9_.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])"
 )
+# 点数 and 採点 are score words. A bare 点 is not, so 3点を通ります stays prose.
 _SCORE_WORD = re.compile(
-    r"(?<![A-Za-z_])(?:total_score|score|revised|total)(?![A-Za-z_])|合計|得点|訂正",
+    r"(?<![A-Za-z_])(?:total_score|score|revised|total)(?![A-Za-z_])|点数|採点|合計|得点|訂正",
     re.IGNORECASE,
 )
 # N点 is a score only as a score phrase. 以下の3点を確認 is not one.
