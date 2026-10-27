@@ -1263,3 +1263,18 @@ python -m harness_v2.evaluation.dataset_v2 replay \
 - `harness_v2_partial_credit_v3` は `harness_v2_ocr_uncertainty_v2` に部分点の案内を足したものである。
 - ルーブリックの各基準について、転写の根拠を引用し、満たしていれば最終解答が誤っていても、その基準に書かれた点を与える。ルーブリックの外の点は与えない。合計は与えた基準点の和である。
 - JSON の形は変えない。v1 と v2 の本文も変えない。`--prompt-version` で選べ、再利用の識別に入る。
+
+## dataset_v2: 複数のケースを同時に採点する
+
+- `--concurrency N` は N 件を同時に採点する。既定は 1 で、そのときはこれまでどおり 1 件ずつ送る。動いている各ケースは自分のプロバイダを作る。
+- 結果は計画した id の順である。`state.json` と `results.json` は一度に一つずつ、ファイル全体の置き換えで書き、モードは `0600`、ディレクトリは `0700` のままである。
+- 計画した id は一度だけ実行する。終わった id は再開時に飛ばす。429 が来たら新しいケースは始めず、すでに動いているケースは記録して、再開できる状態を残す。
+- ケースごとの制限時間と再試行はそのケースのままである。同時実行数は実行設定に残り、再利用の識別には入らない。
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --thinking-level high \
+    --max-output-tokens 16384 --wall-clock-limit-s 900 \
+    --transcript-quality-gate off --concurrency 4 --out "$OUT"
+```

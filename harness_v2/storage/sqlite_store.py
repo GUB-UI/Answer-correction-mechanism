@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -48,6 +49,7 @@ class RunStore:
         self.db_path = Path(db_path)
         self.artifacts = artifacts
         self.readonly = readonly
+        self._lock = threading.Lock()
         if not readonly:
             private_directory(self.db_path.parent)
             with self._connect() as conn:
@@ -68,19 +70,20 @@ class RunStore:
     @contextmanager
     def _connect(self, *, read_only: bool = False):
         read_only = self.readonly or read_only
-        if read_only:
-            conn = sqlite3.connect(self.db_path.resolve().as_uri() + '?mode=ro', uri=True)
-        else:
-            self._secure_files()
-            conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        try:
-            with conn:
-                yield conn
-        finally:
-            conn.close()
-            if not read_only:
+        with self._lock:
+            if read_only:
+                conn = sqlite3.connect(self.db_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=30)
+            else:
                 self._secure_files()
+                conn = sqlite3.connect(self.db_path, timeout=30)
+            conn.row_factory = sqlite3.Row
+            try:
+                with conn:
+                    yield conn
+            finally:
+                conn.close()
+                if not read_only:
+                    self._secure_files()
 
     def save_run(self, record: RunRecord) -> RunRecord:
         cleaned = redact(record.to_dict())

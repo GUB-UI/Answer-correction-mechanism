@@ -44,6 +44,8 @@ TRANSPORT_CONFIG_KEYS = (
     "fast_backoff_min_s",
     "fast_backoff_max_s",
     "wall_clock_limit_s",
+    # How many cases run at once. It does not change a grade.
+    "concurrency",
 )
 _FAST_HTTP = {500, 502, 503}
 _DEADLINE_HTTP = {408, 504}

@@ -943,3 +943,15 @@ python -m harness_v2.evaluation.dataset_v2 replay \
 ## dataset_v2: partial-credit prompt v3
 
 `harness_v2_partial_credit_v3` is `harness_v2_ocr_uncertainty_v2` plus partial-credit guidance. For each rubric criterion, the grader quotes the transcript evidence and awards that criterion's listed points when they are met, even if the final answer is wrong. Points outside the rubric are not awarded. The total is the sum of the awarded criterion points. The JSON object shape is unchanged. The v1 and v2 texts are unchanged. `--prompt-version` selects it, and the version is part of the reuse identity.
+
+## dataset_v2: grade several cases at once
+
+`--concurrency N` grades N cases at the same time. The default is 1, which still sends one case after another. Each running case builds its own provider. Results stay in planned id order. `state.json` and `results.json` are written one at a time, by replacing the whole file, and stay mode `0600` under directories of mode `0700`. Each planned id runs once. A finished id is skipped on resume. A 429 stops new cases; cases already running are recorded, and the run stays resumable. The per-case wall-clock limit and retries stay on that case. Concurrency is stored with the run settings and is not part of the reuse identity.
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --thinking-level high \
+    --max-output-tokens 16384 --wall-clock-limit-s 900 \
+    --transcript-quality-gate off --concurrency 4 --out "$OUT"
+```

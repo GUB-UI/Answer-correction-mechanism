@@ -8,8 +8,10 @@ import math
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable
@@ -95,6 +97,7 @@ def load_config(path: Path) -> dict:
         raise ValueError('transcript_quality_gate must be on or off')
     if 'transcript_quality_gate' in config:
         config['transcript_quality_gate'] = gate
+    config['concurrency'] = _concurrency(config.get('concurrency', 1))
     config = {**config, 'generation_settings': {
         'temperature': 0,
         'max_output_tokens': DEFAULT_MAX_OUTPUT_TOKENS,
@@ -106,13 +109,19 @@ def load_config(path: Path) -> dict:
     return config
 
 
+def _concurrency(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError('concurrency must be a positive integer')
+    return value
+
+
 def reusable_config(config: dict) -> dict:
     """Config that changes what the model is asked to generate.
 
     thinking_level and max_output_tokens live in generation_settings, so a
     different thinking level or output cap is a different saved result.
-    Wall-clock and retry policy do not change the prompt, model, or sampling.
-    A successful grade stays reusable when only that policy changes.
+    Wall-clock, retry policy, and concurrency do not change the prompt, model,
+    or sampling. A successful grade stays reusable when only that policy changes.
     """
     kept = {key: value for key, value in config.items() if key not in TRANSPORT_CONFIG_KEYS}
     # Off is the historical default, so a run that leaves the gate off reuses
@@ -248,6 +257,41 @@ class _LazyProvider:
         return provider.generate(prompt, request_id=request_id, settings=settings)
 
 
+def _grade_pending(pending: list, *, workers: int, grade_case: Callable, progress: dict) -> None:
+    """Grade pending cases on a pool of ``workers`` threads.
+
+    Each submitted case uses the provider ``grade_case`` builds for that case.
+    A 429 stops new submissions. Cases already running finish and are recorded.
+    """
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dataset-v2-case')
+    inflight: dict = {}
+    index = 0
+    halted = False
+
+    def submit_more() -> None:
+        nonlocal index
+        while index < len(pending) and len(inflight) < workers and not halted:
+            case, rep, rid = pending[index]
+            index += 1
+            progress['sent'] += 1
+            inflight[executor.submit(grade_case, case, rep, rid)] = rid
+
+    try:
+        submit_more()
+        while inflight:
+            done, _waiting = wait(set(inflight), return_when=FIRST_COMPLETED)
+            for future in done:
+                inflight.pop(future)
+                _summary, quota = future.result()
+                if quota:
+                    halted = True
+                    progress['stopped'] = 'quota'
+            if not halted:
+                submit_more()
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
 def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: Path,
                    delay_s: float = 0, sleep: Callable = time.sleep,
                    provider_factory: Callable | None = None, commit: str | None = None) -> dict:
@@ -314,45 +358,68 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         if rid not in provenance:
             continue
         save_failure(row, cases_by_request[rid])
-    skipped, sent, stopped = 0, 0, ''
+    progress = {'skipped': 0, 'sent': 0, 'stopped': ''}
+    workers = config['concurrency']
+    # state.json and results.json are replaced under this lock. Each replace
+    # is atomic, and the lock keeps one writer at a time.
+    write_lock = threading.Lock()
+
     def checkpoint():
         selected = [latest[rid] for _, _, rid in jobs if rid in latest]
         completed = sum(row['outputs']['grading']['status'] != 'failed' for row in selected)
         summary = {'identity': experiment_identity, 'expected': len(jobs), 'completed': completed,
                    'failed': len(selected) - completed, 'pending': len(jobs) - len(selected),
-                   'skipped': skipped, 'stopped_reason': stopped, 'request_ids': [rid for _, _, rid in jobs]}
+                   'skipped': progress['skipped'], 'stopped_reason': progress['stopped'],
+                   'concurrency': workers,
+                   'request_ids': [rid for _, _, rid in jobs]}
         write_json(out / 'state.json', summary)
         write_json(out / 'results.json', {**metadata, 'expected_runs': expected, 'runs': selected,
                                          'attempt_runs': store.list_runs(), 'summary': summary})
         return summary
-    checkpoint()
-    for case, rep, rid in jobs:
-        if rid in latest and latest[rid]['outputs']['grading']['status'] != 'failed':
-            skipped += 1
-            continue
-        if sent and delay_s:
-            sleep(delay_s)
+
+    def grade_case(case, rep, rid):
         provider = _LazyProvider(config, case, rep, provider_factory or default_provider)
         # References are attached only as evaluation fields; Pipeline uses an explicit
         # model-input allowlist. No references are supplied to the provider factory.
+        # The factory builds this case's own provider. Retries stay inside that provider.
         runtime_case = {**case, 'request_id': rid, 'prompt_version': config['prompt_version'],
                         'generation_settings': config['generation_settings'],
                         'transcript_quality_gate': config.get('transcript_quality_gate', 'off'),
                         'experiment_case': provenance[rid],
                         **dataset.reference_for(case['problem_id'])}
         pipeline = Pipeline(store, provider)
-        sent += 1
         try:
             record = pipeline.run(runtime_case, experiment_id=config['name'], commit=commit)
+            quota = False
         except QuotaExceeded as exc:
             record = exc.record
-            stopped = 'quota'
-        latest[rid] = record.to_dict()
-        save_failure(latest[rid], case)
-        checkpoint()
-        if stopped:
-            break
-    return checkpoint()
+            quota = True
+        with write_lock:
+            latest[rid] = record.to_dict()
+            save_failure(latest[rid], case)
+            if quota:
+                progress['stopped'] = 'quota'
+            return checkpoint(), quota
+
+    checkpoint()
+    pending = []
+    for case, rep, rid in jobs:
+        if rid in latest and latest[rid]['outputs']['grading']['status'] != 'failed':
+            progress['skipped'] += 1
+            continue
+        pending.append((case, rep, rid))
+    if workers == 1:
+        for case, rep, rid in pending:
+            if progress['stopped']:
+                break
+            if progress['sent'] and delay_s:
+                sleep(delay_s)
+            progress['sent'] += 1
+            grade_case(case, rep, rid)
+    else:
+        _grade_pending(pending, workers=workers, grade_case=grade_case, progress=progress)
+    with write_lock:
+        return checkpoint()
 
 
 def main(argv=None) -> int:

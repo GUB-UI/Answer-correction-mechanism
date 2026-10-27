@@ -7,7 +7,9 @@ OCR transcripts for one split. It does not read ``answers`` or
 comparing grader output, and it does not fill in a missing score.
 
 Grade one split with the existing Gemma or fixture provider. Thinking level
-and max output tokens are generation settings. The wall-clock limit is not::
+and max output tokens are generation settings. The wall-clock limit is not
+part of the reuse identity. ``--concurrency`` grades that many cases at once
+and defaults to 1::
 
     python -m harness_v2.evaluation.dataset_v2 baseline \\
         --dataset-dir "$DATASET_DIR" --split dev --provider gemma \\
@@ -188,14 +190,18 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
              max_attempts: int = MAX_ATTEMPTS,
              fast_backoff_min_s: float = FAST_BACKOFF_MIN_S,
              fast_backoff_max_s: float = FAST_BACKOFF_MAX_S,
-             transcript_quality_gate: str = "off") -> dict[str, Any]:
+             transcript_quality_gate: str = "off",
+             concurrency: int = 1) -> dict[str, Any]:
     """Grade one split and write metrics when every case finishes.
 
     A saved grade is reused only when the model id, prompt version, rubric
     hash, and generation settings still match that run. thinking_level and
-    max_output_tokens are generation settings. Wall-clock and retry policy
-    are not part of that identity.
+    max_output_tokens are generation settings. Wall-clock, retry policy, and
+    concurrency are not part of that identity. Concurrency is how many cases
+    grade at once. Each case keeps its own provider.
     """
+    if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
+        raise ValueError("concurrency must be a positive integer")
     if transcript_quality_gate not in {"on", "off"}:
         raise ValueError("transcript_quality_gate must be on or off")
     if model is None:
@@ -219,6 +225,7 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
         "fast_backoff_min_s": fast_backoff_min_s,
         "fast_backoff_max_s": fast_backoff_max_s,
         "transcript_quality_gate": transcript_quality_gate,
+        "concurrency": concurrency,
     }
     if fixture_completion is not None:
         config["fixture_completion"] = (fixture_completion if isinstance(fixture_completion, str)
@@ -1156,6 +1163,8 @@ def main(argv: list[str] | None = None) -> int:
                          help="maximum wait after a fast 500/502/503 or disconnect (default 30)")
     command.add_argument("--transcript-quality-gate", choices=["on", "off"], default="off",
                          help="route a garbled or inconsistent transcript to review (default off)")
+    command.add_argument("--concurrency", type=int, default=1,
+                         help="cases graded at once, each with its own provider (default 1)")
     replay_command.add_argument("--dataset-dir", type=Path, required=True)
     replay_command.add_argument("--split", required=True)
     replay_command.add_argument("--run-dir", type=Path, required=True,
@@ -1201,6 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
             fast_backoff_min_s=args.fast_backoff_min_s,
             fast_backoff_max_s=args.fast_backoff_max_s,
             transcript_quality_gate=args.transcript_quality_gate,
+            concurrency=args.concurrency,
         )
     except (DatasetV2Error, ValueError, OSError) as exc:
         parser.error(str(exc))

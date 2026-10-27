@@ -2,6 +2,8 @@
 import json
 import os
 import stat
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1415,6 +1417,239 @@ def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):
     assert grade["status"] == "review_required"
     assert "parse_ambiguous" in grade["failure_reason"]
     assert grade["total_score"] == 4
+
+
+def _parallel_tree(tmp_path):
+    ids = [f"9-Z_C_{i:04d}" for i in range(1, 5)]
+    root = build_tree(tmp_path / "data", dev_ids=ids)
+    scores = _scores()
+    holdout = scores["answers"][1]
+    scores["answers"] = [
+        {"answer_id": answer_id, "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 1, "max": 4}],
+         "total": 4}
+        for answer_id in ids
+    ] + [holdout]
+    scores["count"] = len(scores["answers"])
+    scores["flagged"] = []
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    return root, ids
+
+
+def _case_ids(results_path: Path) -> list[str]:
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    return [row["outputs"]["experiment_case"]["case_id"] for row in payload["runs"]]
+
+
+def test_concurrency_grades_each_id_once_and_keeps_id_order(tmp_path):
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.run import load_config, reusable_config
+
+    root, ids = _parallel_tree(tmp_path)
+    started: list[str] = []
+    finished: list[str] = []
+    providers: list[object] = []
+    seen_limits: list[float] = []
+    lock = threading.Lock()
+    gate = threading.Barrier(len(ids))
+    errors: list[str] = []
+    stop = threading.Event()
+
+    def factory(config, case, repetition):
+        del repetition
+        inner = FixtureProvider(_completion(), model_id=config["model"])
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                with lock:
+                    started.append(case["case_id"])
+                gate.wait(timeout=5)
+                time.sleep(0.03 * (len(ids) - ids.index(case["case_id"])))
+                with lock:
+                    finished.append(case["case_id"])
+                return inner.generate(prompt, request_id=request_id, settings=settings)
+
+        instance = Provider()
+        with lock:
+            providers.append(instance)
+            seen_limits.append(config["wall_clock_limit_s"])
+        return instance
+
+    out = tmp_path / "out"
+
+    def watch():
+        path = out / "run" / "state.json"
+        while not stop.is_set():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            try:
+                json.loads(text)
+            except json.JSONDecodeError:
+                errors.append(text)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        result = baseline(root, "dev", out, provider="fixture", model="fixture",
+                          concurrency=4, wall_clock_limit_s=900,
+                          provider_factory=factory, fixture_completion=_completion())
+    finally:
+        stop.set()
+        watcher.join(timeout=2)
+    assert errors == []
+    assert result["completed"] == 4 and result["failed"] == 0
+    assert finished != ids
+    assert sorted(started) == ids
+    assert len(started) == len(set(started)) == 4
+    assert finished[0] == ids[-1]
+    assert len(providers) == len({id(item) for item in providers}) == 4
+    assert seen_limits == [900, 900, 900, 900]
+    results_path = out / "run" / "results.json"
+    state_path = out / "run" / "state.json"
+    assert _case_ids(results_path) == ids
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["request_ids"]
+    assert len(state["request_ids"]) == len(set(state["request_ids"])) == 4
+    assert state["pending"] == 0 and state["concurrency"] == 4
+    assert mode(results_path) == 0o600
+    assert mode(state_path) == 0o600
+    assert mode(out / "run") == 0o700
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["concurrency"] == 4
+    stored = json.loads((out / "run" / "experiment.json").read_text(encoding="utf-8"))
+    assert stored["config"]["concurrency"] == 4
+    assert "concurrency" not in reusable_config(stored["config"])
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps({
+        "name": "baseline", "provider": "fixture", "model": "fixture",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {"temperature": 0},
+    }), encoding="utf-8")
+    widened = {**json.loads(bare.read_text(encoding="utf-8")), "concurrency": 4}
+    wide_path = tmp_path / "wide.json"
+    wide_path.write_text(json.dumps(widened), encoding="utf-8")
+    assert reusable_config(load_config(bare)) == reusable_config(load_config(wide_path))
+
+    def refuse(config, case, repetition):
+        del config, case, repetition
+        raise AssertionError("a finished id was graded again")
+
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     concurrency=1, provider_factory=refuse, fixture_completion=_completion())
+    assert again["skipped"] == 4 and again["completed"] == 4
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["concurrency"] == 1
+    with pytest.raises(ValueError, match="concurrency"):
+        baseline(root, "dev", tmp_path / "bad", provider="fixture", concurrency=0,
+                 fixture_completion=_completion())
+    with pytest.raises(ValueError, match="concurrency"):
+        baseline(root, "dev", tmp_path / "bad-bool", provider="fixture", concurrency=True,
+                 fixture_completion=_completion())
+
+
+def test_concurrency_stops_on_quota_and_resume_grades_the_rest_once(tmp_path):
+    from harness_v2.core.contracts import ProviderExchange
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.providers.gemma_ai_studio import QuotaExceeded
+
+    root, ids = _parallel_tree(tmp_path)
+    started: list[str] = []
+    lock = threading.Lock()
+
+    def quota_factory(config, case, repetition):
+        del repetition
+        inner = FixtureProvider(_completion(), model_id=config["model"])
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                with lock:
+                    started.append(case["case_id"])
+                if case["case_id"] == ids[0]:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        with lock:
+                            if len(started) >= 2:
+                                break
+                        time.sleep(0.01)
+                    else:
+                        raise AssertionError("the in-flight case did not start")
+                    raise QuotaExceeded(ProviderExchange(
+                        request_id, "fixture", "fixture", {}, None, None, 0, "", "quota"))
+                if case["case_id"] == ids[1]:
+                    time.sleep(0.15)
+                    return inner.generate(prompt, request_id=request_id, settings=settings)
+                raise AssertionError(f"dispatched after quota: {case['case_id']}")
+
+        return Provider()
+
+    out = tmp_path / "out"
+    stopped = baseline(root, "dev", out, provider="fixture", model="fixture",
+                       concurrency=2, provider_factory=quota_factory,
+                       fixture_completion=_completion())
+    assert stopped["stopped_reason"] == "quota"
+    assert stopped["metrics_path"] is None
+    assert sorted(started) == ids[:2]
+    assert len(started) == 2
+    assert _case_ids(out / "run" / "results.json") == ids[:2]
+    state = json.loads((out / "run" / "state.json").read_text(encoding="utf-8"))
+    assert state["stopped_reason"] == "quota"
+    assert state["pending"] == 2
+    assert state["concurrency"] == 2
+    assert len(state["request_ids"]) == len(set(state["request_ids"])) == 4
+
+    resumed: list[str] = []
+
+    def resume_factory(config, case, repetition):
+        del repetition
+        inner = FixtureProvider(_completion(), model_id=config["model"])
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                with lock:
+                    resumed.append(case["case_id"])
+                return inner.generate(prompt, request_id=request_id, settings=settings)
+
+        return Provider()
+
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     concurrency=2, provider_factory=resume_factory,
+                     fixture_completion=_completion())
+    assert again["stopped_reason"] == ""
+    assert again["skipped"] == 1
+    assert again["completed"] == 4
+    assert sorted(resumed) == [ids[0], ids[2], ids[3]]
+    assert len(resumed) == 3
+    assert _case_ids(out / "run" / "results.json") == ids
+    assert json.loads((out / "run" / "state.json").read_text(encoding="utf-8"))["pending"] == 0
+
+
+def test_cli_records_concurrency(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+        "--concurrency", "2",
+    ]) == 0
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["concurrency"] == 2
+    assert json.loads((out / "run" / "state.json").read_text(encoding="utf-8"))["concurrency"] == 2
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+            "--model", "fixture", "--out", str(tmp_path / "zero"),
+            "--fixture-completion", str(completion), "--concurrency", "0",
+        ])
+    assert exc.value.code == 2
 
 
 def test_invalid_score_is_not_coerced(tmp_path):
