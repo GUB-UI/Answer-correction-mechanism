@@ -626,6 +626,7 @@ def test_backoff_that_would_pass_the_wall_clock_does_not_start_another_attempt()
     assert slept == [4.0]
     assert clock["t"] == pytest.approx(900)
     assert clock["t"] <= 900 + 0.001
+    assert exchange.latency_ms == pytest.approx(900_000)
 
 
 def test_read_wait_stays_inside_the_remaining_case_budget() -> None:
@@ -739,6 +740,46 @@ def test_safety_finish_is_not_validated(tmp_path, monkeypatch) -> None:
     assert grade["status"] == "failed"
     assert grade["items"] == []
     assert "SAFETY" in grade["failure_reason"]
+
+
+def test_short_timeout_does_not_carry_to_the_next_case() -> None:
+    clock = {"t": 0.0}
+    built: list[int] = []
+    calls = {"n": 0}
+
+    class RemoteProtocolError(Exception):
+        pass
+
+    def factory(**kwargs):
+        timeout_ms = kwargs["http_options"]["timeout"]
+        built.append(timeout_ms)
+
+        def generate_content_stream(**_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                clock["t"] += 800
+                raise RemoteProtocolError("Server disconnected")
+            if calls["n"] == 2:
+                clock["t"] += timeout_ms / 1000
+                raise TimeoutError("read timeout")
+            yield SimpleNamespace(text="{}", finish_reason="STOP")
+
+        return SimpleNamespace(models=SimpleNamespace(generate_content_stream=generate_content_stream))
+
+    def sleep(seconds):
+        clock["t"] += seconds
+
+    studio = GemmaAIStudio(
+        client_factory=factory, sleep=sleep, monotonic=lambda: clock["t"], rng=lambda: 0,
+        wall_clock_limit_s=900, max_attempts=3,
+    )
+    first = studio.generate("prompt", request_id="case-1")
+    assert first.status == "error"
+    assert built == [900_000, 95_000]
+    second = studio.generate("prompt", request_id="case-2")
+    assert second.status == "ok"
+    assert built[2] == 900_000
+    assert second.attempt_count == 1
 
 
 def test_silence_after_a_chunk_ends_at_the_case_budget() -> None:

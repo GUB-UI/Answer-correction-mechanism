@@ -882,6 +882,10 @@ Token counts read from a streamed error are stored under their own names. They n
 
 Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
 
+## dataset_v2: a short timeout stays on its own case
+
+A reused provider builds a new client when the next case needs a longer socket timeout. The shortened timeout from the previous case is not reused. A backoff that uses the last of the case budget is included in that case's latency.
+
 ## dataset_v2: silence after a chunk stays inside the case budget
 
 Each chunk wait is limited to the time still left on the case, and to the socket timeout when that is shorter. A chunk at 800 s followed by silence ends by the 900 s case budget. The wait does not get another full 900 s.

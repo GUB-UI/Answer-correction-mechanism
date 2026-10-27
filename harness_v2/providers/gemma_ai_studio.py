@@ -413,12 +413,13 @@ class GemmaAIStudio:
             raise MissingAPIKey(f"{API_KEY_ENV} is not set")
         timeout_ms = self._timeout_ms(timeout_s)
         slack_ms = int(_WALL_EPSILON_S * 1000)
-        # A cached client is reusable only while its socket timeout still fits
-        # this attempt. A longer timeout would let the read run past the case.
+        # Reuse a client only when its timeout matches this attempt. A shorter
+        # timeout left by the previous case would cut the new case short. A
+        # longer one would let a read run past this case.
         if (
             self._client is not None
             and self._client_timeout_ms is not None
-            and self._client_timeout_ms <= timeout_ms + slack_ms
+            and abs(self._client_timeout_ms - timeout_ms) <= slack_ms
         ):
             return self._client
         factory = self._client_factory
@@ -495,6 +496,22 @@ class GemmaAIStudio:
 
     def _remaining_s(self, deadline: float) -> float:
         return deadline - self._monotonic()
+
+    def _backoff(
+        self, exchange: ProviderExchange, *, attempt: int, case_deadline: float, total_started: float,
+    ) -> bool:
+        """Sleep before another attempt. True means this case must stop.
+
+        The sleep is part of the returned latency, including when it is the
+        last thing the case does.
+        """
+        remaining = self._remaining_s(case_deadline)
+        if remaining <= _WALL_EPSILON_S:
+            return True
+        wait = min(self._fast_backoff_s(attempt), remaining)
+        self._sleep(wait)
+        exchange.latency_ms = (self._monotonic() - total_started) * 1000
+        return self._remaining_s(case_deadline) <= _WALL_EPSILON_S
 
     def _pull_chunk(self, iterator: Any, timeout_s: float) -> Any:
         """Next chunk, or TimeoutError when the wait would pass timeout_s.
@@ -715,12 +732,7 @@ class GemmaAIStudio:
                     return exchange
                 if kind == "disconnect":
                     self._drop_client()
-                remaining = self._remaining_s(case_deadline)
-                if remaining <= _WALL_EPSILON_S:
-                    return exchange
-                wait = min(self._fast_backoff_s(attempt), remaining)
-                self._sleep(wait)
-                if self._remaining_s(case_deadline) <= _WALL_EPSILON_S:
+                if self._backoff(exchange, attempt=attempt, case_deadline=case_deadline, total_started=total_started):
                     return exchange
                 continue
             input_tokens, output_tokens, thoughts = usage
@@ -755,12 +767,7 @@ class GemmaAIStudio:
                 if not incomplete or attempt >= self.max_attempts:
                     return exchange
                 self._drop_client()
-                remaining = self._remaining_s(case_deadline)
-                if remaining <= _WALL_EPSILON_S:
-                    return exchange
-                wait = min(self._fast_backoff_s(attempt), remaining)
-                self._sleep(wait)
-                if self._remaining_s(case_deadline) <= _WALL_EPSILON_S:
+                if self._backoff(exchange, attempt=attempt, case_deadline=case_deadline, total_started=total_started):
                     return exchange
                 continue
             attempts.append(self._attempt_row(
