@@ -741,6 +741,37 @@ def test_safety_finish_is_not_validated(tmp_path, monkeypatch) -> None:
     assert "SAFETY" in grade["failure_reason"]
 
 
+def test_silence_after_a_chunk_ends_at_the_case_budget() -> None:
+    clock = {"t": 0.0}
+    built: list[int] = []
+    studio_box: dict[str, GemmaAIStudio] = {}
+
+    def factory(**kwargs):
+        built.append(kwargs["http_options"]["timeout"])
+
+        def generate_content_stream(**_kwargs):
+            clock["t"] = 800
+            yield SimpleNamespace(text="partial", finish_reason=None)
+            clock["t"] += studio_box["studio"]._chunk_read_timeout_s
+            raise TimeoutError("silent read")
+
+        return SimpleNamespace(models=SimpleNamespace(generate_content_stream=generate_content_stream))
+
+    studio = GemmaAIStudio(
+        client_factory=factory, sleep=lambda seconds: clock.__setitem__("t", clock["t"] + seconds),
+        monotonic=lambda: clock["t"], rng=lambda: 0, wall_clock_limit_s=900, max_attempts=3,
+    )
+    studio_box["studio"] = studio
+    exchange = studio.generate("prompt", request_id="silent")
+    assert built == [900_000]
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 1
+    assert exchange.attempts[0]["error_class"] == "TimeoutError"
+    assert studio._chunk_read_timeout_s == pytest.approx(100)
+    assert clock["t"] == pytest.approx(900)
+    assert clock["t"] <= 900 + 0.001
+
+
 def test_retry_resends_the_identical_prompt() -> None:
     class RemoteProtocolError(Exception):
         pass

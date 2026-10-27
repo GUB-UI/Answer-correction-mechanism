@@ -882,6 +882,10 @@ Token counts read from a streamed error are stored under their own names. They n
 
 Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
 
+## dataset_v2: silence after a chunk stays inside the case budget
+
+Each chunk wait is limited to the time still left on the case, and to the socket timeout when that is shorter. A chunk at 800 s followed by silence ends by the 900 s case budget. The wait does not get another full 900 s.
+
 ## dataset_v2: a trailing total is compared with the total
 
 A number next to a total or score word is compared with the parsed total, not with an item score. English words include `total`, `score`, and `revised`. Japanese words include `合計`, `点`, and `訂正`. A different number is `parse_ambiguous` and the grade is `review_required`. The same total is not. `4e-1` is one number, 0.4, and is not read as 4. The completion parser is `json_latex_escapes_v6`.

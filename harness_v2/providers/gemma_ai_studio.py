@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import random
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -377,6 +378,7 @@ class GemmaAIStudio:
         self.model_id = model_id
         self._client: Any | None = None
         self._client_timeout_ms: int | None = None
+        self._chunk_read_timeout_s: float | None = None
         self._client_factory = client_factory
         self.free_tier_project = free_tier_project
         self._sleep = sleep
@@ -494,6 +496,73 @@ class GemmaAIStudio:
     def _remaining_s(self, deadline: float) -> float:
         return deadline - self._monotonic()
 
+    def _pull_chunk(self, iterator: Any, timeout_s: float) -> Any:
+        """Next chunk, or TimeoutError when the wait would pass timeout_s.
+
+        The armed timeout is min(remaining case budget, the socket timeout).
+        A fake clock that does not move during a real wait is advanced by
+        ``_sleep`` for that armed timeout, so silence cannot outlast the case.
+        """
+        if timeout_s <= _WALL_EPSILON_S:
+            raise TimeoutError("wall-clock limit")
+        self._chunk_read_timeout_s = timeout_s
+        box: dict[str, Any] = {}
+
+        def read() -> None:
+            try:
+                box["chunk"] = next(iterator)
+            except StopIteration:
+                box["stop"] = True
+            except Exception as exc:
+                box["exc"] = exc
+
+        worker = threading.Thread(target=read, name="gemma-chunk-read", daemon=True)
+        started = self._monotonic()
+        limit = started + timeout_s
+        worker.start()
+        worker.join(0.02)
+        if not worker.is_alive():
+            return self._finish_pull(box)
+        mono_before = self._monotonic()
+        real_before = time.perf_counter()
+        worker.join(0.02)
+        if not worker.is_alive():
+            return self._finish_pull(box)
+        real_delta = time.perf_counter() - real_before
+        # An injected clock does not move during the real wait. Sleep the
+        # armed timeout once so that clock reaches the case deadline.
+        if self._monotonic() - mono_before < max(real_delta, 1e-6) * 0.5:
+            self._sleep(max(0.0, limit - self._monotonic()))
+            if worker.is_alive():
+                self._drop_client()
+                raise TimeoutError("wall-clock limit")
+            return self._finish_pull(box)
+        while worker.is_alive():
+            if self._monotonic() > limit + _WALL_EPSILON_S:
+                self._drop_client()
+                raise TimeoutError("wall-clock limit")
+            remaining = limit - self._monotonic()
+            if remaining <= 0:
+                break
+            worker.join(min(0.05, remaining))
+        if worker.is_alive():
+            self._drop_client()
+            raise TimeoutError("wall-clock limit")
+        return self._finish_pull(box)
+
+    def _finish_pull(self, box: dict[str, Any]) -> Any:
+        if box.get("stop"):
+            return None
+        if "exc" in box:
+            raise box["exc"]
+        return box["chunk"]
+
+    def _chunk_timeout_s(self, deadline: float) -> float:
+        remaining = self._remaining_s(deadline)
+        if self._client_timeout_ms is None:
+            return remaining
+        return min(remaining, self._client_timeout_ms / 1000)
+
     def _read_stream(self, stream: Any, deadline: float) -> tuple[str, str | None, tuple[int | None, int | None, int | None], str, str]:
         parts: list[str] = []
         finish: str | None = None
@@ -501,7 +570,13 @@ class GemmaAIStudio:
         model = ""
         response_id = ""
         try:
-            for chunk in stream:
+            iterator = iter(stream)
+            while True:
+                if self._remaining_s(deadline) <= _WALL_EPSILON_S:
+                    raise TimeoutError("wall-clock limit")
+                chunk = self._pull_chunk(iterator, self._chunk_timeout_s(deadline))
+                if chunk is None:
+                    break
                 if self._monotonic() > deadline + _WALL_EPSILON_S:
                     raise TimeoutError("wall-clock limit")
                 piece = _visible_text(chunk)
