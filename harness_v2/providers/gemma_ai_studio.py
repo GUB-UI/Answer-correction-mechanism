@@ -91,6 +91,28 @@ class ProviderSetupError(RuntimeError):
     pass
 
 
+class _PartialStream(Exception):
+    """A stream read failed after some chunks had already arrived."""
+
+    def __init__(
+        self,
+        cause: BaseException,
+        *,
+        visible: str,
+        finish: str | None,
+        usage: tuple[int | None, int | None, int | None],
+        model: str,
+        response_id: str,
+    ) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.visible = visible
+        self.finish = finish
+        self.usage = usage
+        self.model = model
+        self.response_id = response_id
+
+
 class QuotaExceeded(RuntimeError):
     """429 or a quota error. Callers stop and keep the partial exchange."""
 
@@ -478,29 +500,39 @@ class GemmaAIStudio:
         usage = (None, None, None)
         model = ""
         response_id = ""
-        for chunk in stream:
+        try:
+            for chunk in stream:
+                if self._monotonic() > deadline + _WALL_EPSILON_S:
+                    raise TimeoutError("wall-clock limit")
+                piece = _visible_text(chunk)
+                if piece:
+                    parts.append(piece)
+                reason = _finish_reason(chunk)
+                if reason:
+                    finish = reason
+                prompt, output, thoughts = _usage(chunk)
+                usage = (
+                    prompt if prompt is not None else usage[0],
+                    output if output is not None else usage[1],
+                    thoughts if thoughts is not None else usage[2],
+                )
+                found_model = _model_returned(chunk)
+                if found_model:
+                    model = found_model
+                found_id = _response_id(chunk)
+                if found_id:
+                    response_id = found_id
             if self._monotonic() > deadline + _WALL_EPSILON_S:
                 raise TimeoutError("wall-clock limit")
-            piece = _visible_text(chunk)
-            if piece:
-                parts.append(piece)
-            reason = _finish_reason(chunk)
-            if reason:
-                finish = reason
-            prompt, output, thoughts = _usage(chunk)
-            usage = (
-                prompt if prompt is not None else usage[0],
-                output if output is not None else usage[1],
-                thoughts if thoughts is not None else usage[2],
-            )
-            found_model = _model_returned(chunk)
-            if found_model:
-                model = found_model
-            found_id = _response_id(chunk)
-            if found_id:
-                response_id = found_id
-        if self._monotonic() > deadline + _WALL_EPSILON_S:
-            raise TimeoutError("wall-clock limit")
+        except Exception as exc:
+            raise _PartialStream(
+                exc,
+                visible="".join(parts),
+                finish=finish,
+                usage=usage,
+                model=model,
+                response_id=response_id,
+            ) from exc
         return "".join(parts), finish, usage, model, response_id
 
     def _exchange(
@@ -562,26 +594,46 @@ class GemmaAIStudio:
                 visible, finish, usage, model_returned, response_id = self._read_stream(stream, case_deadline)
             except Exception as exc:
                 ended = self._monotonic()
-                code = _status_code(exc)
-                raw = _raw_from_exception(exc)
-                input_tokens, output_tokens, thoughts = _usage_from_exception(exc)
-                status = "quota" if _is_quota(exc, code) else "error"
+                partial = exc if isinstance(exc, _PartialStream) else None
+                cause = partial.cause if partial is not None else exc
+                code = _status_code(cause)
+                if partial is not None:
+                    prompt, output, thoughts = partial.usage
+                    fallback = _usage_from_exception(cause)
+                    input_tokens = prompt if prompt is not None else fallback[0]
+                    output_tokens = output if output is not None else fallback[1]
+                    thoughts = thoughts if thoughts is not None else fallback[2]
+                    finish_seen = partial.finish
+                    raw = partial.visible or _raw_from_exception(cause)
+                    model_seen = partial.model
+                    response_seen = partial.response_id
+                else:
+                    input_tokens, output_tokens, thoughts = _usage_from_exception(cause)
+                    finish_seen = None
+                    raw = _raw_from_exception(cause)
+                    model_seen = ""
+                    response_seen = ""
+                status = "quota" if _is_quota(cause, code) else "error"
                 attempts.append(self._attempt_row(
-                    elapsed_s=ended - started, status=status, error_class=type(exc).__name__,
-                    started_at=started_at, ended_at=self._stamp(), finish_reason=None,
+                    elapsed_s=ended - started, status=status, error_class=type(cause).__name__,
+                    started_at=started_at, ended_at=self._stamp(), finish_reason=finish_seen,
                     input_tokens=input_tokens, output_tokens=output_tokens,
                     thoughts_token_count=thoughts, timeout_s=attempt_timeout_s,
                 ))
                 exchange = self._exchange(
                     request_id=request_id, recorded=recorded, attempts=attempts,
                     total_started=total_started, status=status, raw_response=raw,
-                    error=redact(str(exc)), input_tokens=input_tokens, output_tokens=output_tokens,
-                    model_returned="", provider_response_id="", attempt=attempt,
+                    error=redact(str(cause)), input_tokens=input_tokens, output_tokens=output_tokens,
+                    model_returned=model_seen, provider_response_id=response_seen, attempt=attempt,
                 )
-                if _is_quota(exc, code):
-                    raise QuotaExceeded(exchange) from exc
+                if _is_quota(cause, code):
+                    raise QuotaExceeded(exchange) from cause
                 last_exchange = exchange
-                kind = _retry_kind(exc, code)
+                # STOP was already received. Keep that finish and the usage on
+                # this failure instead of calling the model again.
+                if _is_stop(finish_seen):
+                    return exchange
+                kind = _retry_kind(cause, code)
                 if kind is None or attempt >= self.max_attempts:
                     return exchange
                 if kind == "disconnect":

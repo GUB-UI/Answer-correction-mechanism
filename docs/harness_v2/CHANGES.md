@@ -861,3 +861,7 @@ The socket timeout for an attempt is the remaining case budget, not the original
 ## dataset_v2: only a STOP finish is graded
 
 A provider result is graded only when the final `finish_reason` is `STOP`. `MAX_TOKENS`, `SAFETY`, `RECITATION`, `OTHER`, and any other named reason are stored as terminal failures, including when the visible text is a JSON object. A stream that ends with no `finish_reason` is retried as a transport disconnect, and a new client is built for the next attempt. Retries still stop at `--max-attempts` and at the case budget.
+
+## dataset_v2: keep finish and usage when the socket drops after STOP
+
+If chunks already carried `STOP` and usage metadata, and the connection then drops, that attempt stays a failure and is not sent again. The failure keeps the received `finish_reason`, prompt, thoughts, and candidates token counts, and the visible text.

@@ -732,3 +732,40 @@ def test_safety_finish_is_not_validated(tmp_path, monkeypatch) -> None:
     assert grade["status"] == "failed"
     assert grade["items"] == []
     assert "SAFETY" in grade["failure_reason"]
+
+
+def test_disconnect_after_stop_keeps_finish_reason_and_usage() -> None:
+    class RemoteProtocolError(Exception):
+        pass
+
+    def generate_content_stream(**_kwargs):
+        yield SimpleNamespace(
+            text='{"a": 1}',
+            finish_reason="STOP",
+            response_id="resp-stop",
+            model_version=MODEL_ID,
+            usage_metadata=SimpleNamespace(
+                prompt_token_count=8, candidates_token_count=4, thoughts_token_count=2),
+        )
+        raise RemoteProtocolError("Server disconnected")
+
+    slept: list[float] = []
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: SimpleNamespace(
+            models=SimpleNamespace(generate_content_stream=generate_content_stream)),
+        sleep=slept.append, max_attempts=3,
+    ).generate("prompt", request_id="after-stop")
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 1
+    assert slept == []
+    assert exchange.raw_response == '{"a": 1}'
+    assert exchange.input_tokens == 8
+    assert exchange.output_tokens == 4
+    assert exchange.provider_response_id == "resp-stop"
+    row = exchange.attempts[0]
+    assert row["finish_reason"] == "STOP"
+    assert row["error_class"] == "RemoteProtocolError"
+    assert row["prompt_token_count"] == 8
+    assert row["candidates_token_count"] == 4
+    assert row["thoughts_token_count"] == 2
+    assert "Server disconnected" in exchange.error
