@@ -50,7 +50,7 @@ from harness_v2.providers.gemma_ai_studio import (
     MODEL_ID,
     WALL_CLOCK_LIMIT_S,
 )
-from harness_v2.run import resolve_implementation_commit, run_experiment
+from harness_v2.run import identity, reusable_config, resolve_implementation_commit, run_experiment
 from harness_v2.storage.permissions import private_directory, private_write_text
 
 DATASET_ID = "dataset_v2"
@@ -289,7 +289,8 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
     for job in expected:
         if isinstance(job, dict) and isinstance(job.get("request_id"), str):
             by_request[job["request_id"]] = job
-    snapshot = _snapshot_cases(results_path)
+    dataset = _snapshot_dataset(results_path)
+    snapshot = {case["case_id"]: case for case in dataset.cases}
     runs = [
         _replay_one(run, by_request, snapshot, artifacts, transcript_quality_gate, saved)
         for run in saved["runs"]
@@ -311,14 +312,24 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
     config = copy.deepcopy(source_config)
     config["completion_parser_version"] = COMPLETION_PARSER_VERSION
     config["transcript_quality_gate"] = transcript_quality_gate
-    identity = _replay_identity(saved, transcript_quality_gate)
+    replay_commit = resolve_implementation_commit()
+    # The top-level identity is this replay. The source run's identity is kept
+    # beside it, because the config no longer describes that run.
+    replay_identity_hash = identity({
+        "config": reusable_config(config),
+        "dataset": dataset.manifest,
+        "commit": replay_commit,
+    })
+    described = _replay_identity(saved, transcript_quality_gate, replay_commit)
     payload = {
         **saved,
+        "identity": replay_identity_hash,
+        "source_identity": saved.get("identity"),
         "config": config,
         "summary": summary,
         "runs": runs,
         "replay": {
-            **identity,
+            **described,
             "source_results": str(results_path),
         },
     }
@@ -376,16 +387,15 @@ def _snapshot_manifest(results_path: Path) -> Path:
     raise DatasetV2Error("saved rubric snapshot is missing")
 
 
-def _snapshot_cases(results_path: Path) -> dict[str, dict]:
-    """Rubric and input hashes from the dataset written with the source run."""
+def _snapshot_dataset(results_path: Path):
+    """The dataset written with the source run. File hashes are checked here."""
     try:
-        dataset = load_dataset(_snapshot_manifest(results_path))
+        return load_dataset(_snapshot_manifest(results_path))
     except (DatasetError, OSError, ValueError) as exc:
         raise DatasetV2Error(f"saved rubric snapshot does not match its hashes: {exc}") from exc
-    return {case["case_id"]: case for case in dataset.cases}
 
 
-def _replay_identity(saved: dict, gate: str) -> dict[str, Any]:
+def _replay_identity(saved: dict, gate: str, replay_commit: str | None) -> dict[str, Any]:
     source_config = copy.deepcopy(saved.get("config")) if isinstance(saved.get("config"), dict) else {}
     return {
         "source_identity": {
@@ -394,7 +404,7 @@ def _replay_identity(saved: dict, gate: str) -> dict[str, Any]:
             "config": source_config,
         },
         "replay_identity": {
-            "commit": resolve_implementation_commit(),
+            "commit": replay_commit,
             "completion_parser_version": COMPLETION_PARSER_VERSION,
             "transcript_quality_gate": gate,
         },
@@ -402,12 +412,16 @@ def _replay_identity(saved: dict, gate: str) -> dict[str, Any]:
 
 
 def _check_saved_hashes(case_id: str, outputs: dict, case: dict) -> None:
+    """The run must name the snapshot rubric and input. A missing hash does not match."""
     experiment = outputs.get("experiment_case")
-    if isinstance(experiment, dict):
-        if "rubric_sha256" in experiment and experiment.get("rubric_sha256") != case["rubric_sha256"]:
-            raise DatasetV2Error(f"saved rubric hash does not match the snapshot: {case_id}")
-        if "input_sha256" in experiment and experiment.get("input_sha256") != case["input_sha256"]:
-            raise DatasetV2Error(f"saved input hash does not match the snapshot: {case_id}")
+    if not isinstance(experiment, dict):
+        raise DatasetV2Error(f"saved run has no snapshot binding: {case_id}")
+    for key, label in (("rubric_sha256", "rubric"), ("input_sha256", "input")):
+        saved_hash = experiment.get(key)
+        if not isinstance(saved_hash, str) or not saved_hash:
+            raise DatasetV2Error(f"saved {label} hash is missing: {case_id}")
+        if saved_hash != case[key]:
+            raise DatasetV2Error(f"saved {label} hash does not match the snapshot: {case_id}")
 
 
 def _saved_transcript(outputs: dict, artifacts: Path, case_id: str) -> str | None:
@@ -450,7 +464,7 @@ def _replay_one(run: Any, by_request: dict[str, dict], snapshot: dict[str, dict]
     # A provider or abnormal finish stays failed. A parser or gate failure is
     # judged again when the saved raw completion is still there.
     if grade.get("status") == "failed" and not _rejudge_failure(grade, outputs, raw):
-        outputs["replay"] = {**_replay_identity(saved, gate), "reparsed": False}
+        outputs["replay"] = {**_replay_identity(saved, gate, resolve_implementation_commit()), "reparsed": False}
         return copied
     if raw is None:
         stored = grade.get("raw_response")
@@ -468,7 +482,7 @@ def _replay_one(run: Any, by_request: dict[str, dict], snapshot: dict[str, dict]
     outputs["grading"] = graded
     copied["checks"] = list(graded.get("checks") or [])
     copied["failure_reason"] = graded.get("failure_reason") or ""
-    outputs["replay"] = {**_replay_identity(saved, gate), "reparsed": True}
+    outputs["replay"] = {**_replay_identity(saved, gate, resolve_implementation_commit()), "reparsed": True}
     return copied
 
 

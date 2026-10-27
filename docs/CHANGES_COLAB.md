@@ -1342,3 +1342,8 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 
 - `pipeline` は漏れた例外を `error_class` と `ClassName: message` で保存する。原因がパーサまたはゲートで、生の応答が残っていれば replay はそれを再判定する。
 - `TimeoutError`、`RemoteProtocolError`、`ProviderSetupError`、`MissingAPIKey`、quota、および `finish_reason` が `SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER` のものは失敗のままである。
+
+## dataset_v2: replay の識別は再判定のものであり、スナップショットの結び付きは必須
+
+- 保存された実行はルーブリックのハッシュと入力のハッシュを持っていなければならない。ハッシュが無いときは replay を中止する。同じ case id の別のスナップショットは使わない。
+- 最上位の `identity` はこの replay の識別である。元の実行の識別は `source_identity` に残す。

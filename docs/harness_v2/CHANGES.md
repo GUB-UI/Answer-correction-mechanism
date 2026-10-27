@@ -1005,3 +1005,7 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 ## dataset_v2: replay rejudges a gate exception saved with error_class
 
 `pipeline` stores an escaped exception as `error_class` and `ClassName: message`. Replay judges that row again when the saved raw completion exists and the cause is the parser or the gate. `TimeoutError`, `RemoteProtocolError`, `ProviderSetupError`, `MissingAPIKey`, quota, and `finish_reason` of `SAFETY`, `MAX_TOKENS`, `RECITATION`, or `OTHER` stay failed.
+
+## dataset_v2: replay identity is the replay, and the snapshot binding is required
+
+A saved run must name its rubric hash and its input hash. A missing hash aborts the replay, so another snapshot with the same case id is not used. The top-level `identity` is this replay's identity. The source run's identity is kept in `source_identity`.

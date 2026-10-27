@@ -1618,6 +1618,9 @@ def test_replay_uses_the_saved_snapshot_and_records_both_identities(tmp_path):
     assert any(check["name"] == "parse_ambiguous" for check in row["checks"])
     assert written["config"]["completion_parser_version"] == COMPLETION_PARSER_VERSION
     assert written["config"]["transcript_quality_gate"] == "on"
+    assert written["source_identity"] == "source-identity"
+    assert written["identity"] != "source-identity"
+    assert len(written["identity"]) == 64
     assert written["replay"]["source_identity"]["commit"] == "source-commit"
     assert written["replay"]["source_identity"]["identity"] == "source-identity"
     assert written["replay"]["source_identity"]["config"]["completion_parser_version"] == "json_latex_escapes_v9"
@@ -1650,6 +1653,17 @@ def test_replay_uses_the_saved_snapshot_and_records_both_identities(tmp_path):
     with pytest.raises(DatasetV2Error, match="rubric hash"):
         replay(root, "dev", mismatch, tmp_path / "mismatch-out")
     assert not (tmp_path / "mismatch-out").exists()
+
+    for key, label in (("rubric_sha256", "rubric hash"), ("input_sha256", "input hash")):
+        unbound = _saved_run(
+            root, _replay_completion(transcript), transcript, run_dir=tmp_path / f"missing-{key}",
+        )
+        payload = json.loads((unbound / "run" / "results.json").read_text(encoding="utf-8"))
+        del payload["runs"][0]["outputs"]["experiment_case"][key]
+        (unbound / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(DatasetV2Error, match=f"{label} is missing"):
+            replay(root, "dev", unbound, tmp_path / f"missing-{key}-out")
+        assert not (tmp_path / f"missing-{key}-out").exists()
 
 
 def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):
