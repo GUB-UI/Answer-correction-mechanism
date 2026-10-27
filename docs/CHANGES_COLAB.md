@@ -1306,3 +1306,10 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 - 採点は、実行と一緒に保存されたデータセットのスナップショットと、保存された転写のファイルを使う。ルーブリックのハッシュと転写のハッシュを確かめ、違えば中止する。
 - 今のルーブリックや転写を黙って読み直さない。
 - 出力は元の識別とコミットを残し、replay のコミット、完了パーサの版、ゲート設定を記録する。実行の config と checks と failure_reason は再判定の結果である。
+
+## dataset_v2: 点数の語は同じ文の中だけ見る
+
+- 点数の語は、同じ文または節の中の数とだけ比べる。`Total is 4. I checked 2 equations.` は `parse_ambiguous` にならない。
+- `I checked "x=2".` は文である。`"total_score":` と、閉じない引用符は断片のままである。
+- `グラフは3点を通ります。` は点数ではない。`Thanks, (all checks passed).` は文である。`0,0` と `true,false` は曖昧なままである。
+- 完了パーサは `json_latex_escapes_v12` である。

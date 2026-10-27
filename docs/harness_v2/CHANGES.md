@@ -975,3 +975,7 @@ A comma between words, such as `thanks, done`, stays prose. `0,0`, `1,2`, `true,
 ## dataset_v2: replay keeps the saved inputs and both identities
 
 Replay grades from the dataset snapshot saved beside the run and from the saved transcript artifact. It checks the rubric hash and the transcript hash and stops if either differs. It does not silently read the current rubric or transcript. The output keeps the source identity and commit, and records the replay commit, completion parser version, and gate setting. The run config, checks, and failure_reason are the replayed grade.
+
+## dataset_v2: a score word stays inside its sentence
+
+A score word is compared only with numbers in the same sentence or clause. `Total is 4. I checked 2 equations.` is not `parse_ambiguous`. `I checked "x=2".` is prose. `"total_score":` is still a fragment, and a lone quote is still a fragment. `グラフは3点を通ります。` is not a score. `Thanks, (all checks passed).` is prose. `0,0` and `true,false` stay ambiguous. The completion parser is `json_latex_escapes_v12`.

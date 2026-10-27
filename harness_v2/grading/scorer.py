@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v11"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v12"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -165,6 +165,10 @@ _LITERAL_LIST = re.compile(
     r"(?<![A-Za-z0-9_])(?:true|false|null)\s*,\s*(?:true|false|null)(?![A-Za-z0-9_])",
     re.IGNORECASE,
 )
+# A quoted key followed by a colon is leftover JSON. A closed quote in a
+# sentence is prose.
+_JSON_KEY_COLON = re.compile(r'"(?:[^"\\\n]|\\.)*"\s*:')
+_PROSE_LETTER = re.compile(r"[A-Za-z\u3040-\u30ff\u4e00-\u9fff]")
 # A quote, or a colon introducing a number that is not a score statement.
 _COLON_VALUE = re.compile(
     r":\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
@@ -181,7 +185,7 @@ _SCORE_WORD = re.compile(
 # N点 is a score only as a score phrase. 以下の3点を確認 is not one.
 _SCORE_TEN = re.compile(
     r"(?<![A-Za-z0-9_.])(?P<number>[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*点"
-    r"(?!を確認|について|がある|を挙げ|を述べ|を見る|を説明)"
+    r"(?!を確認|について|がある|を挙げ|を述べ|を見る|を説明|を通)"
 )
 _LIST_INTRO = ("以下の", "次の", "この", "その", "あの")
 
@@ -221,12 +225,29 @@ def _number_ending_at(text: str, index: int) -> float | None:
     return None
 
 
+def _clause_end(text: str, start: int) -> int:
+    """End of the sentence or clause that contains start. A decimal point stays."""
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char in "。！？?!；;\n":
+            return index
+        if char == "." and not (
+            index > 0 and text[index - 1].isdigit()
+            and index + 1 < len(text) and text[index + 1].isdigit()
+        ):
+            return index
+        index += 1
+    return len(text)
+
+
 def _score_mention_differs(rest: str, loaded: dict) -> bool:
-    """Compare each score statement in the whole trailing text with the total."""
+    """Compare numbers in the same sentence or clause as each score word."""
     total = _parsed_total(loaded)
     matches = list(_SCORE_WORD.finditer(rest))
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(rest)
+        end = min(end, _clause_end(rest, match.start()))
         numbers = _number_tokens(rest[match.start():end])
         before = _number_ending_at(rest, match.start())
         if before is not None:
@@ -272,6 +293,11 @@ def _wordish(char: str) -> bool:
 def _structural_comma(rest: str) -> bool:
     if _NUMERIC_LIST.search(rest) or _LITERAL_LIST.search(rest):
         return True
+    if "," not in rest:
+        return False
+    # A sentence with letters or kana may contain a comma before punctuation.
+    if _PROSE_LETTER.search(rest):
+        return False
     for index, char in enumerate(rest):
         if char == "," and not _prose_comma(rest, index):
             return True
@@ -287,9 +313,24 @@ def _colon_is_score_statement(rest: str, colon_at: int) -> bool:
     return match is not None and match.end() == len(prefix)
 
 
+def _unbalanced_quotes(rest: str) -> bool:
+    count = 0
+    escaped = False
+    for char in rest:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            count += 1
+    return count % 2 == 1
+
+
 def _kv_fragment(rest: str) -> bool:
-    """A quote or a colon-value that is not itself a score statement."""
-    if '"' in rest:
+    """An unmatched quote, a quoted key, or a colon-value that is not a score."""
+    if _unbalanced_quotes(rest) or _JSON_KEY_COLON.search(rest):
         return True
     for match in _COLON_VALUE.finditer(rest):
         if not _colon_is_score_statement(rest, match.start()):
@@ -343,8 +384,10 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
     also spells a known command is not rewritten. One complete object followed
     only by prose is that object, with marker ``trailing_text``. A brace,
     bracket, JSON comma, quote, colon-value fragment, or score statement
-    after it is ``parse_ambiguous``. A comma between words is prose. A numeric
-    list or a JSON literal list is not. ``点`` counts only inside a score phrase.
+    after it is ``parse_ambiguous``. A comma in a sentence is prose. A numeric
+    list or a JSON literal list is not. A score word is compared only with
+    numbers in its sentence. A quoted phrase is prose; a quoted key is not.
+    ``点`` counts only inside a score phrase.
     """
     try:
         loaded, repaired, ambiguous, marker = _load_repaired_json(raw)
