@@ -10,10 +10,12 @@ unbalanced bracket or fraction, a stray symbol on a math line, or a Cyrillic
 letter mixed into another script. A numeric contradiction between two
 consecutive simple equations is transcript_inconsistent. Both sides are
 compared only when a safe arithmetic evaluator, with no eval, can reduce them
-to numbers. Superscript digits are exponents. A question mark on a math line,
-or a fullwidth Latin letter mixed with an ASCII letter, is a flag. That flag
-routes to review only together with model uncertainty of at least 0.5 or a
-model confidence of at most 0.5.
+to numbers. Superscript digits are exponents. Dollar delimiters, alignment
+ampersands, absolute-value bars, percent signs, half-open intervals, and
+\frac with a digit or letter argument are ordinary Math I/A notation. A
+question mark on a math line, or a fullwidth Latin letter mixed with an
+ASCII letter, is a flag. That flag routes to review only together with model
+uncertainty of at least 0.5 or a model confidence of at most 0.5.
 """
 
 from __future__ import annotations
@@ -28,8 +30,8 @@ from harness_v2.core.contracts import Check, GradingResult
 TRANSCRIPT_GARBLED = "transcript_garbled"
 TRANSCRIPT_INCONSISTENT = "transcript_inconsistent"
 _CONFIDENCE_AT = 0.5
-_STRAY = set("#$@~`|&%§¶†‡•◆■□●○※\ufffd")
-_CLOSERS = {")": "(", "]": "[", "}": "{"}
+_STRAY = set("#@~`§¶†‡•◆■□●○※\ufffd")
+_CLOSERS = {")": "([", "]": "[(", "}": "{"}
 _FRAC = ("\\dfrac", "\\tfrac", "\\frac")
 _SUPER_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹", "0123456789")
 _MAX_ABS_EXPONENT = 8
@@ -156,11 +158,7 @@ def _unbalanced(text: str) -> bool:
             command = next(item for item in _FRAC if text.startswith(item, index))
             index += len(command)
             for _group in range(2):
-                while index < length and text[index].isspace():
-                    index += 1
-                if index >= length or text[index] != "{":
-                    return True
-                end = _group_end(text, index)
+                end = _frac_arg(text, index)
                 if end is None:
                     return True
                 index = end
@@ -169,14 +167,30 @@ def _unbalanced(text: str) -> bool:
         if char == "\\" and index + 1 < length:
             index += 2
             continue
+        if char == "$":
+            index += 1
+            continue
         if char in "([{":
             stack.append(char)
         elif char in _CLOSERS:
-            if not stack or stack[-1] != _CLOSERS[char]:
+            if not stack or stack[-1] not in _CLOSERS[char]:
                 return True
             stack.pop()
         index += 1
     return bool(stack)
+
+
+def _frac_arg(text: str, index: int) -> int | None:
+    length = len(text)
+    while index < length and text[index].isspace():
+        index += 1
+    if index >= length:
+        return None
+    if text[index] == "{":
+        return _group_end(text, index)
+    if text[index].isascii() and text[index].isalnum():
+        return index + 1
+    return None
 
 
 def _group_end(text: str, start: int) -> int | None:

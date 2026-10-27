@@ -132,6 +132,52 @@ def test_superscripts_are_exponents_and_do_not_fail_the_grade(tmp_path):
     assert flagged["items"][0]["score"] == 4
 
 
+def test_standard_math_notation_is_not_garbled():
+    samples = [
+        r"$x=\sqrt{2}$",
+        r"\frac{1}{2}",
+        r"\frac12",
+        r"\dfrac12 = \tfrac{1}{2}",
+        "|x|=2",
+        r"\left|x\right|=2",
+        r"P(A)=50\%",
+        "[0,1)",
+        "(0,1]",
+        "[0,1]",
+        "(0,1)",
+        r"\begin{cases} x=1 & x>0 \\ -x & x<0 \end{cases}",
+        r"\binom{n}{r}=10",
+        r"_{n}C_{r}=10",
+        r"\sin 30^{\circ}=\frac12",
+        r"\cos\theta=\frac{1}{2}",
+        r"90^{\circ}",
+        r"\overline{A}=\{1\}",
+        r"\bar{A}\cap B=\emptyset",
+        "A\u0305 = {1, 2}",
+    ]
+    for answer in samples:
+        assert transcript_reasons(answer) == [], answer
+
+
+def test_clean_math_transcript_stays_validated(tmp_path):
+    answer = "\n".join([
+        r"$x=\sqrt{2}$",
+        r"\frac12=\frac{1}{2}",
+        "|x|=2",
+        r"P(A)=50\%",
+        "[0,1)",
+        r"\begin{cases} x=1 & x>0 \\ -x & x<0 \end{cases}",
+        r"\binom{n}{r}=10",
+        r"\sin 30^{\circ}=\frac12",
+        r"\overline{A}=\{1\}",
+    ])
+    grade, _flag = _run(tmp_path, answer, gate="on")
+    assert grade["status"] == "validated"
+    assert grade["failure_reason"] == ""
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 4
+
+
 def test_a_gate_error_records_the_error_and_keeps_the_grade(tmp_path, monkeypatch):
     def boom(*_args, **_kwargs):
         raise RuntimeError("gate blew up")

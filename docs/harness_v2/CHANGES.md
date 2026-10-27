@@ -905,3 +905,7 @@ A number next to a total or score word is compared with the parsed total, not wi
 ## dataset_v2: a transcript-gate error keeps the grade
 
 An exception inside the transcript gate no longer replaces the grade with `failed` or clears the scores. The gate records a `gate_error` check with the exception type and adds no transcript flag. Superscript digits such as `²` are exponents in the arithmetic check, so `x² = 4` beside `x = 2` is consistent and `x² = 4` beside `x = 3` is `transcript_inconsistent`. The check still does not change a score.
+
+## dataset_v2: ordinary Math I/A notation is not a garbled transcript
+
+The transcript gate no longer treats `$`, `|`, `%`, or `&` as stray symbols. `$...$` delimiters are ignored, `\frac12` is a fraction with one digit or letter per argument, and `)` may close `[` while `]` may close `(`, so `[0,1)` and `(0,1]` are balanced. Roots, braced fractions, absolute values, percents, intervals, cases, binomial coefficients, trig with degrees, and sets with a complement bar stay unflagged. `#` on a math line, a missing closer, and a Cyrillic mix still set `transcript_garbled`. Scores are unchanged.
