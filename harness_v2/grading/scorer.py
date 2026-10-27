@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v10"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v11"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -154,7 +154,17 @@ def repair_json_string_escapes(text: str) -> tuple[str, bool]:
 
 
 # A stray brace or bracket is leftover JSON. A comma between words is prose.
+# A numeric list or a JSON literal list is leftover JSON even when the
+# characters beside the comma are letters or digits.
 _JSON_STRUCTURAL = re.compile(r"[{}\[\]]")
+_NUMERIC_LIST = re.compile(
+    r"(?<![A-Za-z0-9_.])[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*,\s*"
+    r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+)
+_LITERAL_LIST = re.compile(
+    r"(?<![A-Za-z0-9_])(?:true|false|null)\s*,\s*(?:true|false|null)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
 # A quote, or a colon introducing a number that is not a score statement.
 _COLON_VALUE = re.compile(
     r":\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
@@ -253,10 +263,15 @@ def _prose_comma(text: str, index: int) -> bool:
 
 
 def _wordish(char: str) -> bool:
-    return char.isalnum() or "\u3040" <= char <= "\u30ff" or "\u4e00" <= char <= "\u9fff"
+    """A letter or kana. A digit is not a word, so 0,0 is not prose."""
+    if char.isdecimal():
+        return False
+    return char.isalpha() or "\u3040" <= char <= "\u30ff" or "\u4e00" <= char <= "\u9fff"
 
 
 def _structural_comma(rest: str) -> bool:
+    if _NUMERIC_LIST.search(rest) or _LITERAL_LIST.search(rest):
+        return True
     for index, char in enumerate(rest):
         if char == "," and not _prose_comma(rest, index):
             return True
@@ -328,8 +343,8 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
     also spells a known command is not rewritten. One complete object followed
     only by prose is that object, with marker ``trailing_text``. A brace,
     bracket, JSON comma, quote, colon-value fragment, or score statement
-    after it is ``parse_ambiguous``. A comma between words is prose. ``点``
-    counts only inside a score phrase.
+    after it is ``parse_ambiguous``. A comma between words is prose. A numeric
+    list or a JSON literal list is not. ``点`` counts only inside a score phrase.
     """
     try:
         loaded, repaired, ambiguous, marker = _load_repaired_json(raw)

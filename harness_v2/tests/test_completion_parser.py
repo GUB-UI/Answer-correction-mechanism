@@ -397,6 +397,12 @@ def test_json_leftovers_after_one_object_are_not_validated(tmp_path):
     assert ambiguous is False
     assert marker == "trailing_text"
     assert total == 4
+    for fragment in ("\n0,0", "\n1,2", "\ntrue,false", "\nnull,null", "\n0, 0", "\nTRUE, FALSE"):
+        _items, _total, _fence, repaired, ambiguous, marker = items_from_completion(
+            body + fragment, rubric)
+        assert repaired is True
+        assert ambiguous is True, fragment
+        assert marker == "trailing_text"
 
 
 def test_a_second_object_or_a_different_score_is_review_required(tmp_path):
@@ -557,7 +563,7 @@ def test_parser_version_changes_reuse_identity_and_is_not_caller_selectable(tmp_
     from harness_v2.tests.test_p3_dataset import make_dataset
     from harness_v2.tests.test_p3_runner import config_at
 
-    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v10"
+    assert COMPLETION_PARSER_VERSION == "json_latex_escapes_v11"
     path = config_at(tmp_path)
     loaded = load_config(path)
     assert loaded["completion_parser_version"] == COMPLETION_PARSER_VERSION

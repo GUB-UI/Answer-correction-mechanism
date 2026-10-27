@@ -1283,3 +1283,9 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 
 - `点数`、`採点`、`得点`、`合計` は点数の語である。合計と違う `点数は0です。` や `採点は0とします。` は `parse_ambiguous` になる。合計と同じ文はそうならない。
 - `点` だけでは点数の語にしない。完了パーサは `json_latex_escapes_v10` である。
+
+## dataset_v2: 数やリテラルの並びは文ではない
+
+- 語と語の間のカンマ、たとえば `thanks, done` は文のままである。
+- `0,0`、`1,2`、`true,false`、`null,null` は残った JSON であり、`parse_ambiguous` になる。カンマの隣の数字は語ではない。
+- 完了パーサは `json_latex_escapes_v11` である。

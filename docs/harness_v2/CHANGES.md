@@ -959,3 +959,7 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 ## dataset_v2: Japanese score corrections are read
 
 `点数`, `採点`, `得点`, and `合計` are score words. `点数は0です。` and `採点は0とします。` after a different total are `parse_ambiguous`. The same total is not. A bare `点` is still not a score word by itself. The completion parser is `json_latex_escapes_v10`.
+
+## dataset_v2: a numeric or literal list is not prose
+
+A comma between words, such as `thanks, done`, stays prose. `0,0`, `1,2`, `true,false`, and `null,null` are leftover JSON and are `parse_ambiguous`. A digit beside a comma is not a word. The completion parser is `json_latex_escapes_v11`.
