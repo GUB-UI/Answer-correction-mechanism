@@ -24,7 +24,7 @@ def test_total_latency_and_history_include_all_attempts(tmp_path, monkeypatch, l
             raise ServerError('server')
         if last == 'quota':
             raise RateLimit('quota')
-        return iter((SimpleNamespace(text=_valid()),))
+        return iter((SimpleNamespace(text=_valid(), finish_reason='STOP'),))
     def sleep(seconds):
         now[0] += seconds
     provider = GemmaAIStudio(client_factory=lambda **kwargs: SimpleNamespace(

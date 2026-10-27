@@ -211,6 +211,10 @@ def _is_max_tokens(reason: str | None) -> bool:
     return (reason or "").upper() == "MAX_TOKENS"
 
 
+def _is_stop(reason: str | None) -> bool:
+    return (reason or "").upper() == "STOP"
+
+
 def _parseable_visible_answer(text: str) -> bool:
     if not isinstance(text, str) or not text.strip():
         return False
@@ -591,21 +595,45 @@ class GemmaAIStudio:
                     return exchange
                 continue
             input_tokens, output_tokens, thoughts = usage
-            if _is_max_tokens(finish) and not _parseable_visible_answer(visible):
+            if finish is None or not _is_stop(finish):
+                # A missing finish_reason is an incomplete stream and can be
+                # retried. Any other reason, including MAX_TOKENS and SAFETY,
+                # is terminal. Valid JSON does not make it a graded result.
+                incomplete = finish is None
+                if incomplete:
+                    error = "stream ended without finish_reason"
+                    error_class = "StreamEnded"
+                elif _is_max_tokens(finish):
+                    error = "MAX_TOKENS with no parseable answer" if not _parseable_visible_answer(visible) else "finish_reason=MAX_TOKENS"
+                    error_class = "MAX_TOKENS"
+                else:
+                    error = f"finish_reason={finish}"
+                    error_class = finish or "StreamEnded"
                 attempts.append(self._attempt_row(
-                    elapsed_s=self._monotonic() - started, status="error", error_class="MAX_TOKENS",
+                    elapsed_s=self._monotonic() - started, status="error", error_class=error_class,
                     started_at=started_at, ended_at=self._stamp(), finish_reason=finish,
                     input_tokens=input_tokens, output_tokens=output_tokens,
                     thoughts_token_count=thoughts, timeout_s=attempt_timeout_s,
                 ))
-                return self._exchange(
+                exchange = self._exchange(
                     request_id=request_id, recorded=recorded, attempts=attempts,
                     total_started=total_started, status="error", raw_response=visible,
-                    error="MAX_TOKENS with no parseable answer",
+                    error=error,
                     input_tokens=input_tokens, output_tokens=output_tokens,
                     model_returned=model_returned or self.model_id,
                     provider_response_id=response_id, attempt=attempt,
                 )
+                if not incomplete or attempt >= self.max_attempts:
+                    return exchange
+                self._drop_client()
+                remaining = self._remaining_s(case_deadline)
+                if remaining <= _WALL_EPSILON_S:
+                    return exchange
+                wait = min(self._fast_backoff_s(attempt), remaining)
+                self._sleep(wait)
+                if self._remaining_s(case_deadline) <= _WALL_EPSILON_S:
+                    return exchange
+                continue
             attempts.append(self._attempt_row(
                 elapsed_s=self._monotonic() - started, status="ok", error_class="",
                 started_at=started_at, ended_at=self._stamp(), finish_reason=finish,

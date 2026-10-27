@@ -857,3 +857,7 @@ Generation uses `generate_content_stream`. One case has one wall-clock limit (`-
 ## dataset_v2: each attempt uses the time still left on the case
 
 The socket timeout for an attempt is the remaining case budget, not the original 900 s again. The backoff sleep is capped to that same remainder. A read that yields no chunk therefore ends when the case budget ends. The recorded `timeout_s` is the budget for that attempt. The whole case stays within `--wall-clock-limit-s` plus one millisecond.
+
+## dataset_v2: only a STOP finish is graded
+
+A provider result is graded only when the final `finish_reason` is `STOP`. `MAX_TOKENS`, `SAFETY`, `RECITATION`, `OTHER`, and any other named reason are stored as terminal failures, including when the visible text is a JSON object. A stream that ends with no `finish_reason` is retried as a transport disconnect, and a new client is built for the next attempt. Retries still stop at `--max-attempts` and at the case budget.

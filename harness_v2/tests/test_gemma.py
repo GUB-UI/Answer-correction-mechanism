@@ -57,6 +57,7 @@ def test_non_json_response_is_kept(monkeypatch) -> None:
             model_version="gemma-4-31b-it-2026",
             response_id="resp-9",
             usage_metadata=SimpleNamespace(prompt_token_count=11, candidates_token_count=7),
+            finish_reason="STOP",
         )
 
     client, models = _client(behavior)
@@ -138,7 +139,7 @@ def test_transient_error_then_success() -> None:
         state["n"] += 1
         if state["n"] == 1:
             raise ServerError("unavailable")
-        return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok")
+        return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok", finish_reason="STOP")
 
     client, _models = _client(behavior)
     exchange = GemmaAIStudio(
@@ -185,7 +186,7 @@ def test_client_is_constructed_for_the_gemini_api(monkeypatch) -> None:
             captured.append(kwargs)
             self.models = SimpleNamespace(
                 generate_content_stream=lambda **_kwargs: iter(
-                    (SimpleNamespace(text="{}", response_id="resp-api"),))
+                    (SimpleNamespace(text="{}", response_id="resp-api", finish_reason="STOP"),))
             )
 
     google = ModuleType("google")
@@ -357,7 +358,7 @@ def test_transport_disconnect_retries_with_a_fresh_client_and_the_remaining_budg
             state["n"] += 1
             if state["n"] == 1:
                 raise exc
-            return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok")
+            return SimpleNamespace(text="{}", model_version=MODEL_ID, response_id="ok", finish_reason="STOP")
 
         return behavior
 
@@ -446,7 +447,7 @@ def test_unrelated_provider_error_is_not_retried() -> None:
 
 def test_thinking_level_and_max_output_tokens_are_recorded_and_sent() -> None:
     def behavior(_kwargs):
-        return SimpleNamespace(text="{}")
+        return SimpleNamespace(text="{}", finish_reason="STOP")
 
     client, models = _client(behavior)
     provider = GemmaAIStudio(client_factory=lambda **_kwargs: client)
@@ -503,7 +504,7 @@ def test_thinking_config_uses_sdk_types_when_importable(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "google.genai.types", types_mod)
 
     def behavior(_kwargs):
-        return SimpleNamespace(text="{}")
+        return SimpleNamespace(text="{}", finish_reason="STOP")
 
     client, models = _client(behavior)
     GemmaAIStudio(client_factory=lambda **_kwargs: client).generate(
@@ -575,9 +576,16 @@ def test_max_tokens_with_a_parseable_object_is_accepted() -> None:
             ),
         ]
 
-    client, _models = _client(behavior)
-    exchange = GemmaAIStudio(client_factory=lambda **_kwargs: client).generate("prompt", request_id="kept")
-    assert exchange.status == "ok"
+    client, models = _client(behavior)
+    slept: list[float] = []
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: client, sleep=slept.append, max_attempts=3,
+    ).generate("prompt", request_id="kept")
+    assert exchange.status == "error"
+    assert exchange.error == "finish_reason=MAX_TOKENS"
+    assert exchange.attempt_count == 1
+    assert len(models.calls) == 1
+    assert slept == []
     assert exchange.raw_response == '{"a": 1}'
     assert exchange.attempts[0]["finish_reason"] == "MAX_TOKENS"
     assert exchange.output_tokens == 6
@@ -650,3 +658,77 @@ def test_read_wait_stays_inside_the_remaining_case_budget() -> None:
     assert exchange.attempts[1]["timeout_s"] == pytest.approx(95)
     assert clock["t"] == pytest.approx(900)
     assert clock["t"] <= 900 + 0.001
+
+
+@pytest.mark.parametrize("reason", ["SAFETY", "RECITATION", "OTHER"])
+def test_non_stop_finish_is_terminal_even_when_the_text_is_json(reason: str) -> None:
+    slept: list[float] = []
+
+    def behavior(_kwargs):
+        return SimpleNamespace(text='{"a": 1}', finish_reason=reason)
+
+    client, models = _client(behavior)
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: client, sleep=slept.append, max_attempts=3,
+    ).generate("prompt", request_id="finish")
+    assert exchange.status == "error"
+    assert exchange.error == f"finish_reason={reason}"
+    assert exchange.attempt_count == 1
+    assert len(models.calls) == 1
+    assert slept == []
+    assert exchange.raw_response == '{"a": 1}'
+    assert exchange.attempts[0]["finish_reason"] == reason
+
+
+def test_stream_without_finish_reason_retries_even_when_json_parses() -> None:
+    built: list[int] = []
+    state = {"n": 0}
+
+    def behavior(_kwargs):
+        state["n"] += 1
+        if state["n"] == 1:
+            return SimpleNamespace(
+                text='{"a": 1}',
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=3, candidates_token_count=2, thoughts_token_count=1),
+            )
+        return SimpleNamespace(text='{"a": 2}', finish_reason="STOP")
+
+    def factory(**kwargs):
+        built.append(kwargs["http_options"]["timeout"])
+        client, _models = _client(behavior)
+        return client
+
+    slept: list[float] = []
+    exchange = GemmaAIStudio(
+        client_factory=factory, sleep=slept.append, rng=lambda: 0, monotonic=lambda: 0.0,
+    ).generate("prompt", request_id="open-stream")
+    assert exchange.status == "ok"
+    assert exchange.raw_response == '{"a": 2}'
+    assert exchange.attempt_count == 2
+    assert slept == [5.0]
+    assert built == [WALL_CLOCK_LIMIT_MS, WALL_CLOCK_LIMIT_MS]
+    assert exchange.attempts[0]["error_class"] == "StreamEnded"
+    assert exchange.attempts[0]["finish_reason"] is None
+    assert exchange.attempts[0]["prompt_token_count"] == 3
+    assert exchange.attempts[1]["finish_reason"] == "STOP"
+
+
+def test_safety_finish_is_not_validated(tmp_path, monkeypatch) -> None:
+    from harness_v2.core.pipeline import Pipeline
+    from harness_v2.tests.test_p3_setup import store_at
+    from harness_v2.tests.test_pipeline import _case, _valid
+
+    monkeypatch.setenv("GEMINI_API_KEY", "offline-key")
+
+    def generate_content_stream(**_kwargs):
+        return iter((SimpleNamespace(text=_valid(), finish_reason="SAFETY"),))
+
+    provider = GemmaAIStudio(client_factory=lambda **_kwargs: SimpleNamespace(
+        models=SimpleNamespace(generate_content_stream=generate_content_stream)))
+    record = Pipeline(store_at(tmp_path), provider).run(
+        _case("safety", _valid()), experiment_id="e", commit="c")
+    grade = record.outputs["grading"]
+    assert grade["status"] == "failed"
+    assert grade["items"] == []
+    assert "SAFETY" in grade["failure_reason"]

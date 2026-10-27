@@ -16,7 +16,7 @@ def fake_sdk(monkeypatch, *, quota=False):
             error = RuntimeError("429")
             error.code = 429
             raise error
-        return iter((SimpleNamespace(text='{}'),))
+        return iter((SimpleNamespace(text='{}', finish_reason='STOP'),))
 
     def client(**kwargs):
         built.append(kwargs)
