@@ -1347,3 +1347,9 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 
 - 保存された実行はルーブリックのハッシュと入力のハッシュを持っていなければならない。ハッシュが無いときは replay を中止する。同じ case id の別のスナップショットは使わない。
 - 最上位の `identity` はこの replay の識別である。元の実行の識別は `source_identity` に残す。
+
+## dataset_v2: 解の列挙は残った JSON ではない
+
+- `The solutions are 1, 2.`、`The answer is (1, 2).`、`座標は(1,2)です。` は妥当なままである。
+- 数の並びが `parse_ambiguous` になるのは、`0,0` や `1,2` のような裸の JSON の残りであるときと、同じ文に点数の語があるときだけである。
+- `true,false` と `null,null` は曖昧なままである。完了パーサは `json_latex_escapes_v13` である。

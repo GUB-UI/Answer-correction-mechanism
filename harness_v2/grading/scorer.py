@@ -15,7 +15,7 @@ from harness_v2.core.contracts import EvidenceSpan, ItemResult, RubricItem
 _OPENER = re.compile(r"```(?:json)?[ \t]*\r?\n")
 # Bumped when repaired text can change a grade. Reuse identity includes this
 # so a grade parsed by an older pass is not treated as this parser's output.
-COMPLETION_PARSER_VERSION = "json_latex_escapes_v12"
+COMPLETION_PARSER_VERSION = "json_latex_escapes_v13"
 _JSON_SIMPLE_ESCAPES = set('"\\/')
 _JSON_CONTROL_ESCAPES = set("bfnrt")
 _JSON_HEX = set("0123456789abcdefABCDEF")
@@ -290,8 +290,41 @@ def _wordish(char: str) -> bool:
     return char.isalpha() or "\u3040" <= char <= "\u30ff" or "\u4e00" <= char <= "\u9fff"
 
 
+def _clause_start(text: str, index: int) -> int:
+    start = 0
+    cursor = 0
+    while cursor < index:
+        char = text[cursor]
+        boundary = char in "。！？?!；;\n"
+        if char == "." and not (
+            cursor > 0 and text[cursor - 1].isdigit()
+            and cursor + 1 < len(text) and text[cursor + 1].isdigit()
+        ):
+            boundary = True
+        if boundary:
+            start = cursor + 1
+        cursor += 1
+    return start
+
+
+def _numeric_list_is_structural(rest: str) -> bool:
+    """A comma-separated number list is leftover JSON, or a score correction.
+
+    A list inside ordinary math prose is not. Coordinates, tuples, and
+    solution lists stay prose unless that same sentence also has a score word.
+    """
+    for match in _NUMERIC_LIST.finditer(rest):
+        start = _clause_start(rest, match.start())
+        clause = rest[start:_clause_end(rest, match.start())]
+        if not _PROSE_LETTER.search(clause):
+            return True
+        if _SCORE_WORD.search(clause) or _SCORE_TEN.search(clause):
+            return True
+    return False
+
+
 def _structural_comma(rest: str) -> bool:
-    if _NUMERIC_LIST.search(rest) or _LITERAL_LIST.search(rest):
+    if _LITERAL_LIST.search(rest) or _numeric_list_is_structural(rest):
         return True
     if "," not in rest:
         return False
@@ -384,8 +417,10 @@ def parse_completion(raw: str) -> tuple[dict[str, Any], bool, bool, bool, str]:
     also spells a known command is not rewritten. One complete object followed
     only by prose is that object, with marker ``trailing_text``. A brace,
     bracket, JSON comma, quote, colon-value fragment, or score statement
-    after it is ``parse_ambiguous``. A comma in a sentence is prose. A numeric
-    list or a JSON literal list is not. A score word is compared only with
+    after it is ``parse_ambiguous``. A comma in a sentence is prose. A bare
+    numeric list or a JSON literal list is not. A numeric list in ordinary
+    math prose, such as coordinates or solutions, is prose unless that
+    sentence also has a score word. A score word is compared only with
     numbers in its sentence. A quoted phrase is prose; a quoted key is not.
     ``点`` counts only inside a score phrase.
     """

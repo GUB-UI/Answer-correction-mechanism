@@ -1009,3 +1009,7 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 ## dataset_v2: replay identity is the replay, and the snapshot binding is required
 
 A saved run must name its rubric hash and its input hash. A missing hash aborts the replay, so another snapshot with the same case id is not used. The top-level `identity` is this replay's identity. The source run's identity is kept in `source_identity`.
+
+## dataset_v2: a solution list is not leftover JSON
+
+`The solutions are 1, 2.`, `The answer is (1, 2).`, and `座標は(1,2)です。` stay valid. A numeric list is `parse_ambiguous` when it is bare leftover JSON, such as `0,0` or `1,2`, or when it sits in the same sentence as a score word. `true,false` and `null,null` stay ambiguous. The completion parser is `json_latex_escapes_v13`.
