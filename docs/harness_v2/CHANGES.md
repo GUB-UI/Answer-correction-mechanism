@@ -963,3 +963,7 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 ## dataset_v2: a numeric or literal list is not prose
 
 A comma between words, such as `thanks, done`, stays prose. `0,0`, `1,2`, `true,false`, and `null,null` are leftover JSON and are `parse_ambiguous`. A digit beside a comma is not a word. The completion parser is `json_latex_escapes_v11`.
+
+## dataset_v2: replay rejudges a parser or gate failure
+
+`replay` reads a saved raw completion again when the stored failure is a parser or gate failure. `json_parse_failed` and `transcript_garbled` are judged with the current parser and gate. A provider failure stays failed, including `finish_reason=SAFETY`, `MAX_TOKENS`, `RECITATION`, and `OTHER`. A parser failure with no saved raw completion stays failed, and its score stays missing.

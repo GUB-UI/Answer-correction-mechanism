@@ -30,6 +30,7 @@ import copy
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -261,8 +262,10 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
 
     ``run_dir`` is a baseline output directory (``run/results.json``) or that
     ``run`` directory itself. Raw completions and transcripts are read from
-    the saved artifacts. A provider failure is left as a failure, so a score
-    is not filled in from leftover text. The gate defaults to on.
+    the saved artifacts.     A provider failure, including an abnormal finish such as SAFETY, is left
+    as a failure, so a score is not filled in from leftover text. A parser or
+    gate failure is judged again when the saved raw completion exists. The
+    gate defaults to on.
     """
     if transcript_quality_gate not in {"on", "off"}:
         raise ValueError("transcript_quality_gate must be on or off")
@@ -365,15 +368,16 @@ def _replay_one(run: Any, by_request: dict[str, dict], prepared: dict[str, dict[
     grade = outputs.get("grading")
     if not isinstance(grade, dict):
         raise DatasetV2Error(f"saved run has no grade: {case_id}")
-    # A provider failure has no grade to re-parse. Leave its scores untouched.
-    if grade.get("status") == "failed":
+    raw = _artifact_text(artifacts, outputs.get("raw_response_artifact"))
+    # A provider or abnormal finish stays failed. A parser or gate failure is
+    # judged again when the saved raw completion is still there.
+    if grade.get("status") == "failed" and not _rejudge_failure(grade, outputs, raw):
         outputs["replay"] = {
             "completion_parser_version": COMPLETION_PARSER_VERSION,
             "transcript_quality_gate": gate,
             "reparsed": False,
         }
         return copied
-    raw = _artifact_text(artifacts, outputs.get("raw_response_artifact"))
     if raw is None:
         stored = grade.get("raw_response")
         raw = stored if isinstance(stored, str) else ""
@@ -396,6 +400,38 @@ def _replay_one(run: Any, by_request: dict[str, dict], prepared: dict[str, dict[
         "reparsed": True,
     }
     return copied
+
+
+_PARSER_OR_GATE = re.compile(
+    r"json_parse_failed|json object expected|items array missing|malformed_item|"
+    r"invalid_item_id|ScoringParseError|parse_ambiguous|transcript_|gate_error",
+    re.IGNORECASE,
+)
+
+
+def _rejudge_failure(grade: dict, outputs: dict, raw: str | None) -> bool:
+    """True when a failed row is a parser or gate failure with saved raw text."""
+    if raw is None:
+        return False
+    if outputs.get("error_class"):
+        return False
+    reason = str(grade.get("failure_reason") or "")
+    if "finish_reason=" in reason or re.search(r"\bquota\b", reason, re.IGNORECASE):
+        return False
+    exchange = outputs.get("exchange")
+    if isinstance(exchange, dict) and str(exchange.get("status") or "ok") not in {"ok", ""}:
+        return False
+    if _PARSER_OR_GATE.search(reason):
+        return True
+    checks = grade.get("checks")
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            name = str(check.get("name") or "")
+            if name.startswith(("transcript_", "gate_", "parse_")):
+                return True
+    return False
 
 
 def _replay_case_id(run: dict, by_request: dict[str, dict]) -> str:

@@ -1402,6 +1402,57 @@ def test_replay_keeps_a_provider_failure_unfilled(tmp_path):
     assert grade["failure_reason"] == "finish_reason=SAFETY"
 
 
+def test_replay_rejudges_a_parser_or_gate_failure_and_keeps_abnormal_finishes(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    raw = _replay_completion(transcript)
+    parsed = _saved_run(
+        root, raw, transcript, status="failed", total=None,
+        failure_reason="json_parse_failed: Expecting value",
+    )
+    result = replay(root, "dev", parsed, tmp_path / "parsed")
+    grade = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+    assert grade["replay"]["reparsed"] is True
+    assert grade["grading"]["status"] == "validated"
+    assert grade["grading"]["total_score"] == 4
+    assert grade["grading"]["items"][0]["score"] == 3
+
+    garbled = "x + # = 2\nshown"
+    gated = _saved_run(
+        root, _replay_completion(garbled), garbled, status="failed", total=None,
+        failure_reason="transcript_garbled", run_dir=tmp_path / "gated-src",
+    )
+    again = replay(root, "dev", gated, tmp_path / "gated")
+    gate_grade = json.loads(Path(again["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert gate_grade["status"] == "review_required"
+    assert gate_grade["total_score"] == 4
+    assert "transcript_garbled" in gate_grade["failure_reason"]
+
+    for finish in ("SAFETY", "MAX_TOKENS", "RECITATION", "OTHER"):
+        saved = _saved_run(
+            root, raw, transcript, status="failed", total=None,
+            failure_reason=f"finish_reason={finish}", run_dir=tmp_path / finish,
+        )
+        kept = replay(root, "dev", saved, tmp_path / f"{finish}-out")
+        row = json.loads(Path(kept["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+        assert row["replay"]["reparsed"] is False
+        assert row["grading"]["status"] == "failed"
+        assert row["grading"]["total_score"] is None
+        assert row["grading"]["failure_reason"] == f"finish_reason={finish}"
+
+    missing = _saved_run(
+        root, raw, transcript, status="failed", total=None,
+        failure_reason="json_parse_failed: Expecting value", run_dir=tmp_path / "missing-src",
+    )
+    payload = json.loads((missing / "run" / "results.json").read_text(encoding="utf-8"))
+    payload["runs"][0]["outputs"].pop("raw_response_artifact")
+    (missing / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    untouched = replay(root, "dev", missing, tmp_path / "missing-out")
+    stale = json.loads(Path(untouched["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+    assert stale["replay"]["reparsed"] is False
+    assert stale["grading"]["total_score"] is None
+
+
 def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):
     root = build_tree(tmp_path / "data")
     transcript = "$x=\\sqrt{2}$\nshown"

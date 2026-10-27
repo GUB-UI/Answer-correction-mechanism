@@ -1289,3 +1289,9 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 - 語と語の間のカンマ、たとえば `thanks, done` は文のままである。
 - `0,0`、`1,2`、`true,false`、`null,null` は残った JSON であり、`parse_ambiguous` になる。カンマの隣の数字は語ではない。
 - 完了パーサは `json_latex_escapes_v11` である。
+
+## dataset_v2: パーサやゲートの失敗は再判定する
+
+- `replay` は、保存された失敗がパーサまたはゲートの失敗であるとき、保存された生の応答を読み直す。`json_parse_failed` と `transcript_garbled` は現在のパーサとゲートで判定する。
+- プロバイダの失敗は失敗のままである。`finish_reason=SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER` も同じである。
+- 生の応答が無いパーサの失敗は失敗のままで、点数は埋めない。
