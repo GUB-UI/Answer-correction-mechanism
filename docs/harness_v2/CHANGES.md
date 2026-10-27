@@ -909,3 +909,7 @@ An exception inside the transcript gate no longer replaces the grade with `faile
 ## dataset_v2: ordinary Math I/A notation is not a garbled transcript
 
 The transcript gate no longer treats `$`, `|`, `%`, or `&` as stray symbols. `$...$` delimiters are ignored, `\frac12` is a fraction with one digit or letter per argument, and `)` may close `[` while `]` may close `(`, so `[0,1)` and `(0,1]` are balanced. Roots, braced fractions, absolute values, percents, intervals, cases, binomial coefficients, trig with degrees, and sets with a complement bar stay unflagged. `#` on a math line, a missing closer, and a Cyrillic mix still set `transcript_garbled`. Scores are unchanged.
+
+## dataset_v2: an abnormal finish is not retried
+
+`SAFETY`, `MAX_TOKENS`, `RECITATION`, `OTHER`, and any other named finish stay terminal when the socket then drops. The attempt records that finish and is not sent again, so a later `STOP` cannot turn the case into provider status `ok`. `MAX_TOKENS` keeps its existing error text. A stream that ends with no finish reason can still be retried. `STOP` followed by a disconnect is unchanged: the failure keeps that finish and its usage.

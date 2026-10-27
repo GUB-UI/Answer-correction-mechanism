@@ -843,6 +843,77 @@ def test_retry_resends_the_identical_prompt() -> None:
     assert exchange.raw_response == "{}"
 
 
+@pytest.mark.parametrize("reason", ["SAFETY", "MAX_TOKENS", "RECITATION", "OTHER"])
+def test_abnormal_finish_then_disconnect_is_not_retried_into_stop(reason: str) -> None:
+    class RemoteProtocolError(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def generate_content_stream(**_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield SimpleNamespace(
+                text='{"a": 1}',
+                finish_reason=reason,
+                response_id="resp-abnormal",
+                model_version=MODEL_ID,
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=8, candidates_token_count=4, thoughts_token_count=2),
+            )
+            raise RemoteProtocolError("Server disconnected")
+        yield SimpleNamespace(text='{"a": 2}', finish_reason="STOP")
+
+    slept: list[float] = []
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: SimpleNamespace(
+            models=SimpleNamespace(generate_content_stream=generate_content_stream)),
+        sleep=slept.append, max_attempts=3,
+    ).generate("prompt", request_id="abnormal-then-drop")
+    assert calls["n"] == 1
+    assert slept == []
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 1
+    assert exchange.raw_response == '{"a": 1}'
+    assert exchange.input_tokens == 8
+    assert exchange.output_tokens == 4
+    assert exchange.provider_response_id == "resp-abnormal"
+    expected_error = "finish_reason=MAX_TOKENS" if reason == "MAX_TOKENS" else f"finish_reason={reason}"
+    expected_class = "MAX_TOKENS" if reason == "MAX_TOKENS" else reason
+    assert exchange.error == expected_error
+    row = exchange.attempts[0]
+    assert row["finish_reason"] == reason
+    assert row["error_class"] == expected_class
+    assert row["prompt_token_count"] == 8
+    assert row["candidates_token_count"] == 4
+    assert row["thoughts_token_count"] == 2
+
+
+def test_max_tokens_then_disconnect_without_json_stays_terminal() -> None:
+    class RemoteProtocolError(Exception):
+        pass
+
+    calls = {"n": 0}
+
+    def generate_content_stream(**_kwargs):
+        calls["n"] += 1
+        yield SimpleNamespace(text="not json", finish_reason="MAX_TOKENS")
+        raise RemoteProtocolError("Server disconnected")
+
+    exchange = GemmaAIStudio(
+        client_factory=lambda **_kwargs: SimpleNamespace(
+            models=SimpleNamespace(generate_content_stream=generate_content_stream)),
+        sleep=lambda _seconds: None, max_attempts=3,
+    ).generate("prompt", request_id="max-then-drop")
+    assert calls["n"] == 1
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 1
+    assert exchange.error == "MAX_TOKENS with no parseable answer"
+    assert exchange.raw_response == "not json"
+    assert exchange.attempts[0]["finish_reason"] == "MAX_TOKENS"
+    assert exchange.attempts[0]["error_class"] == "MAX_TOKENS"
+
+
 def test_disconnect_after_stop_keeps_finish_reason_and_usage() -> None:
     class RemoteProtocolError(Exception):
         pass

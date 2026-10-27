@@ -248,6 +248,15 @@ def _parseable_visible_answer(text: str) -> bool:
     return isinstance(parsed, dict)
 
 
+def _terminal_finish_error(finish: str, visible: str) -> tuple[str, str]:
+    """A named finish other than STOP is the recorded result of the attempt."""
+    if _is_max_tokens(finish):
+        if _parseable_visible_answer(visible):
+            return "finish_reason=MAX_TOKENS", "MAX_TOKENS"
+        return "MAX_TOKENS with no parseable answer", "MAX_TOKENS"
+    return f"finish_reason={finish}", finish or "StreamEnded"
+
+
 def _retry_kind(exc: BaseException, code: int | None) -> str | None:
     """Fast 5xx and transport disconnects can be retried. A timeout cannot."""
     if _is_deadline(exc, code):
@@ -727,6 +736,18 @@ class GemmaAIStudio:
                 # this failure instead of calling the model again.
                 if _is_stop(finish_seen):
                     return exchange
+                # SAFETY, MAX_TOKENS, RECITATION, OTHER, and any other named
+                # finish are terminal. A later disconnect must not be retried
+                # into a STOP success.
+                if finish_seen:
+                    error, error_class = _terminal_finish_error(finish_seen, raw)
+                    attempts[-1]["error_class"] = error_class
+                    return self._exchange(
+                        request_id=request_id, recorded=recorded, attempts=attempts,
+                        total_started=total_started, status="error", raw_response=raw,
+                        error=error, input_tokens=input_tokens, output_tokens=output_tokens,
+                        model_returned=model_seen, provider_response_id=response_seen, attempt=attempt,
+                    )
                 kind = _retry_kind(cause, code)
                 if kind is None or attempt >= self.max_attempts:
                     return exchange
@@ -744,12 +765,8 @@ class GemmaAIStudio:
                 if incomplete:
                     error = "stream ended without finish_reason"
                     error_class = "StreamEnded"
-                elif _is_max_tokens(finish):
-                    error = "MAX_TOKENS with no parseable answer" if not _parseable_visible_answer(visible) else "finish_reason=MAX_TOKENS"
-                    error_class = "MAX_TOKENS"
                 else:
-                    error = f"finish_reason={finish}"
-                    error_class = finish or "StreamEnded"
+                    error, error_class = _terminal_finish_error(finish or "", visible)
                 attempts.append(self._attempt_row(
                     elapsed_s=self._monotonic() - started, status="error", error_class=error_class,
                     started_at=started_at, ended_at=self._stamp(), finish_reason=finish,
