@@ -175,7 +175,8 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
              wall_clock_limit_s: float = WALL_CLOCK_LIMIT_S,
              max_attempts: int = MAX_ATTEMPTS,
              fast_backoff_min_s: float = FAST_BACKOFF_MIN_S,
-             fast_backoff_max_s: float = FAST_BACKOFF_MAX_S) -> dict[str, Any]:
+             fast_backoff_max_s: float = FAST_BACKOFF_MAX_S,
+             transcript_quality_gate: str = "off") -> dict[str, Any]:
     """Grade one split and write metrics when every case finishes.
 
     A saved grade is reused only when the model id, prompt version, rubric
@@ -183,6 +184,8 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
     max_output_tokens are generation settings. Wall-clock and retry policy
     are not part of that identity.
     """
+    if transcript_quality_gate not in {"on", "off"}:
+        raise ValueError("transcript_quality_gate must be on or off")
     if model is None:
         model = MODEL_ID if provider == "gemma" else "fixture"
     settings = {
@@ -203,6 +206,7 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
         "max_attempts": max_attempts,
         "fast_backoff_min_s": fast_backoff_min_s,
         "fast_backoff_max_s": fast_backoff_max_s,
+        "transcript_quality_gate": transcript_quality_gate,
     }
     if fixture_completion is not None:
         config["fixture_completion"] = (fixture_completion if isinstance(fixture_completion, str)
@@ -942,6 +946,8 @@ def main(argv: list[str] | None = None) -> int:
                          help="minimum wait after a fast 500/502/503 or disconnect (default 5)")
     command.add_argument("--fast-backoff-max-s", type=float, default=FAST_BACKOFF_MAX_S,
                          help="maximum wait after a fast 500/502/503 or disconnect (default 30)")
+    command.add_argument("--transcript-quality-gate", choices=["on", "off"], default="off",
+                         help="route a garbled or inconsistent transcript to review (default off)")
     args = parser.parse_args(argv)
     settings: dict[str, Any] = {
         "temperature": args.temperature,
@@ -964,6 +970,7 @@ def main(argv: list[str] | None = None) -> int:
             max_attempts=args.max_attempts,
             fast_backoff_min_s=args.fast_backoff_min_s,
             fast_backoff_max_s=args.fast_backoff_max_s,
+            transcript_quality_gate=args.transcript_quality_gate,
         )
     except (DatasetV2Error, ValueError, OSError) as exc:
         parser.error(str(exc))

@@ -882,6 +882,10 @@ Token counts read from a streamed error are stored under their own names. They n
 
 Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
 
+## dataset_v2: an optional transcript quality gate
+
+`--transcript-quality-gate` is `off` by default. `off` is not part of the reuse identity, so an earlier result is still reused. `on` is part of that identity and is recorded on the run. The check runs beside grading. It never changes a score and does not read a reference score or a problem id. Clear garbling (a replacement or control character, an unbalanced bracket or fraction, a stray symbol on a math line, or Cyrillic mixed into another script) sets `review_required` with reason `transcript_garbled`. Consecutive simple equations whose two sides evaluate to different numbers, using a safe arithmetic evaluator and no `eval`, set reason `transcript_inconsistent`. A question mark on a math line, or a fullwidth Latin letter mixed with an ASCII letter, does that only together with model uncertainty of at least 0.5 or a model confidence of at most 0.5.
+
 ## dataset_v2: evaluation reports bias and review misses
 
 Metrics add signed bias, over-score count, sum, and max, and under-score count, for totals and for sub-scores that both exist. A missing score stays missing. They also add the `review_required` count and rate, the validated-miss count (`|predicted - reference| >= 1` and not `review_required`), and the count of those misses that `review_required` caught. The same fields are on each problem row.

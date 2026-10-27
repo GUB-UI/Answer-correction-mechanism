@@ -90,6 +90,11 @@ def load_config(path: Path) -> dict:
             raise ValueError('max_output_tokens must be at least 1')
         if name != 'seed' and value < 0:
             raise ValueError(f'{name} must be nonnegative')
+    gate = config.get('transcript_quality_gate', 'off')
+    if gate not in {'on', 'off'}:
+        raise ValueError('transcript_quality_gate must be on or off')
+    if 'transcript_quality_gate' in config:
+        config['transcript_quality_gate'] = gate
     config = {**config, 'generation_settings': {
         'temperature': 0,
         'max_output_tokens': DEFAULT_MAX_OUTPUT_TOKENS,
@@ -109,7 +114,12 @@ def reusable_config(config: dict) -> dict:
     Wall-clock and retry policy do not change the prompt, model, or sampling.
     A successful grade stays reusable when only that policy changes.
     """
-    return {key: value for key, value in config.items() if key not in TRANSPORT_CONFIG_KEYS}
+    kept = {key: value for key, value in config.items() if key not in TRANSPORT_CONFIG_KEYS}
+    # Off is the historical default, so a run that leaves the gate off reuses
+    # a result saved before the flag existed. On is a different result.
+    if kept.get('transcript_quality_gate', 'off') == 'off':
+        kept.pop('transcript_quality_gate', None)
+    return kept
 
 
 _LEGACY_TRANSPORT = (
@@ -327,6 +337,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         # model-input allowlist. No references are supplied to the provider factory.
         runtime_case = {**case, 'request_id': rid, 'prompt_version': config['prompt_version'],
                         'generation_settings': config['generation_settings'],
+                        'transcript_quality_gate': config.get('transcript_quality_gate', 'off'),
                         'experiment_case': provenance[rid],
                         **dataset.reference_for(case['problem_id'])}
         pipeline = Pipeline(store, provider)

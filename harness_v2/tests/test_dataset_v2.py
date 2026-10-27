@@ -1101,6 +1101,43 @@ def test_thinking_level_and_max_tokens_change_the_reuse_identity(tmp_path):
     assert len(calls) == 1
 
 
+def test_transcript_gate_off_reuses_an_older_result_and_on_does_not(tmp_path):
+    from harness_v2.run import load_config, reusable_config
+
+    root = build_tree(tmp_path / "data")
+    out = tmp_path / "out"
+    calls = []
+    first = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     transcript_quality_gate="off", provider_factory=_factory(calls),
+                     fixture_completion=_completion())
+    assert first["skipped"] == 0 and len(calls) == 1
+    saved = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert saved["transcript_quality_gate"] == "off"
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert again["skipped"] == 1 and len(calls) == 1
+    absent = {
+        "name": "baseline", "provider": "gemma", "model": "gemma-4-31b-it",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {"temperature": 0},
+    }
+    off = {**absent, "transcript_quality_gate": "off"}
+    on = {**absent, "transcript_quality_gate": "on"}
+    off_path = tmp_path / "off.json"
+    on_path = tmp_path / "on.json"
+    absent_path = tmp_path / "absent.json"
+    off_path.write_text(json.dumps(off), encoding="utf-8")
+    on_path.write_text(json.dumps(on), encoding="utf-8")
+    absent_path.write_text(json.dumps(absent), encoding="utf-8")
+    assert reusable_config(load_config(off_path)) == reusable_config(load_config(absent_path))
+    assert reusable_config(load_config(on_path)) != reusable_config(load_config(off_path))
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 transcript_quality_gate="on", provider_factory=_factory(calls),
+                 fixture_completion=_completion())
+    assert len(calls) == 1
+
+
 def test_baseline_output_is_private_and_reading_does_not_change_modes(tmp_path):
     previous = os.umask(0)
     try:

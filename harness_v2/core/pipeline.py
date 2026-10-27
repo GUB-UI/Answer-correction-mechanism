@@ -15,6 +15,7 @@ from harness_v2.evaluation.review import review_disagreement
 from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import ScoringParseError, build_prompt, items_from_completion
+from harness_v2.grading.transcript_quality import apply_transcript_gate
 from harness_v2.grading.validator import validate
 from harness_v2.improvement.proposals import build_proposal
 from harness_v2.providers.gemma_ai_studio import QuotaExceeded
@@ -146,6 +147,9 @@ class Pipeline:
                         "attempts": exchange.attempts, "settings": exchange.settings})
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         result = self._grade(exchange, rubric, prompt_answer, request_id)
+        apply_transcript_gate(
+            result, prompt_answer, enabled=case.get("transcript_quality_gate") == "on")
+        context["transcript_quality_gate"] = "on" if case.get("transcript_quality_gate") == "on" else "off"
         review_payload = self._maybe_review(result, view, rubric, request_id)
         proposal_link = self._maybe_propose(result, case, view, experiment_id, commit, request_id, raw_name)
         record = RunRecord(
