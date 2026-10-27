@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
 import os
@@ -35,7 +36,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from harness_v2.core.contracts import Check, GradingResult
-from harness_v2.evaluation.dataset import write_dataset
+from harness_v2.evaluation.dataset import DatasetError, load_dataset, write_dataset
 from harness_v2.evaluation.reference import optional_score
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION, ScoringParseError, items_from_completion
@@ -49,7 +50,7 @@ from harness_v2.providers.gemma_ai_studio import (
     MODEL_ID,
     WALL_CLOCK_LIMIT_S,
 )
-from harness_v2.run import run_experiment
+from harness_v2.run import resolve_implementation_commit, run_experiment
 from harness_v2.storage.permissions import private_directory, private_write_text
 
 DATASET_ID = "dataset_v2"
@@ -261,12 +262,14 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
     """Re-parse saved completions and re-apply the transcript gate. No model call.
 
     ``run_dir`` is a baseline output directory (``run/results.json``) or that
-    ``run`` directory itself. Raw completions and transcripts are read from
-    the saved artifacts. A provider failure, including an abnormal finish such
-    as SAFETY, is left as a failure, so a score is not filled in from leftover
-    text. A parser or gate failure is judged again when the saved raw
-    completion exists. The gate defaults to on. The output must not be the
-    source run, inside it, or a directory that contains it.
+    ``run`` directory itself. The rubric and transcript come from the saved
+    snapshot, and a saved hash that does not match aborts the replay. Current
+    dataset files are not a silent substitute. A provider failure, including
+    an abnormal finish such as SAFETY, is left as a failure, so a score is
+    not filled in from leftover text. A parser or gate failure is judged
+    again when the saved raw completion exists. The gate defaults to on. The
+    output must not be the source run, inside it, or a directory that
+    contains it.
     """
     if transcript_quality_gate not in {"on", "off"}:
         raise ValueError("transcript_quality_gate must be on or off")
@@ -286,9 +289,9 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
     for job in expected:
         if isinstance(job, dict) and isinstance(job.get("request_id"), str):
             by_request[job["request_id"]] = job
-    prepared = _replay_inputs(Path(dataset_dir), split)
+    snapshot = _snapshot_cases(results_path)
     runs = [
-        _replay_one(run, by_request, prepared, artifacts, transcript_quality_gate)
+        _replay_one(run, by_request, snapshot, artifacts, transcript_quality_gate, saved)
         for run in saved["runs"]
     ]
     failed = sum(
@@ -304,13 +307,18 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
         "pending": 0,
         "stopped_reason": "",
     })
+    source_config = copy.deepcopy(saved.get("config")) if isinstance(saved.get("config"), dict) else {}
+    config = copy.deepcopy(source_config)
+    config["completion_parser_version"] = COMPLETION_PARSER_VERSION
+    config["transcript_quality_gate"] = transcript_quality_gate
+    identity = _replay_identity(saved, transcript_quality_gate)
     payload = {
         **saved,
+        "config": config,
         "summary": summary,
         "runs": runs,
         "replay": {
-            "completion_parser_version": COMPLETION_PARSER_VERSION,
-            "transcript_quality_gate": transcript_quality_gate,
+            **identity,
             "source_results": str(results_path),
         },
     }
@@ -357,27 +365,72 @@ def _saved_run(run_dir: Path) -> tuple[Path, Path]:
     raise DatasetV2Error("saved run has no results.json")
 
 
-def _replay_inputs(root: Path, split: str) -> dict[str, dict[str, Any]]:
-    loaded = _load_split(root)
-    side = loaded[split]
-    stems = _problem_stems(root / "sol_draft")
-    transcripts = _transcripts(root, split, side["ids"], loaded["dev"]["ids"], loaded["holdout"]["ids"])
-    sources: dict[str, dict] = {}
-    prepared: dict[str, dict[str, Any]] = {}
-    for answer_id in side["ids"]:
-        problem = _problem_for(answer_id, stems)
-        if problem not in sources:
-            sources[problem] = _load_problem(root, problem)
-        raw, _filename = transcripts[answer_id]
-        prepared[answer_id] = {
-            "rubric": harness_items(sources[problem]),
-            "transcript": raw.decode("utf-8"),
-        }
-    return prepared
+def _snapshot_manifest(results_path: Path) -> Path:
+    candidates = []
+    if results_path.parent.name == "run":
+        candidates.append(results_path.parent.parent / "dataset" / "manifest.json")
+    candidates.append(results_path.parent / "dataset" / "manifest.json")
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise DatasetV2Error("saved rubric snapshot is missing")
 
 
-def _replay_one(run: Any, by_request: dict[str, dict], prepared: dict[str, dict[str, Any]],
-                artifacts: Path, gate: str) -> dict[str, Any]:
+def _snapshot_cases(results_path: Path) -> dict[str, dict]:
+    """Rubric and input hashes from the dataset written with the source run."""
+    try:
+        dataset = load_dataset(_snapshot_manifest(results_path))
+    except (DatasetError, OSError, ValueError) as exc:
+        raise DatasetV2Error(f"saved rubric snapshot does not match its hashes: {exc}") from exc
+    return {case["case_id"]: case for case in dataset.cases}
+
+
+def _replay_identity(saved: dict, gate: str) -> dict[str, Any]:
+    source_config = copy.deepcopy(saved.get("config")) if isinstance(saved.get("config"), dict) else {}
+    return {
+        "source_identity": {
+            "identity": saved.get("identity"),
+            "commit": saved.get("commit"),
+            "config": source_config,
+        },
+        "replay_identity": {
+            "commit": resolve_implementation_commit(),
+            "completion_parser_version": COMPLETION_PARSER_VERSION,
+            "transcript_quality_gate": gate,
+        },
+    }
+
+
+def _check_saved_hashes(case_id: str, outputs: dict, case: dict) -> None:
+    experiment = outputs.get("experiment_case")
+    if isinstance(experiment, dict):
+        if "rubric_sha256" in experiment and experiment.get("rubric_sha256") != case["rubric_sha256"]:
+            raise DatasetV2Error(f"saved rubric hash does not match the snapshot: {case_id}")
+        if "input_sha256" in experiment and experiment.get("input_sha256") != case["input_sha256"]:
+            raise DatasetV2Error(f"saved input hash does not match the snapshot: {case_id}")
+
+
+def _saved_transcript(outputs: dict, artifacts: Path, case_id: str) -> str | None:
+    """The graded transcript artifact. A present file must match its saved hash."""
+    name = outputs.get("grading_input_artifact")
+    if not isinstance(name, str) or not name:
+        name = outputs.get("ocr_artifact")
+    transcript = _artifact_text(artifacts, name)
+    if transcript is None:
+        return None
+    expected = outputs.get("grading_input_sha256")
+    if not isinstance(expected, str) or not expected:
+        expected = outputs.get("ocr_sha256")
+    if not isinstance(expected, str) or not expected:
+        raise DatasetV2Error(f"saved transcript hash is missing: {case_id}")
+    actual = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    if actual != expected:
+        raise DatasetV2Error(f"saved transcript hash does not match: {case_id}")
+    return transcript
+
+
+def _replay_one(run: Any, by_request: dict[str, dict], snapshot: dict[str, dict],
+                artifacts: Path, gate: str, saved: dict) -> dict[str, Any]:
     if not isinstance(run, dict):
         raise DatasetV2Error("invalid saved run")
     copied = copy.deepcopy(run)
@@ -385,42 +438,37 @@ def _replay_one(run: Any, by_request: dict[str, dict], prepared: dict[str, dict[
     if not isinstance(outputs, dict):
         raise DatasetV2Error("saved run has no outputs")
     case_id = _replay_case_id(copied, by_request)
-    if case_id not in prepared:
-        raise DatasetV2Error(f"saved run is not in the split: {case_id}")
+    case = snapshot.get(case_id)
+    if case is None:
+        raise DatasetV2Error(f"saved run is not in the snapshot: {case_id}")
+    _check_saved_hashes(case_id, outputs, case)
     grade = outputs.get("grading")
     if not isinstance(grade, dict):
         raise DatasetV2Error(f"saved run has no grade: {case_id}")
     raw = _artifact_text(artifacts, outputs.get("raw_response_artifact"))
+    transcript = _saved_transcript(outputs, artifacts, case_id)
     # A provider or abnormal finish stays failed. A parser or gate failure is
     # judged again when the saved raw completion is still there.
     if grade.get("status") == "failed" and not _rejudge_failure(grade, outputs, raw):
-        outputs["replay"] = {
-            "completion_parser_version": COMPLETION_PARSER_VERSION,
-            "transcript_quality_gate": gate,
-            "reparsed": False,
-        }
+        outputs["replay"] = {**_replay_identity(saved, gate), "reparsed": False}
         return copied
     if raw is None:
         stored = grade.get("raw_response")
         raw = stored if isinstance(stored, str) else ""
-    transcript = _artifact_text(artifacts, outputs.get("grading_input_artifact"))
     if transcript is None:
-        transcript = _artifact_text(artifacts, outputs.get("ocr_artifact"))
-    if transcript is None:
-        transcript = prepared[case_id]["transcript"]
+        raise DatasetV2Error(f"saved transcript snapshot is missing: {case_id}")
     request_id = copied.get("request_id")
     request_id = request_id if isinstance(request_id, str) else case_id
-    outputs["grading"] = _regrade_saved(
-        raw, transcript, prepared[case_id]["rubric"], request_id,
+    graded = _regrade_saved(
+        raw, transcript, case["rubric"], request_id,
         provider=str(grade.get("provider") or ""),
         model_id=str(grade.get("model_id") or ""),
         gate=gate,
     )
-    outputs["replay"] = {
-        "completion_parser_version": COMPLETION_PARSER_VERSION,
-        "transcript_quality_gate": gate,
-        "reparsed": True,
-    }
+    outputs["grading"] = graded
+    copied["checks"] = list(graded.get("checks") or [])
+    copied["failure_reason"] = graded.get("failure_reason") or ""
+    outputs["replay"] = {**_replay_identity(saved, gate), "reparsed": True}
     return copied
 
 

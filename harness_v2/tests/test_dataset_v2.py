@@ -1,4 +1,5 @@
 """dataset_v2 conversion uses rubrics and transcripts, never draft or reference scores."""
+import hashlib
 import json
 import os
 import stat
@@ -1294,13 +1295,41 @@ def test_cli_commit_is_recorded_and_the_default_stays_the_resolver(tmp_path, cap
 
 def _saved_run(root: Path, raw: str, transcript: str, *, status="validated", total=0,
               failure_reason="", run_dir: Path | None = None) -> Path:
+    from harness_v2.evaluation.dataset import load_dataset, write_dataset
+    from harness_v2.evaluation.dataset_v2 import _load_problem, harness_items
+
     saved = run_dir or (root.parent / "saved")
     artifacts = saved / "run" / "artifacts"
     (artifacts / "raw").mkdir(parents=True)
     (artifacts / "grading").mkdir()
     (artifacts / "raw" / "case.txt").write_text(raw, encoding="utf-8")
     (artifacts / "grading" / "case.txt").write_text(transcript, encoding="utf-8")
+    rubric = harness_items(_load_problem(root, "9-Z"))
+    manifest = write_dataset(
+        saved / "dataset",
+        dataset_id="dataset_v2",
+        version="replay-snapshot",
+        cases=[{
+            "case_id": "9-Z_C_XXXX",
+            "problem_id": "9-Z",
+            "input_version": "9-Z_C_XXXX",
+            "problem_text": "9-Z\nSynthetic summary.",
+            "rubric_version": "dataset_v2",
+            "rubric": rubric,
+            "grading_input_bytes": transcript.encode("utf-8"),
+        }],
+        reference_scores={},
+        reference_items={},
+    )
+    case = load_dataset(manifest).cases[0]
+    transcript_hash = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
     payload = {
+        "commit": "source-commit",
+        "identity": "source-identity",
+        "config": {
+            "completion_parser_version": "json_latex_escapes_v9",
+            "transcript_quality_gate": "off",
+        },
         "summary": {"pending": 0, "failed": 0, "stopped_reason": "", "completed": 1},
         "expected_runs": [{
             "request_id": "req-1",
@@ -1310,6 +1339,9 @@ def _saved_run(root: Path, raw: str, transcript: str, *, status="validated", tot
         }],
         "runs": [{
             "request_id": "req-1",
+            "commit": "source-commit",
+            "failure_reason": failure_reason,
+            "checks": [],
             "outputs": {
                 "grading": {
                     "status": status,
@@ -1317,10 +1349,17 @@ def _saved_run(root: Path, raw: str, transcript: str, *, status="validated", tot
                     "items": [],
                     "raw_response": "stale raw",
                     "failure_reason": failure_reason,
+                    "checks": [],
                 },
                 "raw_response_artifact": "raw/case.txt",
                 "grading_input_artifact": "grading/case.txt",
-                "experiment_case": {"case_id": "9-Z_C_XXXX", "repetition": 1},
+                "grading_input_sha256": transcript_hash,
+                "experiment_case": {
+                    "case_id": "9-Z_C_XXXX",
+                    "repetition": 1,
+                    "rubric_sha256": case["rubric_sha256"],
+                    "input_sha256": case["input_sha256"],
+                },
             },
         }],
     }
@@ -1475,6 +1514,65 @@ def test_replay_refuses_to_overwrite_the_source_run(tmp_path):
     kept = replay(root, "dev", saved, tmp_path / "elsewhere")
     assert Path(kept["results_path"]).is_file()
     assert {path: mode(path) for path in before} == before
+
+
+def test_replay_uses_the_saved_snapshot_and_records_both_identities(tmp_path):
+    from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION
+
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(
+        root, _replay_completion(transcript, "\n点数は0です。"), transcript, total=9)
+    live = json.loads((root / "sol_draft" / "9-Z.json").read_text(encoding="utf-8"))
+    live["rubric"]["subquestions"][0]["id"] = "(9)"
+    (root / "sol_draft" / "9-Z.json").write_text(json.dumps(live), encoding="utf-8")
+    (root / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_XXXX.md").write_text(
+        "x + # = 2\nshown\n", encoding="utf-8")
+    result = replay(root, "dev", saved, tmp_path / "replay")
+    written = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))
+    row = written["runs"][0]
+    grade = row["outputs"]["grading"]
+    assert grade["status"] == "review_required"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["item_id"] == "(1)"
+    assert "parse_ambiguous" in grade["failure_reason"]
+    assert row["failure_reason"] == grade["failure_reason"]
+    assert row["checks"] == grade["checks"]
+    assert any(check["name"] == "parse_ambiguous" for check in row["checks"])
+    assert written["config"]["completion_parser_version"] == COMPLETION_PARSER_VERSION
+    assert written["config"]["transcript_quality_gate"] == "on"
+    assert written["replay"]["source_identity"]["commit"] == "source-commit"
+    assert written["replay"]["source_identity"]["identity"] == "source-identity"
+    assert written["replay"]["source_identity"]["config"]["completion_parser_version"] == "json_latex_escapes_v9"
+    replay_id = row["outputs"]["replay"]["replay_identity"]
+    assert replay_id["completion_parser_version"] == COMPLETION_PARSER_VERSION
+    assert replay_id["transcript_quality_gate"] == "on"
+    assert isinstance(replay_id["commit"], str) and replay_id["commit"]
+    assert row["outputs"]["replay"]["reparsed"] is True
+    assert row["commit"] == "source-commit"
+
+    tampered = _saved_run(
+        root, _replay_completion(transcript), transcript, run_dir=tmp_path / "tampered")
+    grading = tampered / "run" / "artifacts" / "grading" / "case.txt"
+    grading.write_text(transcript + "\nchanged", encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="transcript hash"):
+        replay(root, "dev", tampered, tmp_path / "tampered-out")
+
+    hashed = _saved_run(
+        root, _replay_completion(transcript), transcript, run_dir=tmp_path / "hashed")
+    rubric_path = next((hashed / "dataset" / "rubrics").glob("*.json"))
+    rubric_path.write_bytes(rubric_path.read_bytes().replace(b"(1)", b"(9)"))
+    with pytest.raises(DatasetV2Error, match="snapshot"):
+        replay(root, "dev", hashed, tmp_path / "hashed-out")
+
+    mismatch = _saved_run(
+        root, _replay_completion(transcript), transcript, run_dir=tmp_path / "mismatch")
+    payload = json.loads((mismatch / "run" / "results.json").read_text(encoding="utf-8"))
+    payload["runs"][0]["outputs"]["experiment_case"]["rubric_sha256"] = "0" * 64
+    (mismatch / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="rubric hash"):
+        replay(root, "dev", mismatch, tmp_path / "mismatch-out")
+    assert not (tmp_path / "mismatch-out").exists()
 
 
 def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):

@@ -971,3 +971,7 @@ A comma between words, such as `thanks, done`, stays prose. `0,0`, `1,2`, `true,
 ## dataset_v2: replay will not overwrite its source
 
 `replay` refuses an `--out` that is the source run, inside it, or a directory that contains it. The source files and their permissions are left unchanged.
+
+## dataset_v2: replay keeps the saved inputs and both identities
+
+Replay grades from the dataset snapshot saved beside the run and from the saved transcript artifact. It checks the rubric hash and the transcript hash and stops if either differs. It does not silently read the current rubric or transcript. The output keeps the source identity and commit, and records the replay commit, completion parser version, and gate setting. The run config, checks, and failure_reason are the replayed grade.
