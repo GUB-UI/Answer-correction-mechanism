@@ -77,7 +77,7 @@ def _invalid_result(payload: Any, side: str, case: dict[str, Any]) -> str:
             normalized = {"items": grade.get("items"), "total_score": grade.get("total_score")}
         # Each runner's canonical fields must be present. Cross-schema aliases
         # may never hide a missing/invalid old or new score or item array.
-        items, total, _ = items_from_completion(json.dumps(normalized), rubric)
+        items, total, *_ = items_from_completion(json.dumps(normalized), rubric)
         answer = view.get("answer_text") or ""
         if case.get("ocr_import_path"):
             answer = prepare_independent_input({
@@ -346,6 +346,10 @@ def compatibility_reasons(baseline: dict, candidate: dict) -> list[str]:
                        ('rubric_version', 'rubric version'), ('generation_settings', 'generation settings')):
         if key not in left or key not in right or left[key] != right[key]:
             reasons.append(f'{label} differs or is missing')
+    parser_left = left.get('completion_parser_version')
+    parser_right = right.get('completion_parser_version')
+    if parser_left != parser_right and (parser_left is not None or parser_right is not None):
+        reasons.append('completion parser version differs or is missing')
     for key in ('dataset_id', 'version', 'references'):
         if baseline['dataset'].get(key) != candidate['dataset'].get(key) or key not in baseline['dataset']:
             reasons.append(f'dataset {key} differs or is missing')

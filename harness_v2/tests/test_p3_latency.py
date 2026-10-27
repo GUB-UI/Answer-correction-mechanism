@@ -17,26 +17,26 @@ def test_total_latency_and_history_include_all_attempts(tmp_path, monkeypatch, l
         code = 500
     class RateLimit(Exception):
         code = 429
-    def generate_content(**kwargs):
+    def generate_content_stream(**kwargs):
         calls.append(kwargs)
         now[0] += 0.02 if len(calls) == 1 else 0.03
         if len(calls) == 1 or last == 'error':
             raise ServerError('server')
         if last == 'quota':
             raise RateLimit('quota')
-        return SimpleNamespace(text=_valid())
+        return iter((SimpleNamespace(text=_valid(), finish_reason='STOP'),))
     def sleep(seconds):
         now[0] += seconds
     provider = GemmaAIStudio(client_factory=lambda **kwargs: SimpleNamespace(
-        models=SimpleNamespace(generate_content=generate_content)),
-        monotonic=lambda: now[0], sleep=sleep, max_attempts=2)
+        models=SimpleNamespace(generate_content_stream=generate_content_stream)),
+        monotonic=lambda: now[0], sleep=sleep, rng=lambda: 0, max_attempts=2)
     store = store_at(tmp_path)
     try:
         rec = Pipeline(store, provider).run(_case('r', _valid()), experiment_id='e', commit='c')
     except QuotaExceeded as exc:
         assert last == 'quota'
         rec = exc.record
-    assert rec.latency_ms == pytest.approx(550)
+    assert rec.latency_ms == pytest.approx(5050)
     attempts = rec.outputs['attempts']
     assert rec.outputs['attempt_count'] == len(attempts) == 2
     assert [a['latency_ms'] for a in attempts] == pytest.approx([20, 30])

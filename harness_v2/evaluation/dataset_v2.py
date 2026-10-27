@@ -6,25 +6,51 @@ OCR transcripts for one split. It does not read ``answers`` or
 ``reference/scores_v1.json``. Evaluation reads that score file only while
 comparing grader output, and it does not fill in a missing score.
 
-Grade one split with the existing Gemma or fixture provider::
+Grade one split with the existing Gemma or fixture provider. Thinking level
+and max output tokens are generation settings. The wall-clock limit is not
+part of the reuse identity. ``--concurrency`` grades that many cases at once
+and defaults to 1::
 
     python -m harness_v2.evaluation.dataset_v2 baseline \\
-        --dataset-dir "$DATASET_DIR" --split dev --provider gemma --out "$OUT"
+        --dataset-dir "$DATASET_DIR" --split dev --provider gemma \\
+        --model gemma-4-31b-it --thinking-level minimal \\
+        --max-output-tokens 8192 --wall-clock-limit-s 900 --out "$OUT"
+
+Re-apply the current parser and transcript gate to a saved run, with no
+model call::
+
+    python -m harness_v2.evaluation.dataset_v2 replay \\
+        --dataset-dir "$DATASET_DIR" --split dev \\
+        --run-dir "$SAVED_RUN" --out "$REPLAY_OUT"
 """
 from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable
 
-from harness_v2.evaluation.dataset import write_dataset
+from harness_v2.core.contracts import Check, GradingResult
+from harness_v2.evaluation.dataset import DatasetError, load_dataset, write_dataset
 from harness_v2.evaluation.reference import optional_score
-from harness_v2.providers.gemma_ai_studio import MODEL_ID
-from harness_v2.run import run_experiment
+from harness_v2.grading.rubric import rubric_from_data
+from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION, ScoringParseError, items_from_completion
+from harness_v2.grading.transcript_quality import apply_transcript_gate
+from harness_v2.grading.validator import validate
+from harness_v2.providers.gemma_ai_studio import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    FAST_BACKOFF_MAX_S,
+    FAST_BACKOFF_MIN_S,
+    MAX_ATTEMPTS,
+    MODEL_ID,
+    WALL_CLOCK_LIMIT_S,
+)
+from harness_v2.run import identity, reusable_config, resolve_implementation_commit, run_experiment
 from harness_v2.storage.permissions import private_directory, private_write_text
 
 DATASET_ID = "dataset_v2"
@@ -161,15 +187,32 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
              generation_settings: dict | None = None, repeats: int = 1,
              provider_factory: Callable | None = None, commit: str | None = None,
              fixture_completion: Any = None, fixture_completions: dict | None = None,
-             rubric_version: str = RUBRIC_VERSION, delay_s: float = 0) -> dict[str, Any]:
+             rubric_version: str = RUBRIC_VERSION, delay_s: float = 0,
+             wall_clock_limit_s: float = WALL_CLOCK_LIMIT_S,
+             max_attempts: int = MAX_ATTEMPTS,
+             fast_backoff_min_s: float = FAST_BACKOFF_MIN_S,
+             fast_backoff_max_s: float = FAST_BACKOFF_MAX_S,
+             transcript_quality_gate: str = "off",
+             concurrency: int = 1) -> dict[str, Any]:
     """Grade one split and write metrics when every case finishes.
 
     A saved grade is reused only when the model id, prompt version, rubric
-    hash, and generation settings still match that run.
+    hash, and generation settings still match that run. thinking_level and
+    max_output_tokens are generation settings. Wall-clock, retry policy, and
+    concurrency are not part of that identity. Concurrency is how many cases
+    grade at once. Each case keeps its own provider.
     """
+    if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
+        raise ValueError("concurrency must be a positive integer")
+    if transcript_quality_gate not in {"on", "off"}:
+        raise ValueError("transcript_quality_gate must be on or off")
     if model is None:
         model = MODEL_ID if provider == "gemma" else "fixture"
-    settings = {"temperature": 0}
+    settings = {
+        "temperature": 0,
+        "max_output_tokens": DEFAULT_MAX_OUTPUT_TOKENS,
+        "thinking_level": "minimal",
+    }
     if generation_settings:
         settings.update(generation_settings)
     config: dict[str, Any] = {
@@ -179,6 +222,12 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
         "prompt_version": prompt_version,
         "rubric_version": rubric_version,
         "generation_settings": settings,
+        "wall_clock_limit_s": wall_clock_limit_s,
+        "max_attempts": max_attempts,
+        "fast_backoff_min_s": fast_backoff_min_s,
+        "fast_backoff_max_s": fast_backoff_max_s,
+        "transcript_quality_gate": transcript_quality_gate,
+        "concurrency": concurrency,
     }
     if fixture_completion is not None:
         config["fixture_completion"] = (fixture_completion if isinstance(fixture_completion, str)
@@ -206,6 +255,344 @@ def baseline(dataset_dir: Path, split: str, out: Path, *, provider: str,
     private_write_text(metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
     result["metrics_path"] = str(metrics_path)
     return result
+
+
+def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
+           transcript_quality_gate: str = "on") -> dict[str, Any]:
+    """Re-parse saved completions and re-apply the transcript gate. No model call.
+
+    ``run_dir`` is a baseline output directory (``run/results.json``) or that
+    ``run`` directory itself. The rubric and transcript come from the saved
+    snapshot, and a saved hash that does not match aborts the replay. Current
+    dataset files are not a silent substitute. A provider failure, including
+    an abnormal finish such as SAFETY, is left as a failure, so a score is
+    not filled in from leftover text. A parser or gate failure is judged
+    again when the saved raw completion exists. The gate defaults to on. The
+    output must not be the source run, inside it, or a directory that
+    contains it.
+    """
+    if transcript_quality_gate not in {"on", "off"}:
+        raise ValueError("transcript_quality_gate must be on or off")
+    if split not in SPLITS:
+        raise DatasetV2Error(f"unknown split: {split}")
+    run_dir = Path(run_dir)
+    out = Path(out)
+    _refuse_replay_target(run_dir, out)
+    results_path, artifacts = _saved_run(run_dir)
+    saved = _load_json(results_path)
+    if not isinstance(saved, dict) or not isinstance(saved.get("runs"), list):
+        raise DatasetV2Error("saved run has no runs")
+    expected = saved.get("expected_runs")
+    if not isinstance(expected, list):
+        raise DatasetV2Error("saved run has no expected_runs")
+    by_request = {}
+    for job in expected:
+        if isinstance(job, dict) and isinstance(job.get("request_id"), str):
+            by_request[job["request_id"]] = job
+    dataset = _snapshot_dataset(results_path)
+    snapshot = {case["case_id"]: case for case in dataset.cases}
+    runs = [
+        _replay_one(run, by_request, snapshot, artifacts, transcript_quality_gate, saved)
+        for run in saved["runs"]
+    ]
+    failed = sum(
+        1 for run in runs
+        if isinstance(run.get("outputs"), dict)
+        and isinstance(run["outputs"].get("grading"), dict)
+        and run["outputs"]["grading"].get("status") == "failed"
+    )
+    summary = dict(saved.get("summary") or {})
+    summary.update({
+        "completed": len(runs) - failed,
+        "failed": failed,
+        "pending": 0,
+        "stopped_reason": "",
+    })
+    source_config = copy.deepcopy(saved.get("config")) if isinstance(saved.get("config"), dict) else {}
+    config = copy.deepcopy(source_config)
+    config["completion_parser_version"] = COMPLETION_PARSER_VERSION
+    config["transcript_quality_gate"] = transcript_quality_gate
+    replay_commit = resolve_implementation_commit()
+    # The top-level identity is this replay. The source run's identity is kept
+    # beside it, because the config no longer describes that run.
+    replay_identity_hash = identity({
+        "config": reusable_config(config),
+        "dataset": dataset.manifest,
+        "commit": replay_commit,
+    })
+    described = _replay_identity(saved, transcript_quality_gate, replay_commit)
+    payload = {
+        **saved,
+        "identity": replay_identity_hash,
+        "source_identity": saved.get("identity"),
+        "config": config,
+        "summary": summary,
+        "runs": runs,
+        "replay": {
+            **described,
+            "source_results": str(results_path),
+        },
+    }
+    out = private_directory(Path(out), managed=True)
+    written = out / "results.json"
+    private_write_text(written, json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    metrics_path = None
+    if failed == 0:
+        metrics = evaluate(dataset_dir, split, written)
+        metrics_path = out / "metrics.json"
+        private_write_text(
+            metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+    return {
+        "results_path": str(written),
+        "metrics_path": None if metrics_path is None else str(metrics_path),
+        "runs": len(runs),
+        "failed": failed,
+    }
+
+
+def _same_or_nested(left: Path, right: Path) -> bool:
+    try:
+        left.resolve().relative_to(right.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _refuse_replay_target(run_dir: Path, out: Path) -> None:
+    """Reject an output that would replace the source or sit inside it.
+
+    Reading the source must not tighten its permissions. This check runs
+    before any output directory is created.
+    """
+    if _same_or_nested(out, run_dir) or _same_or_nested(run_dir, out):
+        raise DatasetV2Error("replay output must not replace or contain the source run")
+
+
+def _saved_run(run_dir: Path) -> tuple[Path, Path]:
+    if (run_dir / "run" / "results.json").is_file():
+        return run_dir / "run" / "results.json", run_dir / "run" / "artifacts"
+    if (run_dir / "results.json").is_file():
+        return run_dir / "results.json", run_dir / "artifacts"
+    raise DatasetV2Error("saved run has no results.json")
+
+
+def _snapshot_manifest(results_path: Path) -> Path:
+    candidates = []
+    if results_path.parent.name == "run":
+        candidates.append(results_path.parent.parent / "dataset" / "manifest.json")
+    candidates.append(results_path.parent / "dataset" / "manifest.json")
+    for path in candidates:
+        if path.is_file():
+            return path
+    raise DatasetV2Error("saved rubric snapshot is missing")
+
+
+def _snapshot_dataset(results_path: Path):
+    """The dataset written with the source run. File hashes are checked here."""
+    try:
+        return load_dataset(_snapshot_manifest(results_path))
+    except (DatasetError, OSError, ValueError) as exc:
+        raise DatasetV2Error(f"saved rubric snapshot does not match its hashes: {exc}") from exc
+
+
+def _replay_identity(saved: dict, gate: str, replay_commit: str | None) -> dict[str, Any]:
+    source_config = copy.deepcopy(saved.get("config")) if isinstance(saved.get("config"), dict) else {}
+    return {
+        "source_identity": {
+            "identity": saved.get("identity"),
+            "commit": saved.get("commit"),
+            "config": source_config,
+        },
+        "replay_identity": {
+            "commit": replay_commit,
+            "completion_parser_version": COMPLETION_PARSER_VERSION,
+            "transcript_quality_gate": gate,
+        },
+    }
+
+
+def _check_saved_hashes(case_id: str, outputs: dict, case: dict) -> None:
+    """The run must name the snapshot rubric and input. A missing hash does not match."""
+    experiment = outputs.get("experiment_case")
+    if not isinstance(experiment, dict):
+        raise DatasetV2Error(f"saved run has no snapshot binding: {case_id}")
+    for key, label in (("rubric_sha256", "rubric"), ("input_sha256", "input")):
+        saved_hash = experiment.get(key)
+        if not isinstance(saved_hash, str) or not saved_hash:
+            raise DatasetV2Error(f"saved {label} hash is missing: {case_id}")
+        if saved_hash != case[key]:
+            raise DatasetV2Error(f"saved {label} hash does not match the snapshot: {case_id}")
+
+
+def _saved_transcript(outputs: dict, artifacts: Path, case_id: str) -> str | None:
+    """The graded transcript artifact. A present file must match its saved hash."""
+    name = outputs.get("grading_input_artifact")
+    if not isinstance(name, str) or not name:
+        name = outputs.get("ocr_artifact")
+    transcript = _artifact_text(artifacts, name)
+    if transcript is None:
+        return None
+    expected = outputs.get("grading_input_sha256")
+    if not isinstance(expected, str) or not expected:
+        expected = outputs.get("ocr_sha256")
+    if not isinstance(expected, str) or not expected:
+        raise DatasetV2Error(f"saved transcript hash is missing: {case_id}")
+    actual = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    if actual != expected:
+        raise DatasetV2Error(f"saved transcript hash does not match: {case_id}")
+    return transcript
+
+
+def _replay_one(run: Any, by_request: dict[str, dict], snapshot: dict[str, dict],
+                artifacts: Path, gate: str, saved: dict) -> dict[str, Any]:
+    if not isinstance(run, dict):
+        raise DatasetV2Error("invalid saved run")
+    copied = copy.deepcopy(run)
+    outputs = copied.get("outputs")
+    if not isinstance(outputs, dict):
+        raise DatasetV2Error("saved run has no outputs")
+    case_id = _replay_case_id(copied, by_request)
+    case = snapshot.get(case_id)
+    if case is None:
+        raise DatasetV2Error(f"saved run is not in the snapshot: {case_id}")
+    _check_saved_hashes(case_id, outputs, case)
+    grade = outputs.get("grading")
+    if not isinstance(grade, dict):
+        raise DatasetV2Error(f"saved run has no grade: {case_id}")
+    raw = _artifact_text(artifacts, outputs.get("raw_response_artifact"))
+    transcript = _saved_transcript(outputs, artifacts, case_id)
+    # A provider or abnormal finish stays failed. A parser or gate failure is
+    # judged again when the saved raw completion is still there.
+    if grade.get("status") == "failed" and not _rejudge_failure(grade, outputs, raw):
+        outputs["replay"] = {**_replay_identity(saved, gate, resolve_implementation_commit()), "reparsed": False}
+        return copied
+    if raw is None:
+        stored = grade.get("raw_response")
+        raw = stored if isinstance(stored, str) else ""
+    if transcript is None:
+        raise DatasetV2Error(f"saved transcript snapshot is missing: {case_id}")
+    request_id = copied.get("request_id")
+    request_id = request_id if isinstance(request_id, str) else case_id
+    graded = _regrade_saved(
+        raw, transcript, case["rubric"], request_id,
+        provider=str(grade.get("provider") or ""),
+        model_id=str(grade.get("model_id") or ""),
+        gate=gate,
+    )
+    outputs["grading"] = graded
+    copied["checks"] = list(graded.get("checks") or [])
+    copied["failure_reason"] = graded.get("failure_reason") or ""
+    outputs["replay"] = {**_replay_identity(saved, gate, resolve_implementation_commit()), "reparsed": True}
+    return copied
+
+
+_PARSER_OR_GATE = re.compile(
+    r"json_parse_failed|json object expected|items array missing|malformed_item|"
+    r"invalid_item_id|ScoringParseError|JSONDecodeError|parse_ambiguous|transcript_|gate_error",
+    re.IGNORECASE,
+)
+# Pipeline records every escaped exception as error_class. These are transport
+# or provider failures and stay failed. A gate or parser exception is not in
+# this set, so a saved raw completion can be judged again.
+_TRANSPORT_OR_PROVIDER = re.compile(
+    r"\b(?:ProviderSetupError|MissingAPIKey|QuotaExceeded|TimeoutError|"
+    r"RemoteProtocolError|LocalProtocolError|ProtocolError|ReadError|WriteError|"
+    r"ConnectError|NetworkError|CloseError|ServerError|StreamEnded|APIError|"
+    r"ClientError|RateLimit|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout)\b",
+    re.IGNORECASE,
+)
+_ABNORMAL_FINISH = frozenset({"SAFETY", "MAX_TOKENS", "RECITATION", "OTHER"})
+
+
+def _parser_or_gate_cause(grade: dict, error_class: str, reason: str) -> bool:
+    blob = f"{error_class}\n{reason}"
+    if _PARSER_OR_GATE.search(blob):
+        return True
+    checks = grade.get("checks")
+    if isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, dict):
+                continue
+            name = str(check.get("name") or "")
+            if name.startswith(("transcript_", "gate_", "parse_")):
+                return True
+    # pipeline.run stores an escaped exception as error_class and
+    # "ClassName: message". That is how an old gate failure was saved.
+    return bool(error_class)
+
+
+def _rejudge_failure(grade: dict, outputs: dict, raw: str | None) -> bool:
+    """True when a failed row is a parser or gate failure with saved raw text.
+
+    ``error_class`` is the pipeline's record of an escaped exception. It does
+    not by itself mean the provider failed.
+    """
+    if raw is None:
+        return False
+    reason = str(grade.get("failure_reason") or "")
+    error_class = str(outputs.get("error_class") or "")
+    if error_class in _ABNORMAL_FINISH or "finish_reason=" in reason:
+        return False
+    if re.search(r"\bquota\b", reason, re.IGNORECASE):
+        return False
+    exchange = outputs.get("exchange")
+    if isinstance(exchange, dict) and str(exchange.get("status") or "ok") not in {"ok", ""}:
+        return False
+    if _TRANSPORT_OR_PROVIDER.search(f"{error_class}\n{reason}"):
+        return False
+    return _parser_or_gate_cause(grade, error_class, reason)
+
+
+def _replay_case_id(run: dict, by_request: dict[str, dict]) -> str:
+    experiment = run.get("outputs", {}).get("experiment_case")
+    if isinstance(experiment, dict) and isinstance(experiment.get("case_id"), str):
+        return experiment["case_id"]
+    job = by_request.get(run.get("request_id"))
+    case_id = job.get("case_id") if isinstance(job, dict) else None
+    if isinstance(case_id, str):
+        return case_id
+    raise DatasetV2Error("saved run has no case id")
+
+
+def _artifact_text(root: Path, name: Any) -> str | None:
+    if not isinstance(name, str) or not name or name.startswith(("/", "\\")) or ".." in Path(name).parts:
+        return None
+    path = root / name
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _regrade_saved(raw: str, transcript: str, rubric_data: list, request_id: str, *,
+                   provider: str, model_id: str, gate: str) -> dict[str, Any]:
+    """Current parser, then the gate. Scores come only from the parsed object."""
+    rubric = rubric_from_data(rubric_data)
+    try:
+        items, total, _fence, repaired, ambiguous, marker = items_from_completion(raw, rubric)
+    except ScoringParseError as exc:
+        result = GradingResult(
+            status="failed", items=[], total_score=None,
+            max_points=sum(item.max_points for item in rubric) if rubric else None,
+            failure_reason=str(exc), request_id=request_id, provider=provider,
+            model_id=model_id, raw_response=raw,
+        )
+        return result.to_dict()
+    result = validate(
+        rubric, items, total, transcript, request_id=request_id, provider=provider,
+        model_id=model_id, raw_response=raw,
+    )
+    result.parse_repaired = repaired
+    result.parse_ambiguous = ambiguous
+    result.parse_marker = marker
+    if ambiguous and result.status != "failed":
+        result.status = "review_required"
+        parts = [part for part in result.failure_reason.split(",") if part]
+        if "parse_ambiguous" not in parts:
+            parts.append("parse_ambiguous")
+        result.failure_reason = ",".join(parts)
+        result.checks.append(Check("parse_ambiguous", False, marker or "newline_or_latex"))
+    apply_transcript_gate(result, transcript, enabled=gate == "on")
+    return result.to_dict()
 
 
 def evaluate(dataset_dir: Path, split: str, results_path: Path) -> dict[str, Any]:
@@ -710,6 +1097,7 @@ def _observations(results_path: Path, side: dict, reference: dict) -> list[dict]
             "problem": problem_id,
             "repetition": repetition,
             "excluded": excluded,
+            "grading_status": grade.get("status"),
             "predicted_total": _optional_number(grade, "total_score", case_id),
             "predicted_subs": _predicted_subs(grade.get("items", []), case_id),
             "reference_total": None if row is None else row["total"],
@@ -794,6 +1182,7 @@ def _answer_row(row: dict) -> dict[str, Any]:
         "reference_total": row["reference_total"],
         "abs_error": _abs(row["predicted_total"], row["reference_total"]),
         "exact_total": _same(row["predicted_total"], row["reference_total"]),
+        "grading_status": row.get("grading_status"),
         "subquestions": subs,
     }
 
@@ -808,6 +1197,18 @@ def _aggregate(rows: list[dict]) -> dict[str, Any]:
         for item in row["subquestions"]
         if item["abs_error"] is not None
     ]
+    total_signed = [
+        delta for delta in (_signed(row["predicted_total"], row["reference_total"]) for row in rows)
+        if delta is not None
+    ]
+    sub_signed = [
+        delta
+        for row in rows
+        for item in row["subquestions"]
+        if (delta := _signed(item["predicted"], item["reference"])) is not None
+    ]
+    review_count = sum(row.get("grading_status") == "review_required" for row in rows)
+    large = [row for row in rows if _large_miss(row["abs_error"])]
     return {
         "total_mae": _mean(total_errors),
         "total_mae_count": len(total_errors),
@@ -816,7 +1217,39 @@ def _aggregate(rows: list[dict]) -> dict[str, Any]:
         "exact_match_rate": _mean([1.0 if row["exact_total"] else 0.0 for row in exact_rows]),
         "subquestion_mae": _mean(sub_errors),
         "subquestion_mae_count": len(sub_errors),
+        **_prefixed("total", _direction(total_signed)),
+        **_prefixed("subquestion", _direction(sub_signed)),
+        "review_required_count": review_count,
+        "review_required_rate": None if not rows else review_count / len(rows),
+        "validated_miss_count": sum(row.get("grading_status") != "review_required" for row in large),
+        "review_caught_miss_count": sum(row.get("grading_status") == "review_required" for row in large),
     }
+
+
+def _direction(errors: list[float]) -> dict[str, Any]:
+    over = [value for value in errors if value > 1e-6]
+    under = [value for value in errors if value < -1e-6]
+    return {
+        "bias": _mean(errors),
+        "over_score_count": len(over),
+        "over_score_sum": None if not errors else sum(over),
+        "over_score_max": max(over) if over else None,
+        "under_score_count": len(under),
+    }
+
+
+def _prefixed(prefix: str, stats: dict[str, Any]) -> dict[str, Any]:
+    return {f"{prefix}_{name}": value for name, value in stats.items()}
+
+
+def _signed(predicted: float | None, reference: float | None) -> float | None:
+    if predicted is None or reference is None:
+        return None
+    return predicted - reference
+
+
+def _large_miss(error: float | None) -> bool:
+    return error is not None and error >= 1
 
 
 def _abs(predicted: float | None, reference: float | None) -> float | None:
@@ -847,6 +1280,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     command = sub.add_parser("baseline", help="grade one split and write metrics")
+    replay_command = sub.add_parser("replay", help="reapply the parser and transcript gate offline")
     command.add_argument("--dataset-dir", type=Path, required=True)
     command.add_argument("--split", required=True)
     command.add_argument("--provider", required=True, choices=["gemma", "fixture"])
@@ -856,14 +1290,55 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--repeats", type=int, default=1)
     command.add_argument("--temperature", type=float, default=0)
     command.add_argument("--seed", type=int)
-    command.add_argument("--max-output-tokens", type=int)
+    command.add_argument("--max-output-tokens", type=int, default=DEFAULT_MAX_OUTPUT_TOKENS,
+                         help="maximum output tokens, including thinking (default 8192)")
+    command.add_argument("--thinking-level", choices=["minimal", "high", "unset"], default="minimal",
+                         help="Gemma thinking level sent as ThinkingConfig (default minimal)")
     command.add_argument("--top-p", type=float)
     command.add_argument("--top-k", type=int)
     command.add_argument("--fixture-completion", type=Path)
     command.add_argument("--commit", help="implementation identity recorded with the run")
+    command.add_argument("--wall-clock-limit-s", type=float, default=WALL_CLOCK_LIMIT_S,
+                         help="wall-clock limit for one case, including retries (default 900)")
+    command.add_argument("--max-attempts", type=int, default=MAX_ATTEMPTS,
+                         help="generation attempts including the first (default 3)")
+    command.add_argument("--fast-backoff-min-s", type=float, default=FAST_BACKOFF_MIN_S,
+                         help="minimum wait after a fast 500/502/503 or disconnect (default 5)")
+    command.add_argument("--fast-backoff-max-s", type=float, default=FAST_BACKOFF_MAX_S,
+                         help="maximum wait after a fast 500/502/503 or disconnect (default 30)")
+    command.add_argument("--transcript-quality-gate", choices=["on", "off"], default="off",
+                         help="route a garbled or inconsistent transcript to review (default off)")
+    command.add_argument("--concurrency", type=int, default=1,
+                         help="cases graded at once, each with its own provider (default 1)")
+    replay_command.add_argument("--dataset-dir", type=Path, required=True)
+    replay_command.add_argument("--split", required=True)
+    replay_command.add_argument("--run-dir", type=Path, required=True,
+                                help="baseline output directory, or its run directory")
+    replay_command.add_argument("--out", type=Path, required=True)
+    replay_command.add_argument("--transcript-quality-gate", choices=["on", "off"], default="on",
+                                help="reapply the transcript gate (default on)")
     args = parser.parse_args(argv)
-    settings: dict[str, Any] = {"temperature": args.temperature}
-    for name in ("seed", "max_output_tokens", "top_p", "top_k"):
+    if args.command == "replay":
+        try:
+            result = replay(
+                args.dataset_dir, args.split, args.run_dir, args.out,
+                transcript_quality_gate=args.transcript_quality_gate,
+            )
+        except (DatasetV2Error, ValueError, OSError) as exc:
+            parser.error(str(exc))
+        print(json.dumps({
+            "results_path": result["results_path"],
+            "metrics_path": result["metrics_path"],
+            "runs": result["runs"],
+            "failed": result["failed"],
+        }, ensure_ascii=False))
+        return 0 if result["metrics_path"] else 1
+    settings: dict[str, Any] = {
+        "temperature": args.temperature,
+        "max_output_tokens": args.max_output_tokens,
+        "thinking_level": args.thinking_level,
+    }
+    for name in ("seed", "top_p", "top_k"):
         value = getattr(args, name.replace("-", "_"))
         if value is not None:
             settings[name] = value
@@ -875,6 +1350,12 @@ def main(argv: list[str] | None = None) -> int:
             args.dataset_dir, args.split, args.out, provider=args.provider, model=args.model,
             prompt_version=args.prompt_version, generation_settings=settings, repeats=args.repeats,
             fixture_completion=completion, commit=args.commit,
+            wall_clock_limit_s=args.wall_clock_limit_s,
+            max_attempts=args.max_attempts,
+            fast_backoff_min_s=args.fast_backoff_min_s,
+            fast_backoff_max_s=args.fast_backoff_max_s,
+            transcript_quality_gate=args.transcript_quality_gate,
+            concurrency=args.concurrency,
         )
     except (DatasetV2Error, ValueError, OSError) as exc:
         parser.error(str(exc))

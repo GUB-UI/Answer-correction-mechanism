@@ -19,14 +19,14 @@ def completion(**changes):
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), "NaN", True, None, "3"])
 def test_invalid_returned_maximum_never_validates(field, value):
     rubric = [RubricItem("a", 3, "work")]
-    items, total, _ = items_from_completion(json.dumps(completion(**{field: value})), rubric)
+    items, total, *_ = items_from_completion(json.dumps(completion(**{field: value})), rubric)
     assert items[0].max_points == 3
     assert validate(rubric, items, total, "x").status != "validated"
 
 
 def test_both_maximum_aliases_are_checked():
     rubric = [RubricItem("a", 3, "work")]
-    items, total, _ = items_from_completion(json.dumps(completion(max_points=3, max_score=float("nan"))), rubric)
+    items, total, *_ = items_from_completion(json.dumps(completion(max_points=3, max_score=float("nan"))), rubric)
     assert validate(rubric, items, total, "x").status != "validated"
 
 

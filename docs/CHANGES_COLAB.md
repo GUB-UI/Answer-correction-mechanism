@@ -1093,3 +1093,263 @@ array の入れ子を含む列指定、環境の位置指定、行間隔、hspac
 - 変換する分割ではない方に、書き起こしファイルの無い answer id があっても失敗しない。無いファイルは別名になり得ないので飛ばす。
 - 変換する分割の対象ファイルが無い場合は、これまでどおり失敗させる。
 - どちらかの分割に実在する対象は、シンボリックリンク、実パス、inode の確認を続ける。もう一方の分割のファイル内容は読まない。
+
+## dataset_v2: 生成の待ち時間を延ばし、短い 5xx は別に再試行する
+
+- Gemma の最初の待ち時間は 600 秒（`--request-timeout-s`、既定 600）。504 または読み取りタイムアウトのときは、同じ待ち時間ではなく、より長い期限で再試行する（`--deadline-growth` 既定 2、上限 `--request-timeout-cap-s` 既定 1800、再試行前の休止 `--deadline-retry-pause-s` 既定 1）。
+- すぐ返る 500 / 502 / 503 は、指数バックオフとジッタで待つ（`--fast-backoff-min-s` 既定 30 から `--fast-backoff-max-s` 既定 120）。試行回数は `--max-attempts`（既定 6）。実行設定の同じキーでも指定できる。
+- 各試行に `elapsed_s` と `timeout_s` を残し、応答にあれば `thoughts_token_count` も残す。
+- この方針はプロンプト、モデル、サンプリングを変えない。`max_output_tokens` は設定しない。再利用の識別子には入れない。成功した採点は、タイムアウトや再試行の設定だけが変わったときに再利用する。
+
+## dataset_v2: モデル JSON の中の LaTeX バックスラッシュを残す
+
+- モデル出力の JSON 文字列の中だけを直してから受け入れる。JSON のエスケープでないバックスラッシュは二重にする。
+- `\f` `\b` `\t` `\n` `\r` の直後が ASCII の英字なら、制御文字にせずバックスラッシュと英字のまま残す。`\frac` `\times` `\neq` `\right` `\beta` が化けるのを防ぐ。直後が英字でない改行やタブは、改行やタブのまま。`\\frac` と `\uXXXX` は変えない。
+- 厳密な解析が成功する場合でも、同じ修正を通す。修正して採用した採点は `parse_repaired` が true。
+- `completion_parser_version`（`json_latex_escapes_v1`）は再利用の識別子に入る。設定ファイルで古いパーサは選べない。以前の解析結果を、このパーサの結果として再利用しない。
+
+## dataset_v2: 改行か LaTeX か決まらないときは改行のまま見直す
+
+- JSON の `\n` `\t` `\r` `\b` `\f` は、続く英字が数学 I/A の決まったコマンドにちょうど一致し、その次が英字でないときだけ、バックスラッシュとコマンドとして残す。`\frac` `\times` `\theta` `\right` `\beta` はそうなる。
+- `n` で始まるコマンドは、改行とその後の文字と同じバイト列である。`\neq` は改行と `eq`、`\nu` は改行と `u`。これは改行のまま残す。`parse_ambiguous` を true にし、解析できた採点は `review_required`、理由は `parse_ambiguous`。どちらとも決めない。
+- JSON のエスケープでないバックスラッシュ（`\le` など）は、これまでどおり二重にする。`\\frac` と `\uXXXX` は変えない。
+- `completion_parser_version` は `json_latex_escapes_v2`。`json_latex_escapes_v1` で解析した採点は再利用しない。
+
+## dataset_v2: バックスラッシュ b と f のコマンドは常に残す
+
+- 採点の文章にバックスペースや改ページは出てこない。JSON 文字列の中で `\b` または `\f` の直後が ASCII の英字なら、一覧にあるかどうかにかかわらず、バックスラッシュと英字のまま残す。
+- `\boxed{x=1}`、`\begin{aligned}`、`\bar{A}`、`\beta`、`\frac` は、理由の文にも引用した根拠にも、書いた形のまま残る。根拠の引用は書き起こしと照合できる。
+- `\n` `\t` `\r` は、これまでどおり数学 I/A の決まったコマンドのときだけバックスラッシュとして残す。`\times` `\theta` `\tan` `\to` `\triangle` `\text` `\tfrac` `\right` `\rangle` `\rho` を含む。`n` で始まるコマンドは改行のまま、`parse_ambiguous` と `review_required`。
+- JSON のエスケープでないバックスラッシュ（`\le` や `\left`）は二重にする。`completion_parser_version` は `json_latex_escapes_v3`。`json_latex_escapes_v2` で解析した採点は再利用しない。
+
+## dataset_v2: 通信が切れたときは再試行する
+
+- `RemoteProtocolError`（`Server disconnected`）、`ReadError`、`ConnectError` は再試行する。包んだ例外の原因がそれらでも再試行する。
+- その試行が 60 秒以上なら、504 と同じく待ち時間を延ばして再試行する。それより短い切断は、速い 500 / 502 / 503 と同じバックオフで待つ。
+- 試行回数は `--max-attempts` まで。この方針はプロンプト、モデル、サンプリングを変えない。再利用の識別子には入らない。
+
+## dataset_v2: 思考は MINIMAL、出力トークンに上限、1 件に 1 つの壁時計
+
+- Gemma の採点設定に `thinking_level`（`minimal` / `high` / `unset`、`--thinking-level`、既定 `minimal`）と `max_output_tokens`（`--max-output-tokens`、既定 8192）を入れる。`minimal` と `high` は `ThinkingConfig(thinking_level=MINIMAL|HIGH)` として送る。`unset` は思考設定を送らない。
+- この二つは生成設定なので、保存結果の再利用の識別子に入る。思考や出力上限が違う結果は再利用しない。パーサは `json_latex_escapes_v3` のまま。
+- 各試行に `finish_reason`、`prompt_token_count`、`thoughts_token_count`、`candidates_token_count`、タイムゾーン付き ISO の `started_at` と `ended_at` を残す。`perf_counter` の `latency_ms` と `elapsed_s` も残す。思考パートは可視の回答に入れない。
+- 可視の本文が JSON オブジェクトとして読めず、`finish_reason` が `MAX_TOKENS` のときは、再試行しない失敗として残す。読める JSON オブジェクトなら、その本文を採点する。
+- 生成は `generate_content_stream` で受ける。1 件の壁時計は `--wall-clock-limit-s`（既定 900 秒）で、各試行の HTTP タイムアウトもその値である。408、504、読み取りタイムアウトはそこで終わる。
+- 再試行するのは速い 500 / 502 / 503 と通信切断で、`--max-attempts`（既定 3）まで。待ちは `--fast-backoff-min-s`（既定 5）から `--fast-backoff-max-s`（既定 30）のジッタ。バックオフが壁時計を超えるときは次の試行を始めない。
+- 429 は実行を止め、完了した行は残る。通信切断のあとはクライアントを捨て、次の試行で新しいクライアントを作る。壁時計と再試行回数は再利用の識別子に入らない。
+
+## dataset_v2: 各試行はケースに残った時間だけ待つ
+
+- 試行のソケット待ち時間は、最初の 900 秒の繰り返しではなく、その時点でケースに残っている時間である。バックオフの待ちも同じ残り時間で打ち切る。
+- チャンクが来ない読み取りは、ケースの予算が尽きたときに終わる。記録する `timeout_s` はその試行に与えた予算である。ケース全体は `--wall-clock-limit-s` に 1 ミリ秒を足した範囲に収まる。
+
+## dataset_v2: finish_reason が STOP のときだけ採点する
+
+- 採点するのは、最後の `finish_reason` が `STOP` の結果だけである。`MAX_TOKENS`、`SAFETY`、`RECITATION`、`OTHER`、その他の名前付き理由は、可視の本文が JSON オブジェクトでも、再試行しない失敗として残す。
+- `finish_reason` がないままストリームが終わったときは、通信切断と同じく再試行し、次の試行では新しいクライアントを作る。試行回数とケースの予算はそのまま上限になる。
+
+## dataset_v2: STOP と使用量を受け取ったあとの切断は記録に残す
+
+- チャンクで `STOP` と使用量を受け取ったあとで接続が切れても、その試行は失敗のまま再送しない。
+- 失敗の記録には、受け取った `finish_reason`、プロンプト、思考、候補のトークン数、および可視の本文を残す。
+
+## dataset_v2: 思考と出力トークンの既定をどの経路でも揃える
+
+- `load_config` は、実行設定に無いとき `thinking_level=minimal` と `max_output_tokens=8192` を入れる。
+- `GemmaAIStudio.generate` を直接呼んだときも、リクエストを作る前に同じ二つを入れ、記録にも残す。明示した `high`、`unset`、別のトークン上限は、その経路の既定を置き換える。
+- `--thinking-level high --max-output-tokens 16384 --wall-clock-limit-s 900` は同時に指定できる。
+
+## dataset_v2: 末尾に文がある JSON オブジェクトも読む
+
+- 完結したトップレベルの JSON オブジェクトが一つだけあり、その後ろが JSON でない文のとき、そのオブジェクトを採点に使う。LaTeX のエスケープ修復のあとで `json.JSONDecoder.raw_decode` する。
+- このときは `parse_repaired` になり、`parse_marker` は `trailing_text` である。検証の残りはそのまま進むので、妥当な採点は `validated` のままになり得る。空白だけの末尾は通常の JSON で、マーカーは付かない。
+- 末尾に別の JSON オブジェクトがある、または先頭のオブジェクトに無い点数が書いてあるときは `parse_ambiguous` になり、採点は `review_required` になる。マーカーは `trailing_text`、改行コマンドも未決定なら `newline_or_latex,trailing_text` である。
+- 完了パーサは `json_latex_escapes_v4` である。`json_latex_escapes_v3` の採点は再利用しない。
+
+## dataset_v2: 再試行は同じプロンプトを送る
+
+- ストリームのエラーから読んだトークン数は、プロンプトとは別の名前に入れる。プロンプト本文は置き換わらない。
+- 次の試行は、その同じプロンプト文字列を再送する。
+
+## dataset_v2: オブジェクトの後ろに JSON の断片があるときは検証しない
+
+- 末尾の文を採点に使うのは、JSON の構造文字も点数の記述も含まないときだけである。
+- オブジェクトの後ろの `{`、`[`、`}`、`]`、`,`、たとえば `}`、`,`、`{"total_score":`、`[0]` は `parse_ambiguous` になり、採点は `review_required` になる。それらの文字が無い文は `validated` のままになり得る。
+- 完了パーサは `json_latex_escapes_v5` である。
+
+## dataset_v2: 任意の転写品質ゲート
+
+- `--transcript-quality-gate` の既定は `off` である。`off` は再利用の識別に入らないので、以前の結果はそのまま再利用できる。`on` は識別に入り、実行の記録にも残る。
+- 検査は採点と並んで動き、点数は変えない。参照点も問題 id も読まない。
+- 明らかな乱れ（置換文字や制御文字、括弧や分数の不一致、数式行の紛れ込んだ記号、キリル文字と他の文字体系の混在）は `review_required` にし、理由は `transcript_garbled` である。
+- 連続する単純な等式で、両辺を安全な算術（`eval` は使わない）で数にでき、その数が違うときは理由 `transcript_inconsistent` である。
+- 数式行の `?`、または全角ラテン文字と ASCII 文字の混在は、モデルの不確実さが 0.5 以上、またはモデルの確信度が 0.5 以下のときだけ、同じ理由でレビューに回す。
+
+## dataset_v2: 評価に偏りとレビューの取りこぼしを足す
+
+- 合計と、両方ある小問の点数について、符号付きの偏り、過大採点の件数、合計、最大、過小採点の件数を出す。欠けた点数は埋めない。
+- `review_required` の件数と割合、`|予測 - 参照| >= 1` かつ `review_required` でない検証済みの外れ、およびその外れのうち `review_required` が拾った件数も出す。問題ごとの行にも同じ項目がある。
+
+## dataset_v2: 短くした待ち時間は次のケースに持ち越さない
+
+- 再利用したプロバイダは、次のケースがより長いソケット待ちを必要とするとき、新しいクライアントを作る。前のケースで短くした待ち時間は使わない。
+- ケース予算の最後を使うバックオフは、そのケースの待ち時間に含める。
+
+## dataset_v2: チャンクのあとの無応答もケースの予算で終わる
+
+- 各チャンクの待ち時間は、ケースに残った時間である。ソケットの待ち時間の方が短ければ、そちらに合わせる。
+- 800 秒でチャンクが届いたあとに無応答でも、900 秒のケース予算で終わる。もう一度 900 秒は待たない。
+
+## dataset_v2: 末尾の合計点は合計と比べる
+
+- 合計や点数の語の近くにある数は、小問の点数ではなく、読み取った合計と比べる。英語は `total`、`score`、`revised`。日本語は `合計`、`点`、`訂正`。
+- 合計と違う数は `parse_ambiguous` になり、採点は `review_required` になる。合計と同じ数はそうならない。
+- `4e-1` は一つの数 0.4 であり、4 とは読まない。完了パーサは `json_latex_escapes_v6` である。
+
+## dataset_v2: 転写ゲートの例外は採点を消さない
+
+- 転写ゲートの内部で例外が出ても、採点を `failed` にしたり点数を消したりしない。例外の型を `gate_error` として記録し、転写のフラグは付けない。
+- `²` のような上付き数字は算術検査では指数である。`x² = 4` と `x = 2` は矛盾せず、`x² = 4` と `x = 3` は `transcript_inconsistent` になる。点数は変えない。
+
+## dataset_v2: 通常の数学 I/A の記法は乱れにしない
+
+- 転写ゲートは `$`、`|`、`%`、`&` を紛れ込んだ記号として扱わない。`$...$` は読み飛ばし、`\frac12` は引数が数字または文字一文字の分数、`)` は `[` を、`]` は `(` を閉じられる。`[0,1)` と `(0,1]` は釣り合う。
+- 根号、括弧付きの分数、絶対値、百分率、区間、場合分け、二項係数、度付きの三角比、補集合の棒付きの集合はフラグしない。数式行の `#`、閉じ括弧の欠落、キリル文字の混在は引き続き `transcript_garbled` である。点数は変えない。
+
+## dataset_v2: 異常終了のあとは再試行しない
+
+- `SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER`、および名前のある他の終了理由は、その後に接続が切れても終端である。その終了理由を記録し、再送しない。後続の `STOP` でプロバイダ状態を `ok` にしない。
+- `MAX_TOKENS` のエラー文は従来どおりである。終了理由が無いストリームは再試行できる。`STOP` のあとの切断は、その終了理由と使用量を失敗に残す。
+
+## dataset_v2: 引用符とコロンの断片は検証しない
+
+- オブジェクトの後ろに二重引用符がある、または点数の語ではないコロンが数を導くときは `parse_ambiguous` になる。`"`、`:0`、`"total_score":` を含む。
+- `Note: see the work` のような文中のコロンは断片ではない。コロンの直前が点数の語で、その数が読み取った合計と一致する `total_score: 4` は、これまでどおり点数の比較である。
+- 完了パーサは `json_latex_escapes_v7` である。
+
+## dataset_v2: 点数の記述は末尾の全文から探す
+
+- 合計や点数の語の前後 16 文字に限らない。各記述はその語から次の点数の語まで、または末尾の文の終わりまでである。語の直前で終わる数、たとえば `7点` の 7 も含める。
+- それらの数を読み取った合計と比べる。違う数は `parse_ambiguous` になる。合計と同じ数はそうならない。点数の語が無い数は点数にしない。
+- 完了パーサは `json_latex_escapes_v8` である。
+
+## dataset_v2: 文中の読点、点数でない「点」、フェンス内の確信度、短い待ち
+
+- 語と語の間のカンマ、たとえば `thanks, done` は文であり、`validated` のままになり得る。語に挟まれないカンマは JSON の残りである。
+- `以下の3点を確認` は点数ではない。`点` は `4点` や `得点は4点` のような点数の句のときだけ数える。`合計`、`得点`、`total`、`score` は引き続き点数の記述である。完了パーサは `json_latex_escapes_v9` である。
+- 転写ゲートはモデルの確信度をそのパーサで読む。フェンスで囲んだオブジェクトの確信度が 0.5 以下でも見る。
+- チャンクの二度の探り待ちは 20 ms 以下であり、ケースに残った時間も超えない。各試行と各チャンクの待ちは、その残りの予算を使う。
+
+## dataset_v2: 保存した実行をオフラインで再判定する
+
+- `replay` は baseline の出力ディレクトリ、またはその中の `run` を読み、保存された生の応答と転写に現在のパーサと転写ゲートを掛け直す。モデルは呼ばない。
+- プロバイダの失敗は失敗のままにし、点数は埋めない。ゲートの既定は `on` である。
+- `results.json` を書き、再判定がすべて完了したときは `metrics.json` も書く。
+
+```
+python -m harness_v2.evaluation.dataset_v2 replay \
+    --dataset-dir "$DATASET_DIR" --split dev \
+    --run-dir "$SAVED_RUN" --out "$REPLAY_OUT"
+```
+
+## dataset_v2: OCR の不確実さを足したプロンプト v2
+
+- `harness_v2_ocr_uncertainty_v2` は `harness_v2_ambiguity_aware_v1` に、解答文が OCR の転写であり誤読を含み得るという一般的な案内を足したものである。
+- 隣の行や、生徒自身の後の正しい作業と矛盾する行、または不自然な記号は、既定では生徒の誤りとして扱わない。あり得る読みと不確実さを述べ、減点する代わりに確信度を下げるかレビューに回す。転写が支えない値は補わない。減点するのは、生徒の誤りと明確なときだけである。
+- JSON の形は変えない。`harness_v2_ambiguity_aware_v1` の本文も変えない。`--prompt-version` で選べ、再利用の識別に入る。
+
+## dataset_v2: 部分点のプロンプト v3
+
+- `harness_v2_partial_credit_v3` は `harness_v2_ocr_uncertainty_v2` に部分点の案内を足したものである。
+- ルーブリックの各基準について、転写の根拠を引用し、満たしていれば最終解答が誤っていても、その基準に書かれた点を与える。ルーブリックの外の点は与えない。合計は与えた基準点の和である。
+- JSON の形は変えない。v1 と v2 の本文も変えない。`--prompt-version` で選べ、再利用の識別に入る。
+
+## dataset_v2: 複数のケースを同時に採点する
+
+- `--concurrency N` は N 件を同時に採点する。既定は 1 で、そのときはこれまでどおり 1 件ずつ送る。動いている各ケースは自分のプロバイダを作る。
+- 結果は計画した id の順である。`state.json` と `results.json` は一度に一つずつ、ファイル全体の置き換えで書き、モードは `0600`、ディレクトリは `0700` のままである。
+- 計画した id は一度だけ実行する。終わった id は再開時に飛ばす。429 が来たら新しいケースは始めず、すでに動いているケースは記録して、再開できる状態を残す。
+- ケースごとの制限時間と再試行はそのケースのままである。同時実行数は実行設定に残り、再利用の識別には入らない。
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --thinking-level high \
+    --max-output-tokens 16384 --wall-clock-limit-s 900 \
+    --transcript-quality-gate off --concurrency 4 --out "$OUT"
+```
+
+## dataset_v2: 日本語の点数訂正を読む
+
+- `点数`、`採点`、`得点`、`合計` は点数の語である。合計と違う `点数は0です。` や `採点は0とします。` は `parse_ambiguous` になる。合計と同じ文はそうならない。
+- `点` だけでは点数の語にしない。完了パーサは `json_latex_escapes_v10` である。
+
+## dataset_v2: 数やリテラルの並びは文ではない
+
+- 語と語の間のカンマ、たとえば `thanks, done` は文のままである。
+- `0,0`、`1,2`、`true,false`、`null,null` は残った JSON であり、`parse_ambiguous` になる。カンマの隣の数字は語ではない。
+- 完了パーサは `json_latex_escapes_v11` である。
+
+## dataset_v2: パーサやゲートの失敗は再判定する
+
+- `replay` は、保存された失敗がパーサまたはゲートの失敗であるとき、保存された生の応答を読み直す。`json_parse_failed` と `transcript_garbled` は現在のパーサとゲートで判定する。
+- プロバイダの失敗は失敗のままである。`finish_reason=SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER` も同じである。
+- 生の応答が無いパーサの失敗は失敗のままで、点数は埋めない。
+
+## dataset_v2: replay は元の実行を上書きしない
+
+- `--out` が元の実行と同じ、その中、またはそれを含むディレクトリであるときは拒否する。
+- 元のファイルとその権限は変えない。
+
+## dataset_v2: replay は保存された入力と両方の識別を残す
+
+- 採点は、実行と一緒に保存されたデータセットのスナップショットと、保存された転写のファイルを使う。ルーブリックのハッシュと転写のハッシュを確かめ、違えば中止する。
+- 今のルーブリックや転写を黙って読み直さない。
+- 出力は元の識別とコミットを残し、replay のコミット、完了パーサの版、ゲート設定を記録する。実行の config と checks と failure_reason は再判定の結果である。
+
+## dataset_v2: 点数の語は同じ文の中だけ見る
+
+- 点数の語は、同じ文または節の中の数とだけ比べる。`Total is 4. I checked 2 equations.` は `parse_ambiguous` にならない。
+- `I checked "x=2".` は文である。`"total_score":` と、閉じない引用符は断片のままである。
+- `グラフは3点を通ります。` は点数ではない。`Thanks, (all checks passed).` は文である。`0,0` と `true,false` は曖昧なままである。
+- 完了パーサは `json_latex_escapes_v12` である。
+
+## dataset_v2: OCR の不確実さ v4 と部分点 v5
+
+- `harness_v2_ocr_uncertainty_v4` は `harness_v2_ambiguity_aware_v1` に、OCR の行を書かれたとおりに採点する案内を足したものである。誤読に見える行は `review_reason` に挙げ、確信度は 0.5 以上にする。採点はレビューへ回る。点数に疑いの利益は与えない。
+- 別の読みを使うのは、周りの行がその一つの読みを確かにしているときだけである。転写に無い手順には点を与えない。
+- `harness_v2_ocr_uncertainty_v2` と `harness_v2_partial_credit_v3` は変えない。`harness_v2_partial_credit_v5` は v4 に v3 の部分点の節を足したものである。`--prompt-version` で選べ、版は再利用の識別に入る。
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_ocr_uncertainty_v4 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V4"
+```
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_partial_credit_v5 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V5"
+```
+
+## dataset_v2: error_class 付きのゲート例外も再判定する
+
+- `pipeline` は漏れた例外を `error_class` と `ClassName: message` で保存する。原因がパーサまたはゲートで、生の応答が残っていれば replay はそれを再判定する。
+- `TimeoutError`、`RemoteProtocolError`、`ProviderSetupError`、`MissingAPIKey`、quota、および `finish_reason` が `SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER` のものは失敗のままである。
+
+## dataset_v2: replay の識別は再判定のものであり、スナップショットの結び付きは必須
+
+- 保存された実行はルーブリックのハッシュと入力のハッシュを持っていなければならない。ハッシュが無いときは replay を中止する。同じ case id の別のスナップショットは使わない。
+- 最上位の `identity` はこの replay の識別である。元の実行の識別は `source_identity` に残す。
+
+## dataset_v2: 解の列挙は残った JSON ではない
+
+- `The solutions are 1, 2.`、`The answer is (1, 2).`、`座標は(1,2)です。` は妥当なままである。
+- 数の並びが `parse_ambiguous` になるのは、`0,0` や `1,2` のような裸の JSON の残りであるときと、同じ文に点数の語があるときだけである。
+- `true,false` と `null,null` は曖昧なままである。完了パーサは `json_latex_escapes_v13` である。

@@ -825,3 +825,191 @@ Resolved paths are not enough. Each target file in dev and holdout is also compa
 ## dataset_v2: a missing transcript in the other split is not an alias
 
 A dev run no longer fails when a holdout answer has no transcript file. A file that is absent from the split not being converted is skipped, because a missing file cannot alias another target. A missing transcript in the split being converted still fails. Every file that does exist in either split is still checked for a symlink, a shared real path, and a shared inode. The other split's file contents are not read.
+
+## dataset_v2: longer generation deadline and separate retry for fast server errors
+
+The Gemma client deadline is 600 seconds on the first attempt (`--request-timeout-s`, default 600). A 504 or read timeout is retried with a longer deadline (`--deadline-growth`, default 2, capped by `--request-timeout-cap-s`, default 1800) after `--deadline-retry-pause-s` (default 1). A fast 500, 502, or 503 waits with exponential backoff and jitter from `--fast-backoff-min-s` (default 30) up to `--fast-backoff-max-s` (default 120), for up to `--max-attempts` tries (default 6). The same keys can be set in the run config. Each attempt records `elapsed_s`, `timeout_s`, and `thoughts_token_count` when the response includes it. This policy does not change the prompt, model, or sampling, and it does not set `max_output_tokens`, so it is excluded from the reuse identity: a successful grade is reused when only the timeout or retry settings change.
+
+## dataset_v2: repair LaTeX backslashes inside model JSON
+
+Model JSON is repaired inside string literals before it is accepted. A backslash that is not a JSON escape is doubled. `\f`, `\b`, `\t`, `\n`, and `\r` immediately followed by an ASCII letter stay as a backslash plus that letter, so `\frac`, `\times`, `\neq`, `\right`, and `\beta` are not turned into control characters. A newline or tab whose next character is not an ASCII letter stays a newline or tab. `\\frac` and `\uXXXX` are unchanged. The repair runs even when a strict parse would succeed. A grade produced from repaired text has `parse_repaired` true. `completion_parser_version` (`json_latex_escapes_v1`) is part of the reuse identity, and a config file cannot select an older parser, so a grade parsed by the previous pass is not reused as if this parser had produced it.
+
+## dataset_v2: keep a real newline when a LaTeX command is not settled
+
+A JSON `\n`, `\t`, `\r`, `\b`, or `\f` stays that control character unless the following letters are exactly one command from a fixed Math I/A list and the next character is not a letter. `\frac`, `\times`, `\theta`, `\right`, and `\beta` are then kept as a backslash plus the command. A command that starts with `n` is the same bytes as a newline plus the rest of the name, so `\neq` is a newline plus `eq` and `\nu` is a newline plus `u`. Those newlines are kept. `parse_ambiguous` is true, and a grade that parsed is `review_required` with reason `parse_ambiguous`. The parser does not pick a reading. A backslash that is not a JSON escape, such as `\le`, is still doubled. `\\frac` and `\uXXXX` are unchanged. `completion_parser_version` is `json_latex_escapes_v2`, so a grade parsed by `json_latex_escapes_v1` is not reused.
+
+## dataset_v2: keep every backslash-b and backslash-f command
+
+Backspace and form feed do not occur in grading prose. Inside a JSON string, `\b` or `\f` followed by an ASCII letter is always kept as a backslash plus that letter, whether or not the name is on a list. `\boxed{x=1}`, `\begin{aligned}`, `\bar{A}`, `\beta`, and `\frac` stay written that way in `math_reason` and in an evidence quote, so the quote can still match the transcript. `\n`, `\t`, and `\r` still use the fixed Math I/A list (`\times`, `\theta`, `\tan`, `\to`, `\triangle`, `\text`, `\tfrac`, `\right`, `\rangle`, `\rho`, and the other names in that list). A command that starts with `n` is still left as a newline with `parse_ambiguous` and `review_required`. A backslash that is not a JSON escape, such as `\le` and `\left`, is still doubled. `completion_parser_version` is `json_latex_escapes_v3`, so a grade parsed by `json_latex_escapes_v2` is not reused.
+
+## dataset_v2: retry a transport disconnect
+
+`RemoteProtocolError` (`Server disconnected`), `ReadError`, and `ConnectError` are retried, including when a wrapper's cause is one of those errors. A disconnect whose attempt lasted at least 60 seconds is retried with a longer deadline, the same growth and pause as a 504. A faster disconnect uses the fast 500/502/503 backoff. Retries stop at `--max-attempts`. This is retry policy. It does not change the prompt, model, or sampling, and it is not part of the reuse identity.
+
+## dataset_v2: minimal thinking, a finite output cap, and one wall clock
+
+Gemma grading settings accept `thinking_level` (`minimal`, `high`, or `unset`; `--thinking-level`, default `minimal`) and `max_output_tokens` (`--max-output-tokens`, default 8192). `minimal` and `high` are sent as `ThinkingConfig(thinking_level=MINIMAL|HIGH)`. `unset` sends no thinking config. Both values are generation settings, so they are part of the saved-result reuse identity. A result from another thinking level or another output cap is not reused. The completion parser stays `json_latex_escapes_v3`.
+
+Each attempt records `finish_reason`, `prompt_token_count`, `thoughts_token_count`, `candidates_token_count`, and timezone-aware ISO `started_at` and `ended_at` next to the `perf_counter` fields `latency_ms` and `elapsed_s`. Thought parts are left out of the visible answer. A `MAX_TOKENS` finish whose visible text is not a JSON object is a terminal failure and is stored that way. A `MAX_TOKENS` finish whose visible text is a JSON object is graded.
+
+Generation uses `generate_content_stream`. One case has one wall-clock limit (`--wall-clock-limit-s`, default 900). That limit is the HTTP timeout on every attempt. A timeout, including 408 and 504, is terminal. Retries are a fast 500, 502, or 503, and a transport disconnect, at most `--max-attempts` (default 3), with jittered backoff from `--fast-backoff-min-s` (default 5) to `--fast-backoff-max-s` (default 30). A backoff that would pass the wall clock does not start another attempt. A 429 stops the run and leaves completed rows in place. A transport disconnect drops the client so the next attempt builds a new one. Wall-clock and retry counts stay out of the reuse identity.
+
+## dataset_v2: each attempt uses the time still left on the case
+
+The socket timeout for an attempt is the remaining case budget, not the original 900 s again. The backoff sleep is capped to that same remainder. A read that yields no chunk therefore ends when the case budget ends. The recorded `timeout_s` is the budget for that attempt. The whole case stays within `--wall-clock-limit-s` plus one millisecond.
+
+## dataset_v2: only a STOP finish is graded
+
+A provider result is graded only when the final `finish_reason` is `STOP`. `MAX_TOKENS`, `SAFETY`, `RECITATION`, `OTHER`, and any other named reason are stored as terminal failures, including when the visible text is a JSON object. A stream that ends with no `finish_reason` is retried as a transport disconnect, and a new client is built for the next attempt. Retries still stop at `--max-attempts` and at the case budget.
+
+## dataset_v2: keep finish and usage when the socket drops after STOP
+
+If chunks already carried `STOP` and usage metadata, and the connection then drops, that attempt stays a failure and is not sent again. The failure keeps the received `finish_reason`, prompt, thoughts, and candidates token counts, and the visible text.
+
+## dataset_v2: the same thinking and output-token defaults on every path
+
+`load_config` fills `thinking_level=minimal` and `max_output_tokens=8192` when a run config omits them. A direct `GemmaAIStudio.generate` call fills the same two values before it builds the request, and it records those values. An explicit `high`, `unset`, or another token cap replaces the default on that path. `--thinking-level high --max-output-tokens 16384 --wall-clock-limit-s 900` is accepted together.
+
+## dataset_v2: one JSON object with trailing text is parsed
+
+A completion that is one complete top-level JSON object, then only trailing text, is that object. The parser uses `json.JSONDecoder.raw_decode` after the LaTeX-escape repair. The grade is `parse_repaired` and `parse_marker` is `trailing_text`. Validation still runs, so a sound grade can stay `validated`. Trailing whitespace alone is ordinary JSON and does not set the marker. Trailing text that contains another JSON object, or a score that is not on the first object, is `parse_ambiguous` and the grade is `review_required`. The marker is then `trailing_text`, or `newline_or_latex,trailing_text` when a newline command was also left undecided. The completion parser is `json_latex_escapes_v4`, so a grade from `json_latex_escapes_v3` is not reused.
+
+## dataset_v2: a retry sends the same prompt
+
+Token counts read from a streamed error are stored under their own names. They no longer replace the prompt. The next attempt sends that same prompt text again.
+
+## dataset_v2: JSON leftovers after one object are not validated
+
+Trailing text is accepted only when it has no JSON structure and no score statement. A `{`, `[`, `}`, `]`, or `,` after the object, including `}`, `,`, `{"total_score":`, and `[0]`, is `parse_ambiguous` and the grade is `review_required`. Prose without those characters can still stay `validated`. The completion parser is `json_latex_escapes_v5`.
+
+## dataset_v2: an optional transcript quality gate
+
+`--transcript-quality-gate` is `off` by default. `off` is not part of the reuse identity, so an earlier result is still reused. `on` is part of that identity and is recorded on the run. The check runs beside grading. It never changes a score and does not read a reference score or a problem id. Clear garbling (a replacement or control character, an unbalanced bracket or fraction, a stray symbol on a math line, or Cyrillic mixed into another script) sets `review_required` with reason `transcript_garbled`. Consecutive simple equations whose two sides evaluate to different numbers, using a safe arithmetic evaluator and no `eval`, set reason `transcript_inconsistent`. A question mark on a math line, or a fullwidth Latin letter mixed with an ASCII letter, does that only together with model uncertainty of at least 0.5 or a model confidence of at most 0.5.
+
+## dataset_v2: evaluation reports bias and review misses
+
+Metrics add signed bias, over-score count, sum, and max, and under-score count, for totals and for sub-scores that both exist. A missing score stays missing. They also add the `review_required` count and rate, the validated-miss count (`|predicted - reference| >= 1` and not `review_required`), and the count of those misses that `review_required` caught. The same fields are on each problem row.
+
+## dataset_v2: a short timeout stays on its own case
+
+A reused provider builds a new client when the next case needs a longer socket timeout. The shortened timeout from the previous case is not reused. A backoff that uses the last of the case budget is included in that case's latency.
+
+## dataset_v2: silence after a chunk stays inside the case budget
+
+Each chunk wait is limited to the time still left on the case, and to the socket timeout when that is shorter. A chunk at 800 s followed by silence ends by the 900 s case budget. The wait does not get another full 900 s.
+
+## dataset_v2: a trailing total is compared with the total
+
+A number next to a total or score word is compared with the parsed total, not with an item score. English words include `total`, `score`, and `revised`. Japanese words include `合計`, `点`, and `訂正`. A different number is `parse_ambiguous` and the grade is `review_required`. The same total is not. `4e-1` is one number, 0.4, and is not read as 4. The completion parser is `json_latex_escapes_v6`.
+
+## dataset_v2: a transcript-gate error keeps the grade
+
+An exception inside the transcript gate no longer replaces the grade with `failed` or clears the scores. The gate records a `gate_error` check with the exception type and adds no transcript flag. Superscript digits such as `²` are exponents in the arithmetic check, so `x² = 4` beside `x = 2` is consistent and `x² = 4` beside `x = 3` is `transcript_inconsistent`. The check still does not change a score.
+
+## dataset_v2: ordinary Math I/A notation is not a garbled transcript
+
+The transcript gate no longer treats `$`, `|`, `%`, or `&` as stray symbols. `$...$` delimiters are ignored, `\frac12` is a fraction with one digit or letter per argument, and `)` may close `[` while `]` may close `(`, so `[0,1)` and `(0,1]` are balanced. Roots, braced fractions, absolute values, percents, intervals, cases, binomial coefficients, trig with degrees, and sets with a complement bar stay unflagged. `#` on a math line, a missing closer, and a Cyrillic mix still set `transcript_garbled`. Scores are unchanged.
+
+## dataset_v2: an abnormal finish is not retried
+
+`SAFETY`, `MAX_TOKENS`, `RECITATION`, `OTHER`, and any other named finish stay terminal when the socket then drops. The attempt records that finish and is not sent again, so a later `STOP` cannot turn the case into provider status `ok`. `MAX_TOKENS` keeps its existing error text. A stream that ends with no finish reason can still be retried. `STOP` followed by a disconnect is unchanged: the failure keeps that finish and its usage.
+
+## dataset_v2: quote and colon fragments after one object are not validated
+
+Trailing text that still contains a double quote, or a colon introducing a number that is not a score statement, is `parse_ambiguous`. That includes `"`, `:0`, and `"total_score":`. A colon in ordinary prose, such as `Note: see the work`, is not a fragment. A score word immediately before a colon, such as `total_score: 4` when 4 is the parsed total, stays a score comparison. The completion parser is `json_latex_escapes_v7`.
+
+## dataset_v2: a score statement is read across the whole trailing text
+
+A total or score word is no longer limited to 16 characters on either side. Each statement runs from that word to the next score word, or to the end of the trailing text, and a number that ends immediately before the word counts too, as in `7点`. Those numbers are compared with the parsed total. A different number is `parse_ambiguous`. The same total is not. A number with no score word is not a score. The completion parser is `json_latex_escapes_v8`.
+
+## dataset_v2: prose commas, non-score 点, fenced confidence, and short probes
+
+A comma between words, such as `thanks, done`, is prose and can stay `validated`. A comma that is not between words is still leftover JSON. `以下の3点を確認` is not a score. `点` counts when it is a score phrase such as `4点` or `得点は4点`, and `合計`, `得点`, `total`, and `score` still mark a score statement. The completion parser is `json_latex_escapes_v9`. The transcript gate reads model confidence through that parser, so a fenced object with confidence at most 0.5 still counts. The two chunk probes wait at most 20 ms and at most the time still left on the case. Each attempt and each chunk wait uses that remaining budget.
+
+## dataset_v2: replay a saved run offline
+
+`replay` reads a baseline output directory, or its `run` directory, and applies the current completion parser and transcript gate to the saved raw completions and transcripts. It does not call a model. A provider failure stays failed, and its score stays missing. The gate defaults to on. The command writes `results.json` and, when every replayed grade finished, `metrics.json`.
+
+```
+python -m harness_v2.evaluation.dataset_v2 replay \
+    --dataset-dir "$DATASET_DIR" --split dev \
+    --run-dir "$SAVED_RUN" --out "$REPLAY_OUT"
+```
+
+## dataset_v2: OCR-uncertainty prompt v2
+
+`harness_v2_ocr_uncertainty_v2` is `harness_v2_ambiguity_aware_v1` plus general guidance that the answer text is an OCR transcript and may contain misreads. A line that contradicts neighbouring lines or the student's own later correct work, or that contains implausible symbols, is not treated as a student error by default. The grader states the plausible reading and the uncertainty, and lowers confidence or marks the item for review instead of deducting. It does not invent a value the transcript does not support. A deduction is only for an error that is clearly the student's. The JSON object shape is unchanged. `harness_v2_ambiguity_aware_v1` is unchanged. `--prompt-version` selects it, and the version is part of the reuse identity.
+
+## dataset_v2: partial-credit prompt v3
+
+`harness_v2_partial_credit_v3` is `harness_v2_ocr_uncertainty_v2` plus partial-credit guidance. For each rubric criterion, the grader quotes the transcript evidence and awards that criterion's listed points when they are met, even if the final answer is wrong. Points outside the rubric are not awarded. The total is the sum of the awarded criterion points. The JSON object shape is unchanged. The v1 and v2 texts are unchanged. `--prompt-version` selects it, and the version is part of the reuse identity.
+
+## dataset_v2: grade several cases at once
+
+`--concurrency N` grades N cases at the same time. The default is 1, which still sends one case after another. Each running case builds its own provider. Results stay in planned id order. `state.json` and `results.json` are written one at a time, by replacing the whole file, and stay mode `0600` under directories of mode `0700`. Each planned id runs once. A finished id is skipped on resume. A 429 stops new cases; cases already running are recorded, and the run stays resumable. The per-case wall-clock limit and retries stay on that case. Concurrency is stored with the run settings and is not part of the reuse identity.
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --thinking-level high \
+    --max-output-tokens 16384 --wall-clock-limit-s 900 \
+    --transcript-quality-gate off --concurrency 4 --out "$OUT"
+```
+
+## dataset_v2: Japanese score corrections are read
+
+`点数`, `採点`, `得点`, and `合計` are score words. `点数は0です。` and `採点は0とします。` after a different total are `parse_ambiguous`. The same total is not. A bare `点` is still not a score word by itself. The completion parser is `json_latex_escapes_v10`.
+
+## dataset_v2: a numeric or literal list is not prose
+
+A comma between words, such as `thanks, done`, stays prose. `0,0`, `1,2`, `true,false`, and `null,null` are leftover JSON and are `parse_ambiguous`. A digit beside a comma is not a word. The completion parser is `json_latex_escapes_v11`.
+
+## dataset_v2: replay rejudges a parser or gate failure
+
+`replay` reads a saved raw completion again when the stored failure is a parser or gate failure. `json_parse_failed` and `transcript_garbled` are judged with the current parser and gate. A provider failure stays failed, including `finish_reason=SAFETY`, `MAX_TOKENS`, `RECITATION`, and `OTHER`. A parser failure with no saved raw completion stays failed, and its score stays missing.
+
+## dataset_v2: replay will not overwrite its source
+
+`replay` refuses an `--out` that is the source run, inside it, or a directory that contains it. The source files and their permissions are left unchanged.
+
+## dataset_v2: replay keeps the saved inputs and both identities
+
+Replay grades from the dataset snapshot saved beside the run and from the saved transcript artifact. It checks the rubric hash and the transcript hash and stops if either differs. It does not silently read the current rubric or transcript. The output keeps the source identity and commit, and records the replay commit, completion parser version, and gate setting. The run config, checks, and failure_reason are the replayed grade.
+
+## dataset_v2: a score word stays inside its sentence
+
+A score word is compared only with numbers in the same sentence or clause. `Total is 4. I checked 2 equations.` is not `parse_ambiguous`. `I checked "x=2".` is prose. `"total_score":` is still a fragment, and a lone quote is still a fragment. `グラフは3点を通ります。` is not a score. `Thanks, (all checks passed).` is prose. `0,0` and `true,false` stay ambiguous. The completion parser is `json_latex_escapes_v12`.
+
+## dataset_v2: OCR-uncertainty prompt v4 and partial-credit prompt v5
+
+`harness_v2_ocr_uncertainty_v4` is `harness_v2_ambiguity_aware_v1` plus guidance that grades an OCR line as written. A line that looks like a misread must be named in `review_reason` with uncertainty at least 0.5, so the grade goes to review. The score does not get the benefit of the doubt. Another reading is allowed only when the surrounding lines make that one reading certain. Points are not awarded for a step that is not in the transcript. `harness_v2_ocr_uncertainty_v2` and `harness_v2_partial_credit_v3` are unchanged. `harness_v2_partial_credit_v5` is v4 plus the v3 partial-credit section. `--prompt-version` selects them, and each version is part of the reuse identity.
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_ocr_uncertainty_v4 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V4"
+```
+
+```
+python -m harness_v2.evaluation.dataset_v2 baseline \
+    --dataset-dir "$DATASET_DIR" --split dev --provider gemma \
+    --model gemma-4-31b-it --prompt-version harness_v2_partial_credit_v5 \
+    --thinking-level high --max-output-tokens 16384 \
+    --wall-clock-limit-s 900 --transcript-quality-gate off \
+    --concurrency 4 --out "$OUT_V5"
+```
+
+## dataset_v2: replay rejudges a gate exception saved with error_class
+
+`pipeline` stores an escaped exception as `error_class` and `ClassName: message`. Replay judges that row again when the saved raw completion exists and the cause is the parser or the gate. `TimeoutError`, `RemoteProtocolError`, `ProviderSetupError`, `MissingAPIKey`, quota, and `finish_reason` of `SAFETY`, `MAX_TOKENS`, `RECITATION`, or `OTHER` stay failed.
+
+## dataset_v2: replay identity is the replay, and the snapshot binding is required
+
+A saved run must name its rubric hash and its input hash. A missing hash aborts the replay, so another snapshot with the same case id is not used. The top-level `identity` is this replay's identity. The source run's identity is kept in `source_identity`.
+
+## dataset_v2: a solution list is not leftover JSON
+
+`The solutions are 1, 2.`, `The answer is (1, 2).`, and `座標は(1,2)です。` stay valid. A numeric list is `parse_ambiguous` when it is bare leftover JSON, such as `0,0` or `1,2`, or when it sits in the same sentence as a score word. `true,false` and `null,null` stay ambiguous. The completion parser is `json_latex_escapes_v13`.

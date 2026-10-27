@@ -17,7 +17,7 @@ def test_missing_item_is_not_given_a_score() -> None:
     raw = """```json
 {"items":[{"item_id":"R1","score":4,"max_points":4,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"}],"total_score":4}
 ```"""
-    items, total, _fence = items_from_completion(raw, _rubric())
+    items, total, *_ = items_from_completion(raw, _rubric())
     result = validate(_rubric(), items, total, "x+1")
     assert result.status == "failed"
     missing = next(item for item in result.items if item.item_id == "R2")
@@ -45,7 +45,7 @@ def test_sympy_equivalence_is_mechanical_only() -> None:
     assert mechanical_equivalent("sqrt(x+1)", "sqrt(1+x)") is True
     assert mechanical_equivalent("x+1", "x+2") is False
     assert mechanical_equivalent("hello there", "1+x") is None
-    items, total, _fence = items_from_completion(
+    items, total, *_ = items_from_completion(
         '{"items":[{"item_id":"R1","score":4,"max_points":4,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"},'
         '{"item_id":"R2","score":2,"max_points":2,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"}],'
         '"total_score":6}',
@@ -53,7 +53,7 @@ def test_sympy_equivalence_is_mechanical_only() -> None:
     )
     validated = validate(_rubric(), items, total, "x+1 is the work")
     assert validated.status == "validated"
-    mismatch, mismatch_total, _fence = items_from_completion(
+    mismatch, mismatch_total, *_ = items_from_completion(
         '{"items":[{"item_id":"R1","score":4,"max_points":4,"evidence_spans":[{"text":"x+2"}],"math_reason":"shown"},'
         '{"item_id":"R2","score":2,"max_points":2,"evidence_spans":[{"text":"x+2"}],"math_reason":"shown"}],'
         '"total_score":6}',
@@ -70,7 +70,7 @@ def test_rubric_max_rejects_model_max_and_non_numeric() -> None:
         '{"item_id":"R2","score":2,"max_points":2,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"}],'
         '"total_score":22}'
     )
-    items, total, _fence = items_from_completion(raw, _rubric())
+    items, total, *_ = items_from_completion(raw, _rubric())
     assert items[0].max_points == 4
     leaked = validate(_rubric(), items, total, "x+1")
     assert leaked.status == "review_required"
@@ -80,11 +80,11 @@ def test_rubric_max_rejects_model_max_and_non_numeric() -> None:
         '{"item_id":"R2","score":2,"max_points":2,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"}],'
         '"total_score":6}'
     )
-    mismatch_items, mismatch_total, _fence = items_from_completion(claimed, _rubric())
+    mismatch_items, mismatch_total, *_ = items_from_completion(claimed, _rubric())
     mismatch = validate(_rubric(), mismatch_items, mismatch_total, "x+1 is the work")
     assert mismatch.status == "review_required"
     assert "item_max_mismatch" in mismatch_items[0].review_reason
-    nan_items, nan_total, _fence = items_from_completion(
+    nan_items, nan_total, *_ = items_from_completion(
         '{"items":[{"item_id":"R1","score":"NaN","max_points":4,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"},'
         '{"item_id":"R2","score":2,"max_points":2,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"}],'
         '"total_score":2}',
@@ -105,7 +105,7 @@ def test_duplicate_ids_and_empty_rubric_fail() -> None:
         '{"item_id":"R1","score":4,"max_points":4,"evidence_spans":[{"text":"x+1"}],"math_reason":"shown"}],'
         '"total_score":8}'
     )
-    items, total, _fence = items_from_completion(raw, _rubric())
+    items, total, *_ = items_from_completion(raw, _rubric())
     duplicate = validate(_rubric(), items, total, "x+1")
     assert duplicate.status == "failed"
     assert "duplicate_item_ids" in duplicate.failure_reason
@@ -124,12 +124,12 @@ def test_review_reason_or_high_uncertainty_requires_review() -> None:
             '"math_reason":"shown","uncertainty":0.1,"review_reason":""}],"total_score":6}'
         )
 
-    unclear, unclear_total, _fence = items_from_completion(row(0.1, "cannot determine reading"), _rubric())
+    unclear, unclear_total, *_ = items_from_completion(row(0.1, "cannot determine reading"), _rubric())
     reviewed = validate(_rubric(), unclear, unclear_total, "x+1 is the work")
     assert reviewed.status == "review_required"
-    high, high_total, _fence = items_from_completion(row(0.5, ""), _rubric())
+    high, high_total, *_ = items_from_completion(row(0.5, ""), _rubric())
     assert validate(_rubric(), high, high_total, "x+1 is the work").status == "review_required"
-    low, low_total, _fence = items_from_completion(row(0.49, ""), _rubric())
+    low, low_total, *_ = items_from_completion(row(0.49, ""), _rubric())
     assert validate(_rubric(), low, low_total, "x+1 is the work").status == "validated"
 
 

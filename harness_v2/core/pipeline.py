@@ -15,6 +15,7 @@ from harness_v2.evaluation.review import review_disagreement
 from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import ScoringParseError, build_prompt, items_from_completion
+from harness_v2.grading.transcript_quality import apply_transcript_gate
 from harness_v2.grading.validator import validate
 from harness_v2.improvement.proposals import build_proposal
 from harness_v2.providers.gemma_ai_studio import QuotaExceeded
@@ -146,6 +147,9 @@ class Pipeline:
                         "attempts": exchange.attempts, "settings": exchange.settings})
         self.store.artifacts.write_text(raw_name, exchange.raw_response)
         result = self._grade(exchange, rubric, prompt_answer, request_id)
+        apply_transcript_gate(
+            result, prompt_answer, enabled=case.get("transcript_quality_gate") == "on")
+        context["transcript_quality_gate"] = "on" if case.get("transcript_quality_gate") == "on" else "off"
         review_payload = self._maybe_review(result, view, rubric, request_id)
         proposal_link = self._maybe_propose(result, case, view, experiment_id, commit, request_id, raw_name)
         record = RunRecord(
@@ -299,7 +303,8 @@ class Pipeline:
                 raw_response=exchange.raw_response,
             )
         try:
-            items, total, _fence = items_from_completion(exchange.raw_response, rubric)
+            items, total, _fence, repaired, ambiguous, marker = items_from_completion(
+                exchange.raw_response, rubric)
         except ScoringParseError as exc:
             return GradingResult(
                 status="failed",
@@ -312,7 +317,7 @@ class Pipeline:
                 model_id=exchange.model_returned or exchange.model_requested,
                 raw_response=exchange.raw_response,
             )
-        return validate(
+        result = validate(
             rubric,
             items,
             total,
@@ -322,6 +327,17 @@ class Pipeline:
             model_id=exchange.model_returned or exchange.model_requested,
             raw_response=exchange.raw_response,
         )
+        result.parse_repaired = repaired
+        result.parse_ambiguous = ambiguous
+        result.parse_marker = marker
+        if ambiguous and result.status != "failed":
+            result.status = "review_required"
+            parts = [part for part in result.failure_reason.split(",") if part]
+            if "parse_ambiguous" not in parts:
+                parts.append("parse_ambiguous")
+            result.failure_reason = ",".join(parts)
+            result.checks.append(Check("parse_ambiguous", False, marker or "newline_or_latex"))
+        return result
 
     def _maybe_propose(
         self,

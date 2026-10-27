@@ -1,13 +1,18 @@
 """dataset_v2 conversion uses rubrics and transcripts, never draft or reference scores."""
+import hashlib
 import json
 import os
 import stat
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
 from harness_v2.evaluation.dataset import load_dataset
-from harness_v2.evaluation.dataset_v2 import DatasetV2Error, baseline, convert, evaluate, main, rubric_source
+from harness_v2.evaluation.dataset_v2 import (
+    DatasetV2Error, baseline, convert, evaluate, main, replay, rubric_source,
+)
 from harness_v2.evaluation.independent import prepare_independent_input
 from harness_v2.grading.rubric import rubric_from_data
 from harness_v2.grading.scorer import build_prompt
@@ -666,6 +671,12 @@ def test_metrics_compare_totals_and_subquestions_without_filling_gaps(tmp_path):
         "problem": "9-Z", "n_evaluated": 1, "total_mae": 0, "total_mae_count": 1,
         "exact_match_count": 1, "exact_match_denominator": 1, "exact_match_rate": 1,
         "subquestion_mae": 0, "subquestion_mae_count": 2,
+        "total_bias": 0, "total_over_score_count": 0, "total_over_score_sum": 0,
+        "total_over_score_max": None, "total_under_score_count": 0,
+        "subquestion_bias": 0, "subquestion_over_score_count": 0, "subquestion_over_score_sum": 0,
+        "subquestion_over_score_max": None, "subquestion_under_score_count": 0,
+        "review_required_count": 0, "review_required_rate": 0,
+        "validated_miss_count": 0, "review_caught_miss_count": 0,
     }]
     assert metrics["n_evaluated"] == 1
     assert SENTINEL not in json.dumps(metrics)
@@ -768,6 +779,54 @@ def test_mae_exact_match_and_per_problem_table(tmp_path):
     assert flagged["answer_id"] == "9-Z_C_XXXX"
     assert flagged["exact_total"] is False
     assert flagged["abs_error"] == 2
+
+
+def test_bias_over_score_and_review_misses(tmp_path):
+    root = build_tree(
+        tmp_path / "data",
+        dev_ids=["9-Z_C_XXXX", "9-Z_C_YYYY", "9-Z_C_NEAR"],
+        transcripts={
+            "dev": {"9-Z_C_XXXX": "x\n", "9-Z_C_YYYY": "y\n", "9-Z_C_NEAR": "z\n"},
+            "holdout": {"9-Z_A_HHHH": "h\n"},
+        },
+    )
+    scores = _scores()
+    scores["count"] = 4
+    scores["answers"].extend([
+        {"answer_id": "9-Z_C_YYYY", "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 4, "max": 4}],
+         "total": 7},
+        {"answer_id": "9-Z_C_NEAR", "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 1, "max": 4}],
+         "total": 4},
+    ])
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    results = _write_results(tmp_path / "results.json", [
+        _dev_grade(total=6, items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 3}]),
+        _dev_grade(answer_id="9-Z_C_YYYY", total=5, status="review_required",
+                   items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 2}]),
+        _dev_grade(answer_id="9-Z_C_NEAR", total=4.5,
+                   items=[{"item_id": "(1)", "score": 3}, {"item_id": "(2)", "score": 1.5}]),
+    ])
+    metrics = evaluate(root, "dev", results)
+    assert metrics["total_bias"] == pytest.approx(0.5 / 3)
+    assert metrics["total_over_score_count"] == 2
+    assert metrics["total_over_score_sum"] == pytest.approx(2.5)
+    assert metrics["total_over_score_max"] == 2
+    assert metrics["total_under_score_count"] == 1
+    assert metrics["subquestion_bias"] == pytest.approx(0.5 / 6)
+    assert metrics["subquestion_over_score_count"] == 2
+    assert metrics["subquestion_over_score_sum"] == pytest.approx(2.5)
+    assert metrics["subquestion_over_score_max"] == 2
+    assert metrics["subquestion_under_score_count"] == 1
+    assert metrics["review_required_count"] == 1
+    assert metrics["review_required_rate"] == pytest.approx(1 / 3)
+    assert metrics["validated_miss_count"] == 1
+    assert metrics["review_caught_miss_count"] == 1
+    assert metrics["per_problem"][0]["validated_miss_count"] == 1
+    near = next(row for row in metrics["per_answer"] if row["answer_id"] == "9-Z_C_NEAR")
+    assert near["abs_error"] == pytest.approx(0.5)
+    assert near["grading_status"] == "validated"
 
 
 def test_null_prediction_is_not_an_exact_match_or_a_zero(tmp_path):
@@ -937,7 +996,8 @@ def test_gemma_baseline_uses_the_existing_model_and_stays_offline(tmp_path, monk
     assert config["provider"] == "gemma"
     assert config["model"] == "gemma-4-31b-it"
     assert config["prompt_version"] == "harness_v2_ambiguity_aware_v1"
-    assert config["generation_settings"] == {"temperature": 0}
+    assert config["generation_settings"] == {
+        "temperature": 0, "max_output_tokens": 8192, "thinking_level": "minimal"}
     assert "fixture_completion" not in config
     assert calls[0]["model"] == "gemma-4-31b-it"
     blob = b"".join(path.read_bytes() for path in out.rglob("*") if path.is_file())
@@ -949,6 +1009,137 @@ def test_gemma_baseline_uses_the_existing_model_and_stays_offline(tmp_path, monk
     with pytest.raises(ValueError, match="Gemma model"):
         baseline(root, "dev", tmp_path / "paid", provider="gemma", model="gemini-2.5-pro",
                  provider_factory=_factory(calls))
+    assert len(calls) == 1
+
+
+def test_timeout_policy_is_recorded_and_does_not_block_reuse(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    common = [
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+        "--fast-backoff-min-s", "5", "--fast-backoff-max-s", "30",
+        "--thinking-level", "minimal", "--max-output-tokens", "8192",
+    ]
+    assert main([*common, "--wall-clock-limit-s", "900", "--max-attempts", "3"]) == 0
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["wall_clock_limit_s"] == 900
+    assert config["max_attempts"] == 3
+    assert config["fast_backoff_min_s"] == 5
+    assert config["fast_backoff_max_s"] == 30
+    assert config["generation_settings"]["max_output_tokens"] == 8192
+    assert config["generation_settings"]["thinking_level"] == "minimal"
+    assert "deadline_growth" not in config
+    assert main([*common, "--wall-clock-limit-s", "1200", "--max-attempts", "2"]) == 0
+    second = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert second["skipped"] == 1
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["wall_clock_limit_s"] == 1200
+
+
+def test_cli_records_high_thinking_and_a_16384_token_cap(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+        "--thinking-level", "high", "--max-output-tokens", "16384", "--wall-clock-limit-s", "900",
+    ]) == 0
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["generation_settings"]["thinking_level"] == "high"
+    assert config["generation_settings"]["max_output_tokens"] == 16384
+    assert config["generation_settings"]["temperature"] == 0
+    assert config["wall_clock_limit_s"] == 900
+    assert json.loads(capsys.readouterr().out)["failed"] == 0
+
+
+def test_runner_defaults_match_a_direct_provider_call(tmp_path):
+    from harness_v2.run import load_config
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({
+        "name": "baseline", "provider": "gemma", "model": "gemma-4-31b-it",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {"temperature": 0},
+    }), encoding="utf-8")
+    loaded = load_config(path)
+    assert loaded["generation_settings"] == {
+        "temperature": 0, "max_output_tokens": 8192, "thinking_level": "minimal"}
+    path.write_text(json.dumps({
+        "name": "baseline", "provider": "gemma", "model": "gemma-4-31b-it",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {
+            "temperature": 0, "thinking_level": "high", "max_output_tokens": 16384},
+    }), encoding="utf-8")
+    overridden = load_config(path)
+    assert overridden["generation_settings"]["thinking_level"] == "high"
+    assert overridden["generation_settings"]["max_output_tokens"] == 16384
+
+
+def test_thinking_level_and_max_tokens_change_the_reuse_identity(tmp_path):
+    root = build_tree(tmp_path / "data")
+    out = tmp_path / "out"
+    calls = []
+    first = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert first["skipped"] == 0 and len(calls) == 1
+    assert calls[0]["settings"]["thinking_level"] == "minimal"
+    assert calls[0]["settings"]["max_output_tokens"] == 8192
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     wall_clock_limit_s=1200, max_attempts=2,
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert again["skipped"] == 1 and len(calls) == 1
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 generation_settings={"thinking_level": "high"},
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 generation_settings={"max_output_tokens": 4096},
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 generation_settings={"thinking_level": "unset"},
+                 provider_factory=_factory(calls), fixture_completion=_completion())
+    assert len(calls) == 1
+
+
+def test_transcript_gate_off_reuses_an_older_result_and_on_does_not(tmp_path):
+    from harness_v2.run import load_config, reusable_config
+
+    root = build_tree(tmp_path / "data")
+    out = tmp_path / "out"
+    calls = []
+    first = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     transcript_quality_gate="off", provider_factory=_factory(calls),
+                     fixture_completion=_completion())
+    assert first["skipped"] == 0 and len(calls) == 1
+    saved = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert saved["transcript_quality_gate"] == "off"
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     provider_factory=_factory(calls), fixture_completion=_completion())
+    assert again["skipped"] == 1 and len(calls) == 1
+    absent = {
+        "name": "baseline", "provider": "gemma", "model": "gemma-4-31b-it",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {"temperature": 0},
+    }
+    off = {**absent, "transcript_quality_gate": "off"}
+    on = {**absent, "transcript_quality_gate": "on"}
+    off_path = tmp_path / "off.json"
+    on_path = tmp_path / "on.json"
+    absent_path = tmp_path / "absent.json"
+    off_path.write_text(json.dumps(off), encoding="utf-8")
+    on_path.write_text(json.dumps(on), encoding="utf-8")
+    absent_path.write_text(json.dumps(absent), encoding="utf-8")
+    assert reusable_config(load_config(off_path)) == reusable_config(load_config(absent_path))
+    assert reusable_config(load_config(on_path)) != reusable_config(load_config(off_path))
+    with pytest.raises(ValueError, match="experiment identity differs"):
+        baseline(root, "dev", out, provider="fixture", model="fixture",
+                 transcript_quality_gate="on", provider_factory=_factory(calls),
+                 fixture_completion=_completion())
     assert len(calls) == 1
 
 
@@ -1100,6 +1291,629 @@ def test_cli_commit_is_recorded_and_the_default_stays_the_resolver(tmp_path, cap
     assert runs["runs"][0]["commit"] == "pinned-commit-6497"
     assert "pinned-commit-6497" not in (pinned_out / "config.json").read_text(encoding="utf-8")
     capsys.readouterr()
+
+
+def _saved_run(root: Path, raw: str, transcript: str, *, status="validated", total=0,
+              failure_reason="", run_dir: Path | None = None) -> Path:
+    from harness_v2.evaluation.dataset import load_dataset, write_dataset
+    from harness_v2.evaluation.dataset_v2 import _load_problem, harness_items
+
+    saved = run_dir or (root.parent / "saved")
+    artifacts = saved / "run" / "artifacts"
+    (artifacts / "raw").mkdir(parents=True)
+    (artifacts / "grading").mkdir()
+    (artifacts / "raw" / "case.txt").write_text(raw, encoding="utf-8")
+    (artifacts / "grading" / "case.txt").write_text(transcript, encoding="utf-8")
+    rubric = harness_items(_load_problem(root, "9-Z"))
+    manifest = write_dataset(
+        saved / "dataset",
+        dataset_id="dataset_v2",
+        version="replay-snapshot",
+        cases=[{
+            "case_id": "9-Z_C_XXXX",
+            "problem_id": "9-Z",
+            "input_version": "9-Z_C_XXXX",
+            "problem_text": "9-Z\nSynthetic summary.",
+            "rubric_version": "dataset_v2",
+            "rubric": rubric,
+            "grading_input_bytes": transcript.encode("utf-8"),
+        }],
+        reference_scores={},
+        reference_items={},
+    )
+    case = load_dataset(manifest).cases[0]
+    transcript_hash = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    payload = {
+        "commit": "source-commit",
+        "identity": "source-identity",
+        "config": {
+            "completion_parser_version": "json_latex_escapes_v9",
+            "transcript_quality_gate": "off",
+        },
+        "summary": {"pending": 0, "failed": 0, "stopped_reason": "", "completed": 1},
+        "expected_runs": [{
+            "request_id": "req-1",
+            "case_id": "9-Z_C_XXXX",
+            "repetition": 1,
+            "problem_id": "9-Z",
+        }],
+        "runs": [{
+            "request_id": "req-1",
+            "commit": "source-commit",
+            "failure_reason": failure_reason,
+            "checks": [],
+            "outputs": {
+                "grading": {
+                    "status": status,
+                    "total_score": total,
+                    "items": [],
+                    "raw_response": "stale raw",
+                    "failure_reason": failure_reason,
+                    "checks": [],
+                },
+                "raw_response_artifact": "raw/case.txt",
+                "grading_input_artifact": "grading/case.txt",
+                "grading_input_sha256": transcript_hash,
+                "experiment_case": {
+                    "case_id": "9-Z_C_XXXX",
+                    "repetition": 1,
+                    "rubric_sha256": case["rubric_sha256"],
+                    "input_sha256": case["input_sha256"],
+                },
+            },
+        }],
+    }
+    (saved / "run").mkdir(parents=True, exist_ok=True)
+    (saved / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    return saved
+
+
+def _replay_completion(transcript: str, trailer: str = "\nnoted") -> str:
+    body = json.dumps({
+        "items": [
+            {"item_id": "(1)", "score": 3, "evidence_spans": [{"text": transcript.split("\n")[0]}],
+             "math_reason": "shown", "uncertainty": 0.1, "review_reason": ""},
+            {"item_id": "(2)", "score": 1, "evidence_spans": [{"text": "shown"}],
+             "math_reason": "shown", "uncertainty": 0.1, "review_reason": ""},
+        ],
+        "total_score": 4,
+    }, ensure_ascii=False)
+    return body + trailer
+
+
+def test_replay_reapplies_the_gate_and_parser_without_a_model(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("replay called the model")
+
+    monkeypatch.setattr("harness_v2.providers.gemma_ai_studio.GemmaAIStudio.generate", boom)
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(root, _replay_completion(transcript), transcript, total=0)
+    out = tmp_path / "replay"
+    result = replay(root, "dev", saved, out)
+    assert result["failed"] == 0
+    assert result["metrics_path"]
+    written = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))
+    grade = written["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "validated"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 3
+    assert grade["failure_reason"] == ""
+    assert written["runs"][0]["outputs"]["replay"]["reparsed"] is True
+    metrics = json.loads(Path(result["metrics_path"]).read_text(encoding="utf-8"))
+    assert metrics["exact_match_count"] == 1
+    assert metrics["total_mae"] == 0
+    nested = tmp_path / "from-run-dir"
+    again = replay(root, "dev", saved / "run", nested)
+    assert json.loads(Path(again["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]["total_score"] == 4
+
+
+def test_replay_routes_a_garbled_transcript_without_changing_the_score(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "x + # = 2\nshown"
+    saved = _saved_run(root, _replay_completion(transcript), transcript, total=9)
+    result = replay(root, "dev", saved, tmp_path / "replay")
+    grade = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "review_required"
+    assert grade["failure_reason"] == "transcript_garbled"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["score"] == 3
+    quiet = replay(root, "dev", saved, tmp_path / "off", transcript_quality_gate="off")
+    off = json.loads(Path(quiet["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert off["status"] == "validated"
+    assert off["total_score"] == 4
+
+
+def test_replay_keeps_a_provider_failure_unfilled(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(
+        root, _replay_completion(transcript), transcript, status="failed", total=None,
+        failure_reason="finish_reason=SAFETY",
+    )
+    result = replay(root, "dev", saved, tmp_path / "replay")
+    assert result["metrics_path"] is None
+    assert result["failed"] == 1
+    grade = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "failed"
+    assert grade["total_score"] is None
+    assert grade["items"] == []
+    assert grade["failure_reason"] == "finish_reason=SAFETY"
+
+
+def test_replay_rejudges_a_parser_or_gate_failure_and_keeps_abnormal_finishes(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    raw = _replay_completion(transcript)
+    parsed = _saved_run(
+        root, raw, transcript, status="failed", total=None,
+        failure_reason="json_parse_failed: Expecting value",
+    )
+    result = replay(root, "dev", parsed, tmp_path / "parsed")
+    grade = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+    assert grade["replay"]["reparsed"] is True
+    assert grade["grading"]["status"] == "validated"
+    assert grade["grading"]["total_score"] == 4
+    assert grade["grading"]["items"][0]["score"] == 3
+
+    garbled = "x + # = 2\nshown"
+    gated = _saved_run(
+        root, _replay_completion(garbled), garbled, status="failed", total=None,
+        failure_reason="transcript_garbled", run_dir=tmp_path / "gated-src",
+    )
+    gated_payload = json.loads((gated / "run" / "results.json").read_text(encoding="utf-8"))
+    gated_payload["runs"][0]["outputs"]["error_class"] = "RuntimeError"
+    (gated / "run" / "results.json").write_text(json.dumps(gated_payload), encoding="utf-8")
+    again = replay(root, "dev", gated, tmp_path / "gated")
+    gate_grade = json.loads(Path(again["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert gate_grade["status"] == "review_required"
+    assert gate_grade["total_score"] == 4
+    assert "transcript_garbled" in gate_grade["failure_reason"]
+
+    for finish in ("SAFETY", "MAX_TOKENS", "RECITATION", "OTHER"):
+        saved = _saved_run(
+            root, raw, transcript, status="failed", total=None,
+            failure_reason=f"finish_reason={finish}", run_dir=tmp_path / finish,
+        )
+        kept = replay(root, "dev", saved, tmp_path / f"{finish}-out")
+        row = json.loads(Path(kept["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+        assert row["replay"]["reparsed"] is False
+        assert row["grading"]["status"] == "failed"
+        assert row["grading"]["total_score"] is None
+        assert row["grading"]["failure_reason"] == f"finish_reason={finish}"
+
+    missing = _saved_run(
+        root, raw, transcript, status="failed", total=None,
+        failure_reason="json_parse_failed: Expecting value", run_dir=tmp_path / "missing-src",
+    )
+    payload = json.loads((missing / "run" / "results.json").read_text(encoding="utf-8"))
+    payload["runs"][0]["outputs"].pop("raw_response_artifact")
+    (missing / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    untouched = replay(root, "dev", missing, tmp_path / "missing-out")
+    stale = json.loads(Path(untouched["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+    assert stale["replay"]["reparsed"] is False
+    assert stale["grading"]["total_score"] is None
+
+
+def _write_pipeline_exception(saved: Path, *, error_class: str, message: str,
+                             failure_reason: str | None = None) -> None:
+    """The shape pipeline.run writes when an exception escapes a case."""
+    path = saved / "run" / "results.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    reason = failure_reason if failure_reason is not None else f"{error_class}: {message}"
+    run = payload["runs"][0]
+    run["failure_reason"] = reason
+    run["outputs"]["error_class"] = error_class
+    grade = run["outputs"]["grading"]
+    grade["status"] = "failed"
+    grade["total_score"] = None
+    grade["items"] = []
+    grade["raw_response"] = ""
+    grade["failure_reason"] = reason
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_replay_rejudges_a_pipeline_gate_exception_and_keeps_transport_failures(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    raw = _replay_completion(transcript)
+    saved = _saved_run(root, raw, transcript, status="failed", total=None, failure_reason="stale")
+    _write_pipeline_exception(saved, error_class="ValueError", message="transcript gate failed")
+    result = replay(root, "dev", saved, tmp_path / "gate")
+    row = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))["runs"][0]
+    assert row["outputs"]["replay"]["reparsed"] is True
+    assert row["outputs"]["grading"]["status"] == "validated"
+    assert row["outputs"]["grading"]["total_score"] == 4
+    assert row["failure_reason"] == ""
+
+    parsed = _saved_run(
+        root, raw, transcript, status="failed", total=None, failure_reason="stale",
+        run_dir=tmp_path / "parse-src",
+    )
+    _write_pipeline_exception(
+        parsed, error_class="ScoringParseError", message="json_parse_failed: Expecting value")
+    reparsed = replay(root, "dev", parsed, tmp_path / "parse")
+    parse_row = json.loads(Path(reparsed["results_path"]).read_text(encoding="utf-8"))["runs"][0]
+    assert parse_row["outputs"]["replay"]["reparsed"] is True
+    assert parse_row["outputs"]["grading"]["total_score"] == 4
+
+    for error_class, message in (
+        ("TimeoutError", "timed out"),
+        ("RemoteProtocolError", "connection dropped"),
+        ("ProviderSetupError", "provider setup failed"),
+        ("MissingAPIKey", "missing key"),
+    ):
+        kept_src = _saved_run(
+            root, raw, transcript, status="failed", total=None, failure_reason="stale",
+            run_dir=tmp_path / error_class,
+        )
+        _write_pipeline_exception(kept_src, error_class=error_class, message=message)
+        kept = replay(root, "dev", kept_src, tmp_path / f"{error_class}-out")
+        kept_row = json.loads(Path(kept["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+        assert kept_row["replay"]["reparsed"] is False
+        assert kept_row["grading"]["status"] == "failed"
+        assert kept_row["grading"]["total_score"] is None
+        assert kept_row["grading"]["failure_reason"] == f"{error_class}: {message}"
+
+    abnormal = _saved_run(
+        root, raw, transcript, status="failed", total=None, failure_reason="stale",
+        run_dir=tmp_path / "safety-src",
+    )
+    _write_pipeline_exception(
+        abnormal, error_class="SAFETY", message="blocked",
+        failure_reason="finish_reason=SAFETY",
+    )
+    safety = replay(root, "dev", abnormal, tmp_path / "safety-out")
+    safety_row = json.loads(Path(safety["results_path"]).read_text(encoding="utf-8"))["runs"][0]["outputs"]
+    assert safety_row["replay"]["reparsed"] is False
+    assert safety_row["grading"]["failure_reason"] == "finish_reason=SAFETY"
+
+
+def test_replay_refuses_to_overwrite_the_source_run(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(root, _replay_completion(transcript), transcript)
+    for path in [saved, *saved.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    before = {path: mode(path) for path in [saved, *saved.rglob("*")]}
+    for target in (saved, saved / "run", saved / "run" / "nested", saved.parent):
+        with pytest.raises(DatasetV2Error, match="source run"):
+            replay(root, "dev", saved, target)
+    assert not (saved / "run" / "nested").exists()
+    assert {path: mode(path) for path in before} == before
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "replay", "--dataset-dir", str(root), "--split", "dev",
+            "--run-dir", str(saved), "--out", str(saved / "run"),
+        ])
+    assert exc.value.code == 2
+    assert {path: mode(path) for path in before} == before
+    kept = replay(root, "dev", saved, tmp_path / "elsewhere")
+    assert Path(kept["results_path"]).is_file()
+    assert {path: mode(path) for path in before} == before
+
+
+def test_replay_uses_the_saved_snapshot_and_records_both_identities(tmp_path):
+    from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION
+
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(
+        root, _replay_completion(transcript, "\n点数は0です。"), transcript, total=9)
+    live = json.loads((root / "sol_draft" / "9-Z.json").read_text(encoding="utf-8"))
+    live["rubric"]["subquestions"][0]["id"] = "(9)"
+    (root / "sol_draft" / "9-Z.json").write_text(json.dumps(live), encoding="utf-8")
+    (root / "ocr_gpu_v1" / "dev" / "ans_9-Z_C_XXXX.md").write_text(
+        "x + # = 2\nshown\n", encoding="utf-8")
+    result = replay(root, "dev", saved, tmp_path / "replay")
+    written = json.loads(Path(result["results_path"]).read_text(encoding="utf-8"))
+    row = written["runs"][0]
+    grade = row["outputs"]["grading"]
+    assert grade["status"] == "review_required"
+    assert grade["total_score"] == 4
+    assert grade["items"][0]["item_id"] == "(1)"
+    assert "parse_ambiguous" in grade["failure_reason"]
+    assert row["failure_reason"] == grade["failure_reason"]
+    assert row["checks"] == grade["checks"]
+    assert any(check["name"] == "parse_ambiguous" for check in row["checks"])
+    assert written["config"]["completion_parser_version"] == COMPLETION_PARSER_VERSION
+    assert written["config"]["transcript_quality_gate"] == "on"
+    assert written["source_identity"] == "source-identity"
+    assert written["identity"] != "source-identity"
+    assert len(written["identity"]) == 64
+    assert written["replay"]["source_identity"]["commit"] == "source-commit"
+    assert written["replay"]["source_identity"]["identity"] == "source-identity"
+    assert written["replay"]["source_identity"]["config"]["completion_parser_version"] == "json_latex_escapes_v9"
+    replay_id = row["outputs"]["replay"]["replay_identity"]
+    assert replay_id["completion_parser_version"] == COMPLETION_PARSER_VERSION
+    assert replay_id["transcript_quality_gate"] == "on"
+    assert isinstance(replay_id["commit"], str) and replay_id["commit"]
+    assert row["outputs"]["replay"]["reparsed"] is True
+    assert row["commit"] == "source-commit"
+
+    tampered = _saved_run(
+        root, _replay_completion(transcript), transcript, run_dir=tmp_path / "tampered")
+    grading = tampered / "run" / "artifacts" / "grading" / "case.txt"
+    grading.write_text(transcript + "\nchanged", encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="transcript hash"):
+        replay(root, "dev", tampered, tmp_path / "tampered-out")
+
+    hashed = _saved_run(
+        root, _replay_completion(transcript), transcript, run_dir=tmp_path / "hashed")
+    rubric_path = next((hashed / "dataset" / "rubrics").glob("*.json"))
+    rubric_path.write_bytes(rubric_path.read_bytes().replace(b"(1)", b"(9)"))
+    with pytest.raises(DatasetV2Error, match="snapshot"):
+        replay(root, "dev", hashed, tmp_path / "hashed-out")
+
+    mismatch = _saved_run(
+        root, _replay_completion(transcript), transcript, run_dir=tmp_path / "mismatch")
+    payload = json.loads((mismatch / "run" / "results.json").read_text(encoding="utf-8"))
+    payload["runs"][0]["outputs"]["experiment_case"]["rubric_sha256"] = "0" * 64
+    (mismatch / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(DatasetV2Error, match="rubric hash"):
+        replay(root, "dev", mismatch, tmp_path / "mismatch-out")
+    assert not (tmp_path / "mismatch-out").exists()
+
+    for key, label in (("rubric_sha256", "rubric hash"), ("input_sha256", "input hash")):
+        unbound = _saved_run(
+            root, _replay_completion(transcript), transcript, run_dir=tmp_path / f"missing-{key}",
+        )
+        payload = json.loads((unbound / "run" / "results.json").read_text(encoding="utf-8"))
+        del payload["runs"][0]["outputs"]["experiment_case"][key]
+        (unbound / "run" / "results.json").write_text(json.dumps(payload), encoding="utf-8")
+        with pytest.raises(DatasetV2Error, match=f"{label} is missing"):
+            replay(root, "dev", unbound, tmp_path / f"missing-{key}-out")
+        assert not (tmp_path / f"missing-{key}-out").exists()
+
+
+def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(root, _replay_completion(transcript) + "\n:0", transcript, total=0)
+    out = tmp_path / "replay"
+    assert main([
+        "replay", "--dataset-dir", str(root), "--split", "dev",
+        "--run-dir", str(saved), "--out", str(out),
+    ]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["metrics_path"] == str(out / "metrics.json")
+    grade = json.loads((out / "results.json").read_text(encoding="utf-8"))["runs"][0]["outputs"]["grading"]
+    assert grade["status"] == "review_required"
+    assert "parse_ambiguous" in grade["failure_reason"]
+    assert grade["total_score"] == 4
+
+
+def _parallel_tree(tmp_path):
+    ids = [f"9-Z_C_{i:04d}" for i in range(1, 5)]
+    root = build_tree(tmp_path / "data", dev_ids=ids)
+    scores = _scores()
+    holdout = scores["answers"][1]
+    scores["answers"] = [
+        {"answer_id": answer_id, "problem": "9-Z", "writer": "C",
+         "scores": [{"sub": "(1)", "score": 3, "max": 3}, {"sub": "(2)", "score": 1, "max": 4}],
+         "total": 4}
+        for answer_id in ids
+    ] + [holdout]
+    scores["count"] = len(scores["answers"])
+    scores["flagged"] = []
+    (root / "reference" / "scores_v1.json").write_text(json.dumps(scores), encoding="utf-8")
+    return root, ids
+
+
+def _case_ids(results_path: Path) -> list[str]:
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    return [row["outputs"]["experiment_case"]["case_id"] for row in payload["runs"]]
+
+
+def test_concurrency_grades_each_id_once_and_keeps_id_order(tmp_path):
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.run import load_config, reusable_config
+
+    root, ids = _parallel_tree(tmp_path)
+    started: list[str] = []
+    finished: list[str] = []
+    providers: list[object] = []
+    seen_limits: list[float] = []
+    lock = threading.Lock()
+    gate = threading.Barrier(len(ids))
+    errors: list[str] = []
+    stop = threading.Event()
+
+    def factory(config, case, repetition):
+        del repetition
+        inner = FixtureProvider(_completion(), model_id=config["model"])
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                with lock:
+                    started.append(case["case_id"])
+                gate.wait(timeout=5)
+                time.sleep(0.03 * (len(ids) - ids.index(case["case_id"])))
+                with lock:
+                    finished.append(case["case_id"])
+                return inner.generate(prompt, request_id=request_id, settings=settings)
+
+        instance = Provider()
+        with lock:
+            providers.append(instance)
+            seen_limits.append(config["wall_clock_limit_s"])
+        return instance
+
+    out = tmp_path / "out"
+
+    def watch():
+        path = out / "run" / "state.json"
+        while not stop.is_set():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            try:
+                json.loads(text)
+            except json.JSONDecodeError:
+                errors.append(text)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        result = baseline(root, "dev", out, provider="fixture", model="fixture",
+                          concurrency=4, wall_clock_limit_s=900,
+                          provider_factory=factory, fixture_completion=_completion())
+    finally:
+        stop.set()
+        watcher.join(timeout=2)
+    assert errors == []
+    assert result["completed"] == 4 and result["failed"] == 0
+    assert finished != ids
+    assert sorted(started) == ids
+    assert len(started) == len(set(started)) == 4
+    assert finished[0] == ids[-1]
+    assert len(providers) == len({id(item) for item in providers}) == 4
+    assert seen_limits == [900, 900, 900, 900]
+    results_path = out / "run" / "results.json"
+    state_path = out / "run" / "state.json"
+    assert _case_ids(results_path) == ids
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["request_ids"]
+    assert len(state["request_ids"]) == len(set(state["request_ids"])) == 4
+    assert state["pending"] == 0 and state["concurrency"] == 4
+    assert mode(results_path) == 0o600
+    assert mode(state_path) == 0o600
+    assert mode(out / "run") == 0o700
+    config = json.loads((out / "config.json").read_text(encoding="utf-8"))
+    assert config["concurrency"] == 4
+    stored = json.loads((out / "run" / "experiment.json").read_text(encoding="utf-8"))
+    assert stored["config"]["concurrency"] == 4
+    assert "concurrency" not in reusable_config(stored["config"])
+    bare = tmp_path / "bare.json"
+    bare.write_text(json.dumps({
+        "name": "baseline", "provider": "fixture", "model": "fixture",
+        "prompt_version": "harness_v2_default", "rubric_version": "r1",
+        "generation_settings": {"temperature": 0},
+    }), encoding="utf-8")
+    widened = {**json.loads(bare.read_text(encoding="utf-8")), "concurrency": 4}
+    wide_path = tmp_path / "wide.json"
+    wide_path.write_text(json.dumps(widened), encoding="utf-8")
+    assert reusable_config(load_config(bare)) == reusable_config(load_config(wide_path))
+
+    def refuse(config, case, repetition):
+        del config, case, repetition
+        raise AssertionError("a finished id was graded again")
+
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     concurrency=1, provider_factory=refuse, fixture_completion=_completion())
+    assert again["skipped"] == 4 and again["completed"] == 4
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["concurrency"] == 1
+    with pytest.raises(ValueError, match="concurrency"):
+        baseline(root, "dev", tmp_path / "bad", provider="fixture", concurrency=0,
+                 fixture_completion=_completion())
+    with pytest.raises(ValueError, match="concurrency"):
+        baseline(root, "dev", tmp_path / "bad-bool", provider="fixture", concurrency=True,
+                 fixture_completion=_completion())
+
+
+def test_concurrency_stops_on_quota_and_resume_grades_the_rest_once(tmp_path):
+    from harness_v2.core.contracts import ProviderExchange
+    from harness_v2.providers.fixture import FixtureProvider
+    from harness_v2.providers.gemma_ai_studio import QuotaExceeded
+
+    root, ids = _parallel_tree(tmp_path)
+    started: list[str] = []
+    lock = threading.Lock()
+
+    def quota_factory(config, case, repetition):
+        del repetition
+        inner = FixtureProvider(_completion(), model_id=config["model"])
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                with lock:
+                    started.append(case["case_id"])
+                if case["case_id"] == ids[0]:
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        with lock:
+                            if len(started) >= 2:
+                                break
+                        time.sleep(0.01)
+                    else:
+                        raise AssertionError("the in-flight case did not start")
+                    raise QuotaExceeded(ProviderExchange(
+                        request_id, "fixture", "fixture", {}, None, None, 0, "", "quota"))
+                if case["case_id"] == ids[1]:
+                    time.sleep(0.15)
+                    return inner.generate(prompt, request_id=request_id, settings=settings)
+                raise AssertionError(f"dispatched after quota: {case['case_id']}")
+
+        return Provider()
+
+    out = tmp_path / "out"
+    stopped = baseline(root, "dev", out, provider="fixture", model="fixture",
+                       concurrency=2, provider_factory=quota_factory,
+                       fixture_completion=_completion())
+    assert stopped["stopped_reason"] == "quota"
+    assert stopped["metrics_path"] is None
+    assert sorted(started) == ids[:2]
+    assert len(started) == 2
+    assert _case_ids(out / "run" / "results.json") == ids[:2]
+    state = json.loads((out / "run" / "state.json").read_text(encoding="utf-8"))
+    assert state["stopped_reason"] == "quota"
+    assert state["pending"] == 2
+    assert state["concurrency"] == 2
+    assert len(state["request_ids"]) == len(set(state["request_ids"])) == 4
+
+    resumed: list[str] = []
+
+    def resume_factory(config, case, repetition):
+        del repetition
+        inner = FixtureProvider(_completion(), model_id=config["model"])
+
+        class Provider:
+            model_id = config["model"]
+
+            def generate(self, prompt, *, request_id, settings=None):
+                with lock:
+                    resumed.append(case["case_id"])
+                return inner.generate(prompt, request_id=request_id, settings=settings)
+
+        return Provider()
+
+    again = baseline(root, "dev", out, provider="fixture", model="fixture",
+                     concurrency=2, provider_factory=resume_factory,
+                     fixture_completion=_completion())
+    assert again["stopped_reason"] == ""
+    assert again["skipped"] == 1
+    assert again["completed"] == 4
+    assert sorted(resumed) == [ids[0], ids[2], ids[3]]
+    assert len(resumed) == 3
+    assert _case_ids(out / "run" / "results.json") == ids
+    assert json.loads((out / "run" / "state.json").read_text(encoding="utf-8"))["pending"] == 0
+
+
+def test_cli_records_concurrency(tmp_path, capsys):
+    root = build_tree(tmp_path / "data")
+    completion = tmp_path / "completion.json"
+    completion.write_text(_completion(), encoding="utf-8")
+    out = tmp_path / "out"
+    assert main([
+        "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+        "--model", "fixture", "--out", str(out), "--fixture-completion", str(completion),
+        "--concurrency", "2",
+    ]) == 0
+    assert json.loads((out / "config.json").read_text(encoding="utf-8"))["concurrency"] == 2
+    assert json.loads((out / "run" / "state.json").read_text(encoding="utf-8"))["concurrency"] == 2
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "baseline", "--dataset-dir", str(root), "--split", "dev", "--provider", "fixture",
+            "--model", "fixture", "--out", str(tmp_path / "zero"),
+            "--fixture-completion", str(completion), "--concurrency", "0",
+        ])
+    assert exc.value.code == 2
 
 
 def test_invalid_score_is_not_coerced(tmp_path):

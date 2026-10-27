@@ -8,8 +8,10 @@ import math
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable
@@ -18,7 +20,16 @@ from harness_v2.core.pipeline import Pipeline
 from harness_v2.evaluation.dataset import Dataset, load_dataset
 from harness_v2.evaluation.reference import failure_from_run
 from harness_v2.providers.fixture import FixtureProvider
-from harness_v2.providers.gemma_ai_studio import GemmaAIStudio, QuotaExceeded
+from harness_v2.providers.gemma_ai_studio import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    FAST_BACKOFF_MAX_S,
+    FAST_BACKOFF_MIN_S,
+    MAX_ATTEMPTS,
+    TRANSPORT_CONFIG_KEYS,
+    WALL_CLOCK_LIMIT_S,
+    GemmaAIStudio,
+    QuotaExceeded,
+)
 from harness_v2.storage.artifacts import ArtifactStore
 from harness_v2.storage.permissions import private_directory, private_write_text
 from harness_v2.storage.secrets import redact
@@ -57,7 +68,7 @@ def load_config(path: Path) -> dict:
     for field in ('name', 'provider', 'model', 'prompt_version', 'rubric_version'):
         if not isinstance(config.get(field), str) or not config[field].strip():
             raise ValueError(f'config {field} must be a nonempty string')
-    from harness_v2.grading.scorer import prompt_suffix
+    from harness_v2.grading.scorer import COMPLETION_PARSER_VERSION, prompt_suffix
     prompt_suffix(config['prompt_version'])  # rejects unregistered versions before any call
     if config['provider'] not in {'gemma', 'fixture'}:
         raise ValueError('provider must be gemma or fixture; no fallback')
@@ -66,29 +77,110 @@ def load_config(path: Path) -> dict:
     settings = config.get('generation_settings')
     if not isinstance(settings, dict):
         raise ValueError('generation_settings must be an object')
-    if set(settings) - {'temperature', 'seed', 'max_output_tokens', 'top_p', 'top_k'}:
+    if set(settings) - {'temperature', 'seed', 'max_output_tokens', 'top_p', 'top_k', 'thinking_level'}:
         raise ValueError('unsupported generation settings')
     for name, value in settings.items():
+        if name == 'thinking_level':
+            if value not in {'minimal', 'high', 'unset'}:
+                raise ValueError('thinking_level must be minimal, high, or unset')
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f'invalid generation setting: {name}')
         if name in {'seed', 'top_k', 'max_output_tokens'} and not isinstance(value, int):
             raise ValueError(f'{name} must be an integer')
+        if name == 'max_output_tokens' and value < 1:
+            raise ValueError('max_output_tokens must be at least 1')
         if name != 'seed' and value < 0:
             raise ValueError(f'{name} must be nonnegative')
-    config = {**config, 'generation_settings': {'temperature': 0, **settings}}
+    gate = config.get('transcript_quality_gate', 'off')
+    if gate not in {'on', 'off'}:
+        raise ValueError('transcript_quality_gate must be on or off')
+    if 'transcript_quality_gate' in config:
+        config['transcript_quality_gate'] = gate
+    config['concurrency'] = _concurrency(config.get('concurrency', 1))
+    config = {**config, 'generation_settings': {
+        'temperature': 0,
+        'max_output_tokens': DEFAULT_MAX_OUTPUT_TOKENS,
+        'thinking_level': 'minimal',
+        **settings,
+    }, 'completion_parser_version': COMPLETION_PARSER_VERSION}
+    config = _with_transport_defaults(config)
     canonical(config)
     return config
+
+
+def _concurrency(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError('concurrency must be a positive integer')
+    return value
+
+
+def reusable_config(config: dict) -> dict:
+    """Config that changes what the model is asked to generate.
+
+    thinking_level and max_output_tokens live in generation_settings, so a
+    different thinking level or output cap is a different saved result.
+    Wall-clock, retry policy, and concurrency do not change the prompt, model,
+    or sampling. A successful grade stays reusable when only that policy changes.
+    """
+    kept = {key: value for key, value in config.items() if key not in TRANSPORT_CONFIG_KEYS}
+    # Off is the historical default, so a run that leaves the gate off reuses
+    # a result saved before the flag existed. On is a different result.
+    if kept.get('transcript_quality_gate', 'off') == 'off':
+        kept.pop('transcript_quality_gate', None)
+    return kept
+
+
+_LEGACY_TRANSPORT = (
+    'request_timeout_s', 'request_timeout_cap_s', 'deadline_growth', 'deadline_retry_pause_s')
+
+
+def _with_transport_defaults(config: dict) -> dict:
+    defaults = {
+        'max_attempts': MAX_ATTEMPTS,
+        'fast_backoff_min_s': FAST_BACKOFF_MIN_S,
+        'fast_backoff_max_s': FAST_BACKOFF_MAX_S,
+        'wall_clock_limit_s': WALL_CLOCK_LIMIT_S,
+    }
+    merged = {**defaults, **config}
+    # Validate by constructing the numeric policy. The provider applies the same rules.
+    # Older deadline-growth keys are checked when a config still names them.
+    provider_kwargs = {
+        'model_id': 'gemma-transport-check',
+        **{key: merged[key] for key in defaults},
+    }
+    for key in _LEGACY_TRANSPORT:
+        if key in config:
+            provider_kwargs[key] = config[key]
+    GemmaAIStudio(**provider_kwargs)
+    for key in (*defaults, *_LEGACY_TRANSPORT):
+        if key not in merged:
+            continue
+        value = merged[key]
+        if isinstance(value, float) and value.is_integer():
+            merged[key] = int(value)
+    return merged
 
 
 def request_id_for(dataset: Dataset, case: dict, config: dict, repetition: int) -> str:
     return 'h2-' + identity([dataset.manifest['dataset_id'], dataset.manifest['version'],
         case['case_id'], case['input_sha256'], case['rubric_sha256'],
-        identity(config), repetition])
+        identity(reusable_config(config)), repetition])
 
 
 def default_provider(config: dict, case: dict, repetition: int):
     if config['provider'] == 'gemma':
-        return GemmaAIStudio(model_id=config['model'])
+        provider_kwargs = {
+            'model_id': config['model'],
+            'max_attempts': config['max_attempts'],
+            'fast_backoff_min_s': config['fast_backoff_min_s'],
+            'fast_backoff_max_s': config['fast_backoff_max_s'],
+            'wall_clock_limit_s': config['wall_clock_limit_s'],
+        }
+        for key in _LEGACY_TRANSPORT:
+            if key in config:
+                provider_kwargs[key] = config[key]
+        return GemmaAIStudio(**provider_kwargs)
     completion = config.get('fixture_completions', {}).get(case['case_id'], config.get('fixture_completion'))
     if isinstance(completion, list):
         completion = completion[repetition - 1]
@@ -145,7 +237,7 @@ def validate_durable_identity(db_path: Path, *, commit: str, experiment_identity
                 raise ValueError('durable row experiment identity cannot be established: invalid case/repetition')
             expected = {'request_id': request_id_for(dataset, case, config, rep),
                         'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
-                        'config_id': identity(config), 'problem_id': case['problem_id'],
+                        'config_id': identity(reusable_config(config)), 'problem_id': case['problem_id'],
                         'input_version': case['input_version'], 'input_sha256': case['input_sha256'],
                         'rubric_sha256': case['rubric_sha256']}
             if request_id != expected['request_id'] or any(provenance.get(k) != v for k, v in expected.items()):
@@ -165,6 +257,41 @@ class _LazyProvider:
         return provider.generate(prompt, request_id=request_id, settings=settings)
 
 
+def _grade_pending(pending: list, *, workers: int, grade_case: Callable, progress: dict) -> None:
+    """Grade pending cases on a pool of ``workers`` threads.
+
+    Each submitted case uses the provider ``grade_case`` builds for that case.
+    A 429 stops new submissions. Cases already running finish and are recorded.
+    """
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix='dataset-v2-case')
+    inflight: dict = {}
+    index = 0
+    halted = False
+
+    def submit_more() -> None:
+        nonlocal index
+        while index < len(pending) and len(inflight) < workers and not halted:
+            case, rep, rid = pending[index]
+            index += 1
+            progress['sent'] += 1
+            inflight[executor.submit(grade_case, case, rep, rid)] = rid
+
+    try:
+        submit_more()
+        while inflight:
+            done, _waiting = wait(set(inflight), return_when=FIRST_COMPLETED)
+            for future in done:
+                inflight.pop(future)
+                _summary, quota = future.result()
+                if quota:
+                    halted = True
+                    progress['stopped'] = 'quota'
+            if not halted:
+                submit_more()
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
 def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: Path,
                    delay_s: float = 0, sleep: Callable = time.sleep,
                    provider_factory: Callable | None = None, commit: str | None = None) -> dict:
@@ -181,7 +308,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
     if any(case['rubric_version'] != config['rubric_version'] for case in dataset.cases):
         raise ValueError('config rubric_version differs from dataset rubric_version')
     out = private_directory(Path(out), managed=True)
-    experiment_identity = identity({'config': config, 'dataset': dataset.manifest, 'commit': commit})
+    experiment_identity = identity({'config': reusable_config(config), 'dataset': dataset.manifest, 'commit': commit})
     experiment_path = out / 'experiment.json'
     metadata = {'schema_version': 1, 'identity': experiment_identity, 'config': config,
                 'dataset': dataset.manifest, 'dataset_path': str(dataset.path), 'commit': commit}
@@ -211,7 +338,7 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
     provenance = {job['request_id']: {**job,
         'experiment_identity': experiment_identity,
         'dataset_id': dataset.manifest['dataset_id'], 'dataset_version': dataset.manifest['version'],
-        'config_id': identity(config)} for job in expected}
+        'config_id': identity(reusable_config(config))} for job in expected}
     cases_by_request = {rid: case for case, _, rid in jobs}
 
     def save_failure(row, case):
@@ -231,44 +358,68 @@ def run_experiment(config_path: Path, dataset_path: Path, *, repeats: int, out: 
         if rid not in provenance:
             continue
         save_failure(row, cases_by_request[rid])
-    skipped, sent, stopped = 0, 0, ''
+    progress = {'skipped': 0, 'sent': 0, 'stopped': ''}
+    workers = config['concurrency']
+    # state.json and results.json are replaced under this lock. Each replace
+    # is atomic, and the lock keeps one writer at a time.
+    write_lock = threading.Lock()
+
     def checkpoint():
         selected = [latest[rid] for _, _, rid in jobs if rid in latest]
         completed = sum(row['outputs']['grading']['status'] != 'failed' for row in selected)
         summary = {'identity': experiment_identity, 'expected': len(jobs), 'completed': completed,
                    'failed': len(selected) - completed, 'pending': len(jobs) - len(selected),
-                   'skipped': skipped, 'stopped_reason': stopped, 'request_ids': [rid for _, _, rid in jobs]}
+                   'skipped': progress['skipped'], 'stopped_reason': progress['stopped'],
+                   'concurrency': workers,
+                   'request_ids': [rid for _, _, rid in jobs]}
         write_json(out / 'state.json', summary)
         write_json(out / 'results.json', {**metadata, 'expected_runs': expected, 'runs': selected,
                                          'attempt_runs': store.list_runs(), 'summary': summary})
         return summary
-    checkpoint()
-    for case, rep, rid in jobs:
-        if rid in latest and latest[rid]['outputs']['grading']['status'] != 'failed':
-            skipped += 1
-            continue
-        if sent and delay_s:
-            sleep(delay_s)
+
+    def grade_case(case, rep, rid):
         provider = _LazyProvider(config, case, rep, provider_factory or default_provider)
         # References are attached only as evaluation fields; Pipeline uses an explicit
         # model-input allowlist. No references are supplied to the provider factory.
+        # The factory builds this case's own provider. Retries stay inside that provider.
         runtime_case = {**case, 'request_id': rid, 'prompt_version': config['prompt_version'],
                         'generation_settings': config['generation_settings'],
+                        'transcript_quality_gate': config.get('transcript_quality_gate', 'off'),
                         'experiment_case': provenance[rid],
                         **dataset.reference_for(case['problem_id'])}
         pipeline = Pipeline(store, provider)
-        sent += 1
         try:
             record = pipeline.run(runtime_case, experiment_id=config['name'], commit=commit)
+            quota = False
         except QuotaExceeded as exc:
             record = exc.record
-            stopped = 'quota'
-        latest[rid] = record.to_dict()
-        save_failure(latest[rid], case)
-        checkpoint()
-        if stopped:
-            break
-    return checkpoint()
+            quota = True
+        with write_lock:
+            latest[rid] = record.to_dict()
+            save_failure(latest[rid], case)
+            if quota:
+                progress['stopped'] = 'quota'
+            return checkpoint(), quota
+
+    checkpoint()
+    pending = []
+    for case, rep, rid in jobs:
+        if rid in latest and latest[rid]['outputs']['grading']['status'] != 'failed':
+            progress['skipped'] += 1
+            continue
+        pending.append((case, rep, rid))
+    if workers == 1:
+        for case, rep, rid in pending:
+            if progress['stopped']:
+                break
+            if progress['sent'] and delay_s:
+                sleep(delay_s)
+            progress['sent'] += 1
+            grade_case(case, rep, rid)
+    else:
+        _grade_pending(pending, workers=workers, grade_case=grade_case, progress=progress)
+    with write_lock:
+        return checkpoint()
 
 
 def main(argv=None) -> int:

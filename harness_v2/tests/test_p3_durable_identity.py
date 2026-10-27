@@ -42,7 +42,8 @@ def test_sqlite_prevents_relabelling_commit_without_original_metadata(tmp_path, 
     else:
         stored = json.loads((out / 'experiment.json').read_text())
         stored['commit'] = 'rev-b'
-        stored['identity'] = runner.identity({'config': stored['config'], 'dataset': stored['dataset'], 'commit': 'rev-b'})
+        stored['identity'] = runner.identity({
+            'config': runner.reusable_config(stored['config']), 'dataset': stored['dataset'], 'commit': 'rev-b'})
         (out / 'experiment.json').write_text(json.dumps(stored))
     assert_refused(config, manifest, out, match='durable row implementation commit', commit='rev-b')
 
@@ -114,7 +115,9 @@ def test_rewritten_metadata_cannot_hide_changed_config(tmp_path):
     config_at(tmp_path, prompt_version='harness_v2_ambiguity_aware_v1')
     stored = json.loads((out / 'experiment.json').read_text())
     stored['config'] = runner.load_config(config)
-    stored['identity'] = runner.identity({'config': stored['config'], 'dataset': load_dataset(manifest).manifest, 'commit': 'rev-a'})
+    stored['identity'] = runner.identity({
+        'config': runner.reusable_config(stored['config']),
+        'dataset': load_dataset(manifest).manifest, 'commit': 'rev-a'})
     (out / 'experiment.json').write_text(json.dumps(stored))
     assert_refused(config, manifest, out, match='durable row experiment identity')
 
@@ -148,7 +151,8 @@ def test_metadata_cannot_establish_missing_full_durable_identity(tmp_path, legac
     # this checkpoint nor the old request ID proves the full experiment.
     stored = json.loads((out / 'experiment.json').read_text())
     stored['dataset'] = changed
-    stored['identity'] = runner.identity({'config': stored['config'], 'dataset': changed, 'commit': 'rev-a'})
+    stored['identity'] = runner.identity({
+        'config': runner.reusable_config(stored['config']), 'dataset': changed, 'commit': 'rev-a'})
     (out / 'experiment.json').write_text(json.dumps(stored))
     assert_refused(config, manifest, out, match='durable row experiment identity')
 

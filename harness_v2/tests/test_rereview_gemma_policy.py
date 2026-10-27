@@ -16,11 +16,11 @@ def fake_sdk(monkeypatch, *, quota=False):
             error = RuntimeError("429")
             error.code = 429
             raise error
-        return SimpleNamespace(text='{}')
+        return iter((SimpleNamespace(text='{}', finish_reason='STOP'),))
 
     def client(**kwargs):
         built.append(kwargs)
-        return SimpleNamespace(models=SimpleNamespace(generate_content=generate))
+        return SimpleNamespace(models=SimpleNamespace(generate_content_stream=generate))
 
     google = ModuleType("google")
     google.genai = SimpleNamespace(Client=client)
@@ -33,7 +33,7 @@ def test_attestation_is_optional_and_recorded_as_absent(monkeypatch):
     built, calls = fake_sdk(monkeypatch)
     exchange = GemmaAIStudio().generate("grade", request_id="r")
     assert built == [{"vertexai": False, "api_key": "test-key",
-                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 180000}}]
+                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 900000}}]
     policy = exchange.settings["provider_policy"]
     assert policy["free_tier_project"] is None and policy["attestation_source"] == "none"
     assert policy["vertexai"] is False and len(calls) == 1
@@ -60,11 +60,13 @@ def test_endpoint_and_attestation_are_enforced_and_recorded(monkeypatch, quota):
     else:
         exchange = provider.generate("grade", request_id="r")
     assert built == [{"vertexai": False, "api_key": "test-key",
-                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 180000}}]
+                      "http_options": {"base_url": "https://generativelanguage.googleapis.com", "timeout": 900000}}]
     assert exchange.settings["provider_policy"] == {
         "free_tier_project": True, "vertexai": False,
         "base_url": "https://generativelanguage.googleapis.com",
         "attestation_source": "caller_config",
+        "wall_clock_limit_s": 900, "max_attempts": 3,
+        "fast_backoff_min_s": 5, "fast_backoff_max_s": 30,
     }
     assert "provider_policy" not in calls[0]["config"]
     assert len(calls) == 1
@@ -91,4 +93,4 @@ def test_sdk_client_gets_bounded_request_timeout(monkeypatch):
     built, _ = fake_sdk(monkeypatch)
     GemmaAIStudio().generate("grade", request_id="r")
     timeout = built[0]["http_options"]["timeout"]
-    assert timeout == g.REQUEST_TIMEOUT_MS and 0 < timeout <= 300_000
+    assert timeout == g.WALL_CLOCK_LIMIT_MS == 900_000
