@@ -292,7 +292,7 @@ def test_fast_server_errors_backoff_with_jitter_and_reuse_the_client() -> None:
         return client
 
     exchange = GemmaAIStudio(
-        client_factory=factory, sleep=slept.append, rng=lambda: 1,
+        client_factory=factory, sleep=slept.append, rng=lambda: 1, monotonic=lambda: 0.0,
     ).generate("prompt", request_id="fast")
     assert exchange.status == "error"
     assert exchange.attempt_count == 3
@@ -305,6 +305,7 @@ def test_fast_server_errors_backoff_with_jitter_and_reuse_the_client() -> None:
     built.clear()
     capped = GemmaAIStudio(
         client_factory=factory, sleep=slept.append, rng=lambda: 1, max_attempts=6,
+        monotonic=lambda: 0.0,
     ).generate("prompt", request_id="fast-cap")
     assert capped.attempt_count == 6
     assert slept == [5.0, 10.0, 20.0, 30.0, 30.0]
@@ -336,7 +337,7 @@ def _run_clocked(behavior, *, rng, max_attempts, advance_on_call: float):
     return provider.generate("prompt", request_id="disconnect"), slept, built
 
 
-def test_transport_disconnect_retries_with_a_fresh_client_and_the_same_timeout() -> None:
+def test_transport_disconnect_retries_with_a_fresh_client_and_the_remaining_budget() -> None:
     class RemoteProtocolError(Exception):
         pass
 
@@ -371,13 +372,13 @@ def test_transport_disconnect_retries_with_a_fresh_client_and_the_same_timeout()
     for exc in failures:
         exchange, slept, built = _run_clocked(
             one_failure(exc), rng=lambda: 0, max_attempts=3, advance_on_call=300)
-        assert built == [WALL_CLOCK_LIMIT_MS, WALL_CLOCK_LIMIT_MS], type(exc).__name__
+        assert built == [WALL_CLOCK_LIMIT_MS, 595_000], type(exc).__name__
         assert slept == [5.0], type(exc).__name__
         assert exchange.status == "ok"
         assert exchange.attempt_count == 2
         assert exchange.attempts[0]["elapsed_s"] == pytest.approx(300)
         assert exchange.attempts[0]["timeout_s"] == 900
-        assert exchange.attempts[1]["timeout_s"] == 900
+        assert exchange.attempts[1]["timeout_s"] == pytest.approx(595)
 
     def always(_kwargs):
         raise RemoteProtocolError("Server disconnected")
@@ -385,8 +386,9 @@ def test_transport_disconnect_retries_with_a_fresh_client_and_the_same_timeout()
     stopped, slept, built = _run_clocked(always, rng=lambda: 0, max_attempts=2, advance_on_call=400)
     assert stopped.status == "error"
     assert stopped.attempt_count == 2
-    assert built == [WALL_CLOCK_LIMIT_MS, WALL_CLOCK_LIMIT_MS]
+    assert built == [WALL_CLOCK_LIMIT_MS, 495_000]
     assert slept == [5.0]
+    assert stopped.attempts[1]["timeout_s"] == pytest.approx(495)
     assert [row["error_class"] for row in stopped.attempts] == [
         "RemoteProtocolError", "RemoteProtocolError"]
 
@@ -594,11 +596,57 @@ def test_backoff_that_would_pass_the_wall_clock_does_not_start_another_attempt()
 
     client, models = _client(behavior)
     slept: list[float] = []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+
     exchange = GemmaAIStudio(
-        client_factory=lambda **_kwargs: client, sleep=slept.append, monotonic=lambda: clock["t"],
+        client_factory=lambda **_kwargs: client, sleep=sleep, monotonic=lambda: clock["t"],
         rng=lambda: 0, wall_clock_limit_s=900, max_attempts=3,
     ).generate("prompt", request_id="budget")
     assert exchange.status == "error"
     assert exchange.attempt_count == 1
     assert len(models.calls) == 1
-    assert slept == []
+    assert slept == [4.0]
+    assert clock["t"] == pytest.approx(900)
+    assert clock["t"] <= 900 + 0.001
+
+
+def test_read_wait_stays_inside_the_remaining_case_budget() -> None:
+    clock = {"t": 0.0}
+    built: list[int] = []
+    calls = {"n": 0}
+
+    class RemoteProtocolError(Exception):
+        pass
+
+    def factory(**kwargs):
+        timeout_ms = kwargs["http_options"]["timeout"]
+        built.append(timeout_ms)
+
+        def generate_content_stream(**_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                clock["t"] += 800
+                raise RemoteProtocolError("Server disconnected")
+            clock["t"] += timeout_ms / 1000
+            raise TimeoutError("read timeout")
+
+        return SimpleNamespace(models=SimpleNamespace(generate_content_stream=generate_content_stream))
+
+    def sleep(seconds):
+        clock["t"] += seconds
+
+    exchange = GemmaAIStudio(
+        client_factory=factory, sleep=sleep, monotonic=lambda: clock["t"], rng=lambda: 0,
+        wall_clock_limit_s=900, max_attempts=3,
+    ).generate("prompt", request_id="budget-read")
+    assert built == [900_000, 95_000]
+    assert calls["n"] == 2
+    assert exchange.status == "error"
+    assert exchange.attempt_count == 2
+    assert exchange.attempts[1]["error_class"] == "TimeoutError"
+    assert exchange.attempts[1]["timeout_s"] == pytest.approx(95)
+    assert clock["t"] == pytest.approx(900)
+    assert clock["t"] <= 900 + 0.001

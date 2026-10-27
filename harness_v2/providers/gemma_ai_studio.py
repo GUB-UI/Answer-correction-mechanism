@@ -28,6 +28,9 @@ FAST_BACKOFF_MIN_S = 5
 FAST_BACKOFF_MAX_S = 30
 WALL_CLOCK_LIMIT_S = 900
 WALL_CLOCK_LIMIT_MS = WALL_CLOCK_LIMIT_S * 1000
+# A read or a backoff may run this far past the case budget when the clock
+# and the millisecond timeout do not land on the same instant.
+_WALL_EPSILON_S = 0.001
 DEFAULT_MAX_OUTPUT_TOKENS = 8192
 THINKING_LEVELS = ("minimal", "high", "unset")
 _THINKING_API = {"minimal": "MINIMAL", "high": "HIGH"}
@@ -311,8 +314,9 @@ class GemmaAIStudio:
     free_tier_project is an optional operator note recorded with each run;
     it is not required (the project has no billing configured).
 
-    One wall-clock limit covers every attempt of a case. The HTTP timeout is
-    that limit and does not grow. Streaming keeps the connection active.
+    One wall-clock limit covers every attempt of a case. Each read and each
+    backoff uses only the time still left, so the case stays inside that
+    limit. Streaming keeps the connection active.
     429 stops immediately. A timeout is terminal. A fast 500/502/503, or a
     transport disconnect, waits on exponential backoff with jitter, and a
     disconnect builds a new client. thinking_level and max_output_tokens are
@@ -367,7 +371,9 @@ class GemmaAIStudio:
             "fast_backoff_max_s", fast_backoff_max_s, minimum=self.fast_backoff_min_s)
 
     def _timeout_ms(self, timeout_s: float) -> int:
-        return int(round(float(timeout_s) * 1000))
+        # Ceil to the next millisecond. Setup between the deadline sample and
+        # this call is under _WALL_EPSILON_S, so the socket still ends with the case.
+        return max(1, math.ceil(float(timeout_s) * 1000 - 1e-9))
 
     def _build_client(self, timeout_s: float) -> Any:
         if _vertex_requested():
@@ -378,7 +384,14 @@ class GemmaAIStudio:
         if not key:
             raise MissingAPIKey(f"{API_KEY_ENV} is not set")
         timeout_ms = self._timeout_ms(timeout_s)
-        if self._client is not None and self._client_timeout_ms == timeout_ms:
+        slack_ms = int(_WALL_EPSILON_S * 1000)
+        # A cached client is reusable only while its socket timeout still fits
+        # this attempt. A longer timeout would let the read run past the case.
+        if (
+            self._client is not None
+            and self._client_timeout_ms is not None
+            and self._client_timeout_ms <= timeout_ms + slack_ms
+        ):
             return self._client
         factory = self._client_factory
         if factory is None:
@@ -434,7 +447,7 @@ class GemmaAIStudio:
         self, *, elapsed_s: float, status: str, error_class: str,
         started_at: str, ended_at: str, finish_reason: str | None,
         input_tokens: int | None, output_tokens: int | None,
-        thoughts_token_count: int | None,
+        thoughts_token_count: int | None, timeout_s: float,
     ) -> dict[str, Any]:
         return {
             "latency_ms": elapsed_s * 1000,
@@ -449,8 +462,11 @@ class GemmaAIStudio:
             "prompt_token_count": input_tokens,
             "candidates_token_count": output_tokens,
             "thoughts_token_count": thoughts_token_count,
-            "timeout_s": self.wall_clock_limit_s,
+            "timeout_s": timeout_s,
         }
+
+    def _remaining_s(self, deadline: float) -> float:
+        return deadline - self._monotonic()
 
     def _read_stream(self, stream: Any, deadline: float) -> tuple[str, str | None, tuple[int | None, int | None, int | None], str, str]:
         parts: list[str] = []
@@ -459,7 +475,7 @@ class GemmaAIStudio:
         model = ""
         response_id = ""
         for chunk in stream:
-            if self._monotonic() > deadline:
+            if self._monotonic() > deadline + _WALL_EPSILON_S:
                 raise TimeoutError("wall-clock limit")
             piece = _visible_text(chunk)
             if piece:
@@ -479,7 +495,7 @@ class GemmaAIStudio:
             found_id = _response_id(chunk)
             if found_id:
                 response_id = found_id
-        if self._monotonic() > deadline:
+        if self._monotonic() > deadline + _WALL_EPSILON_S:
             raise TimeoutError("wall-clock limit")
         return "".join(parts), finish, usage, model, response_id
 
@@ -522,13 +538,17 @@ class GemmaAIStudio:
         case_deadline = total_started + float(self.wall_clock_limit_s)
         last_exchange: ProviderExchange | None = None
         for attempt in range(1, self.max_attempts + 1):
-            if self._monotonic() > case_deadline:
+            remaining = self._remaining_s(case_deadline)
+            if remaining <= _WALL_EPSILON_S:
                 break
-            client = self._build_client(float(self.wall_clock_limit_s))
+            # The socket timeout is the time still left, so a read that yields
+            # nothing cannot use the original 900 s again.
+            attempt_timeout_s = self._timeout_ms(remaining) / 1000
+            client = self._build_client(attempt_timeout_s)
             started = self._monotonic()
             started_at = self._stamp()
             try:
-                if self._monotonic() > case_deadline:
+                if self._remaining_s(case_deadline) <= _WALL_EPSILON_S:
                     raise TimeoutError("wall-clock limit")
                 stream = client.models.generate_content_stream(
                     model=self.model_id,
@@ -546,7 +566,7 @@ class GemmaAIStudio:
                     elapsed_s=ended - started, status=status, error_class=type(exc).__name__,
                     started_at=started_at, ended_at=self._stamp(), finish_reason=None,
                     input_tokens=input_tokens, output_tokens=output_tokens,
-                    thoughts_token_count=thoughts,
+                    thoughts_token_count=thoughts, timeout_s=attempt_timeout_s,
                 ))
                 exchange = self._exchange(
                     request_id=request_id, recorded=recorded, attempts=attempts,
@@ -562,10 +582,13 @@ class GemmaAIStudio:
                     return exchange
                 if kind == "disconnect":
                     self._drop_client()
-                wait = self._fast_backoff_s(attempt)
-                if self._monotonic() + wait > case_deadline:
+                remaining = self._remaining_s(case_deadline)
+                if remaining <= _WALL_EPSILON_S:
                     return exchange
+                wait = min(self._fast_backoff_s(attempt), remaining)
                 self._sleep(wait)
+                if self._remaining_s(case_deadline) <= _WALL_EPSILON_S:
+                    return exchange
                 continue
             input_tokens, output_tokens, thoughts = usage
             if _is_max_tokens(finish) and not _parseable_visible_answer(visible):
@@ -573,7 +596,7 @@ class GemmaAIStudio:
                     elapsed_s=self._monotonic() - started, status="error", error_class="MAX_TOKENS",
                     started_at=started_at, ended_at=self._stamp(), finish_reason=finish,
                     input_tokens=input_tokens, output_tokens=output_tokens,
-                    thoughts_token_count=thoughts,
+                    thoughts_token_count=thoughts, timeout_s=attempt_timeout_s,
                 ))
                 return self._exchange(
                     request_id=request_id, recorded=recorded, attempts=attempts,
@@ -587,7 +610,7 @@ class GemmaAIStudio:
                 elapsed_s=self._monotonic() - started, status="ok", error_class="",
                 started_at=started_at, ended_at=self._stamp(), finish_reason=finish,
                 input_tokens=input_tokens, output_tokens=output_tokens,
-                thoughts_token_count=thoughts,
+                thoughts_token_count=thoughts, timeout_s=attempt_timeout_s,
             ))
             return self._exchange(
                 request_id=request_id, recorded=recorded, attempts=attempts,
