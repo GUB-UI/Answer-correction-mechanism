@@ -1295,3 +1295,8 @@ python -m harness_v2.evaluation.dataset_v2 baseline \
 - `replay` は、保存された失敗がパーサまたはゲートの失敗であるとき、保存された生の応答を読み直す。`json_parse_failed` と `transcript_garbled` は現在のパーサとゲートで判定する。
 - プロバイダの失敗は失敗のままである。`finish_reason=SAFETY`、`MAX_TOKENS`、`RECITATION`、`OTHER` も同じである。
 - 生の応答が無いパーサの失敗は失敗のままで、点数は埋めない。
+
+## dataset_v2: replay は元の実行を上書きしない
+
+- `--out` が元の実行と同じ、その中、またはそれを含むディレクトリであるときは拒否する。
+- 元のファイルとその権限は変えない。

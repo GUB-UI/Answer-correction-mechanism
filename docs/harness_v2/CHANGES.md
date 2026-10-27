@@ -967,3 +967,7 @@ A comma between words, such as `thanks, done`, stays prose. `0,0`, `1,2`, `true,
 ## dataset_v2: replay rejudges a parser or gate failure
 
 `replay` reads a saved raw completion again when the stored failure is a parser or gate failure. `json_parse_failed` and `transcript_garbled` are judged with the current parser and gate. A provider failure stays failed, including `finish_reason=SAFETY`, `MAX_TOKENS`, `RECITATION`, and `OTHER`. A parser failure with no saved raw completion stays failed, and its score stays missing.
+
+## dataset_v2: replay will not overwrite its source
+
+`replay` refuses an `--out` that is the source run, inside it, or a directory that contains it. The source files and their permissions are left unchanged.

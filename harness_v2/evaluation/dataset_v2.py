@@ -262,16 +262,20 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
 
     ``run_dir`` is a baseline output directory (``run/results.json``) or that
     ``run`` directory itself. Raw completions and transcripts are read from
-    the saved artifacts.     A provider failure, including an abnormal finish such as SAFETY, is left
-    as a failure, so a score is not filled in from leftover text. A parser or
-    gate failure is judged again when the saved raw completion exists. The
-    gate defaults to on.
+    the saved artifacts. A provider failure, including an abnormal finish such
+    as SAFETY, is left as a failure, so a score is not filled in from leftover
+    text. A parser or gate failure is judged again when the saved raw
+    completion exists. The gate defaults to on. The output must not be the
+    source run, inside it, or a directory that contains it.
     """
     if transcript_quality_gate not in {"on", "off"}:
         raise ValueError("transcript_quality_gate must be on or off")
     if split not in SPLITS:
         raise DatasetV2Error(f"unknown split: {split}")
-    results_path, artifacts = _saved_run(Path(run_dir))
+    run_dir = Path(run_dir)
+    out = Path(out)
+    _refuse_replay_target(run_dir, out)
+    results_path, artifacts = _saved_run(run_dir)
     saved = _load_json(results_path)
     if not isinstance(saved, dict) or not isinstance(saved.get("runs"), list):
         raise DatasetV2Error("saved run has no runs")
@@ -325,6 +329,24 @@ def replay(dataset_dir: Path, split: str, run_dir: Path, out: Path, *,
         "runs": len(runs),
         "failed": failed,
     }
+
+
+def _same_or_nested(left: Path, right: Path) -> bool:
+    try:
+        left.resolve().relative_to(right.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _refuse_replay_target(run_dir: Path, out: Path) -> None:
+    """Reject an output that would replace the source or sit inside it.
+
+    Reading the source must not tighten its permissions. This check runs
+    before any output directory is created.
+    """
+    if _same_or_nested(out, run_dir) or _same_or_nested(run_dir, out):
+        raise DatasetV2Error("replay output must not replace or contain the source run")
 
 
 def _saved_run(run_dir: Path) -> tuple[Path, Path]:

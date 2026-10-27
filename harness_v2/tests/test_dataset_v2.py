@@ -1453,6 +1453,30 @@ def test_replay_rejudges_a_parser_or_gate_failure_and_keeps_abnormal_finishes(tm
     assert stale["grading"]["total_score"] is None
 
 
+def test_replay_refuses_to_overwrite_the_source_run(tmp_path):
+    root = build_tree(tmp_path / "data")
+    transcript = "$x=\\sqrt{2}$\nshown"
+    saved = _saved_run(root, _replay_completion(transcript), transcript)
+    for path in [saved, *saved.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    before = {path: mode(path) for path in [saved, *saved.rglob("*")]}
+    for target in (saved, saved / "run", saved / "run" / "nested", saved.parent):
+        with pytest.raises(DatasetV2Error, match="source run"):
+            replay(root, "dev", saved, target)
+    assert not (saved / "run" / "nested").exists()
+    assert {path: mode(path) for path in before} == before
+    with pytest.raises(SystemExit) as exc:
+        main([
+            "replay", "--dataset-dir", str(root), "--split", "dev",
+            "--run-dir", str(saved), "--out", str(saved / "run"),
+        ])
+    assert exc.value.code == 2
+    assert {path: mode(path) for path in before} == before
+    kept = replay(root, "dev", saved, tmp_path / "elsewhere")
+    assert Path(kept["results_path"]).is_file()
+    assert {path: mode(path) for path in before} == before
+
+
 def test_replay_cli_writes_results_and_metrics(tmp_path, capsys):
     root = build_tree(tmp_path / "data")
     transcript = "$x=\\sqrt{2}$\nshown"
